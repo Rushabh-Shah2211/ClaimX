@@ -580,19 +580,26 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
         if(coErr)throw new Error(coErr.message);
         // 2. Insert default policy
         await supabase.from("policy").insert({company_id:id});
-        // 3. Create auth user via Supabase Auth signUp
-        const{data:authData,error:authErr}=await supabase.auth.signUp({email:form.adminEmail,password:form.adminPw,options:{data:{name:form.adminName||form.adminEmail.split("@")[0]}}});
-        if(authErr)throw new Error(authErr.message);
-        // 4. Insert user profile
-        const{error:uErr}=await supabase.from("users").insert({id:authData.user.id,company_id:id,name:form.adminName||form.adminEmail.split("@")[0],email:form.adminEmail,role:"manager",avatar:inits(form.adminName||form.adminEmail),dept:"Management",balance:0,reimbursable:0});
-        if(uErr)throw new Error(uErr.message);
-        toast(`✓ ${form.name} created — admin can now log in`);
+        // 3. Insert manager directly into users table (custom auth — no Supabase Auth signUp needed)
+        // Generate UUID for the new manager
+        const{data:uuidData}=await supabase.rpc("gen_manager_uuid");
+        const managerId=uuidData||crypto.randomUUID();
+        const managerName=form.adminName||form.adminEmail.split("@")[0];
+        const username=managerName.toLowerCase().replace(/\s+/g,".");
+        const{data:hashData,error:hashErr}=await supabase.rpc("create_manager_account",{
+          p_company_id:id, p_name:managerName, p_email:form.adminEmail,
+          p_username:username, p_password:form.adminPw,
+          p_mobile:null, p_avatar:inits(managerName)
+        });
+        if(hashErr)throw new Error(hashErr.message);
+        if(hashData?.error)throw new Error(hashData.error);
+        toast(`✓ ${form.name} created! Manager login: username="${username}", password as set`);
         // Refresh list
         const{data}=await supabase.from("companies").select("*");
         if(data)setSbCoList(data.map(c=>({meta:{id:c.id,name:c.name,industry:c.industry,plan:c.plan,maxUsers:c.max_users,status:c.status,createdOn:c.created_on},users:[]})));
       } else {
         // localStorage demo mode
-        const mgr={id:"mgr_"+uid(),cid:id,name:form.adminName||form.adminEmail.split("@")[0],email:form.adminEmail,password:form.adminPw,role:"manager",avatar:inits(form.adminName||form.adminEmail),dept:"Management",balance:0,reimbursable:0,delegateTo:null};
+        const mgr={id:"mgr_"+uid(),cid:id,name:form.adminName||form.adminEmail.split("@")[0],email:form.adminEmail,username:(form.adminName||form.adminEmail.split("@")[0]).toLowerCase().replace(/\s+/g,"."),password:form.adminPw,role:"manager",avatar:inits(form.adminName||form.adminEmail),dept:"Management",balance:0,reimbursable:0,delegateTo:null,isSuspended:false,authType:"custom"};
         setDB(p=>({...p,[id]:{meta:{id,name:form.name,industry:form.industry||"General",plan:form.plan,maxUsers:parseInt(form.maxUsers)||5,status:"Active",createdOn:today()},users:[mgr],trips:[],claims:[],topups:[],auditLog:[],notifications:[],policy:mkPolicy()}}));
         toast(`✓ ${form.name} created`);
       }
@@ -1273,7 +1280,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   const addUserToSB=async(userData,password)=>{
     if(!SB_ENABLED)return null;
-    // Use create_employee RPC — no Supabase Auth signUp needed
+    // Use create_employee RPC — bypasses Supabase Auth signUp entirely
     const{data,error}=await supabase.rpc("create_employee",{
       p_company_id: cid,
       p_name:       userData.name,
@@ -1628,9 +1635,12 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam}){
     upd(i,{ocrState:"scanning",scanning:true,ocrData:null});
     try{
       const isImg=mime.startsWith("image/");
-      const res=await fetch("https://api.anthropic.com/v1/messages",{
+      // In dev: Vite proxy at /api/anthropic injects the API key server-side
+      // In production: deploy a Netlify function at /api/anthropic
+      const OCR_URL="/api/anthropic/v1/messages";
+      const res=await fetch(OCR_URL,{
         method:"POST",
-        headers:{"Content-Type":"application/json"},
+        headers:{"Content-Type":"application/json","anthropic-version":"2023-06-01"},
         body:JSON.stringify({
           model:"claude-sonnet-4-20250514",
           max_tokens:900,
@@ -2783,12 +2793,24 @@ export default function Root(){
       }
       if(event==="SIGNED_OUT"){
         resolving.current=false;
-        setSession(null);setIsReset(false);setLoading(false);
+        // Only clear session if it was a Supabase Auth session (not custom auth)
+        setSession(prev=>{
+          if(prev?.customAuth)return prev; // keep custom auth session on Supabase signOut event
+          return null;
+        });
+        setIsReset(false);setLoading(false);
         clearTimeout(timer);return;
       }
       if(event==="INITIAL_SESSION"){
-        if(!sess?.user){setLoading(false);clearTimeout(timer);}
-        // If user exists, SIGNED_IN fires right after
+        if(!sess?.user){
+          // No Supabase Auth session — but check if we have a persisted custom auth session
+          const savedSess=loadSess();
+          if(savedSess?.customAuth&&savedSess?.sbUser){
+            setSession(savedSess);
+          }
+          setLoading(false);clearTimeout(timer);
+        }
+        // If Supabase Auth user exists, SIGNED_IN fires right after
         return;
       }
       if((event==="SIGNED_IN"||event==="TOKEN_REFRESHED")&&sess?.user){
@@ -2861,12 +2883,28 @@ export default function Root(){
   };
 
   const handleLogin=(u,m)=>{
-    if(u.role==="superadmin"){const s={userId:"sa1",companyId:null,role:"superadmin"};setSession(s);saveSess(s);}
-    else{const s={userId:u.id,companyId:m?.id||null,role:u.role};setSession(s);saveSess(s);}
+    if(u.role==="superadmin"){
+      const s={userId:"sa1",companyId:null,role:"superadmin",sbUser:u};
+      setSession(s);saveSess(s);
+    } else {
+      // Store full user object so Root can resolve without another DB query
+      const s={
+        userId:u.id,
+        companyId:m?.id||null,
+        role:u.role,
+        sbUser:u,           // ← full user object for instant resolution
+        customAuth:true,    // ← flag: this is a custom auth session (not Supabase JWT)
+      };
+      setSession(s);saveSess(s);
+    }
   };
   const handleLogout=async()=>{
     resolving.current=false;
-    if(SB_ENABLED)await supabase.auth.signOut();
+    const isCustomAuth=session?.customAuth;
+    // Only call Supabase signOut for Supabase Auth sessions (Google login etc.)
+    if(SB_ENABLED&&!isCustomAuth){
+      try{await supabase.auth.signOut();}catch(e){console.warn("signOut error:",e);}
+    }
     setSession(null);setIsReset(false);saveSess(null);
   };
 
