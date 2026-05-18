@@ -1635,10 +1635,9 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam}){
     upd(i,{ocrState:"scanning",scanning:true,ocrData:null});
     try{
       const isImg=mime.startsWith("image/");
-      // In dev: Vite proxy at /api/anthropic injects the API key server-side
-      // In production: deploy a Netlify function at /api/anthropic
-      const OCR_URL="/api/anthropic/v1/messages";
-      const res=await fetch(OCR_URL,{
+      // /api/anthropic proxied by Netlify function in production
+      // and by Vite proxy in development
+      const res=await fetch("/api/anthropic/v1/messages",{
         method:"POST",
         headers:{"Content-Type":"application/json","anthropic-version":"2023-06-01"},
         body:JSON.stringify({
