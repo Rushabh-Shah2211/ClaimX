@@ -11,10 +11,64 @@ const supabase  = (SUPA_URL && SUPA_ANON)
 const SB_ENABLED = !!supabase; // false → falls back to localStorage demo mode
 
 // ─── TOKENS ───────────────────────────────────────────────────────────────────
-const G="#7ED957",GD="#5CB83A",GL="#f0fde9",GM="#d1fae5";
-const DARK="#0f1c09",INK="#1a2e12",MUTED="#6b7280",BDR="#e8f0e5";
+const G="#7ED957",GD="#5CB83A",GL="var(--gl)",GM="var(--gm)";
+const DARK="#0f1c09",INK="var(--ink)",MUTED="var(--muted)",BDR="var(--bdr)";
 const FD="'Playfair Display',serif",FB="'DM Sans',sans-serif";
-const GLSTYLE=`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&family=Sora:wght@300;400&display=swap');*{box-sizing:border-box;margin:0;padding:0}@keyframes spin{to{transform:rotate(360deg)}}@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}.fin{animation:fadeIn .2s ease}input::placeholder{color:rgba(255,255,255,0.25)}th{text-align:left;padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #e8f0e5}td{padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f8faf6}.rh:hover{background:#fafff8!important;cursor:pointer}input,select,textarea{font-family:'DM Sans',sans-serif;outline:none}input:focus,select:focus,textarea:focus{border-color:#7ED957!important}select{appearance:none}@media(max-width:768px){
+const GLSTYLE=`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&family=Sora:wght@300;400&display=swap');
+/* ── LIGHT THEME (default) ── */
+:root,[data-dark="false"]{
+  --ink:#1a2e12;
+  --muted:#6b7280;
+  --bdr:#e8f0e5;
+  --gl:#f0fde9;
+  --gm:#d1fae5;
+  --bg:#f5faf3;
+  --card:#ffffff;
+  --td-color:#374151;
+  --th-border:#e8f0e5;
+  --td-border:#f8faf6;
+  --hover-bg:#fafff8;
+  --input-bg:#fafff8;
+  --sidebar-text:rgba(255,255,255,0.5);
+}
+/* ── DARK THEME ── */
+[data-dark="true"]{
+  --ink:#f0f9ff;
+  --muted:#94a3b8;
+  --bdr:#2d4a2d;
+  --gl:#1a2e1a;
+  --gm:#1e3a1e;
+  --bg:#0f172a;
+  --card:#1e293b;
+  --td-color:#cbd5e1;
+  --th-border:#2d4a2d;
+  --td-border:#1e293b;
+  --hover-bg:#1a2e1a;
+  --input-bg:#1e293b;
+  --sidebar-text:rgba(255,255,255,0.6);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+/* Apply font size from data attribute */
+[data-fontsize]{font-size:attr(data-fontsize px)}
+/* Actually use CSS var for font size */
+:root{--app-font-size:13px}
+[data-dark] *:not(script):not(style){transition:background-color .15s,color .15s,border-color .15s;}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+.fin{animation:fadeIn .2s ease}
+input::placeholder{color:var(--muted)}
+th{text-align:left;padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--th-border);color:var(--ink)}
+td{padding:11px 14px;font-size:13px;color:var(--td-color);border-bottom:1px solid var(--td-border)}
+.rh:hover{background:var(--hover-bg)!important;cursor:pointer}
+input,select,textarea{font-family:'DM Sans',sans-serif;outline:none;color:var(--ink)!important;background:var(--input-bg)}
+input:focus,select:focus,textarea:focus{border-color:#7ED957!important}
+select{appearance:none}
+/* Dark mode card/div backgrounds */
+[data-dark="true"] .card-bg{background:var(--card)!important}
+[data-dark="true"] .app-bg{background:var(--bg)!important}
+[data-dark="true"] table{color:var(--td-color)}
+@media(max-width:768px){
   .mob-hide{display:none!important}
   .mob-bottom-nav{display:flex!important}
   .mob-stack{flex-direction:column!important}
@@ -31,8 +85,6 @@ const GLSTYLE=`@import url('https://fonts.googleapis.com/css2?family=Playfair+Di
 @media(max-width:480px){
   .mob-grid-2{grid-template-columns:1fr!important}
   .mob-hide-xs{display:none!important}
-  th{font-size:8px!important}
-  td{font-size:10px!important}
 }`;
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -388,10 +440,10 @@ function usePrefs(){return useContext(PrefsContext);}
 
 function PrefsModal({onClose}){
   const[prefs,setPrefs]=usePrefs();
-  const inpS={padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",fontFamily:FB,width:"100%"};
+  const inpS={padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB,width:"100%"};
   return(
     <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
-      <div onMouseDown={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:28,width:"min(420px,94vw)",boxShadow:"0 24px 60px #0003"}}>
+      <div onMouseDown={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:28,width:"min(420px,94vw)",boxShadow:"0 24px 60px #0003"}}>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:18}}>
           <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>Display Preferences</div>
           <button onClick={onClose} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:MUTED}}>✕</button>
@@ -417,7 +469,7 @@ function PrefsModal({onClose}){
           <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:MUTED,marginTop:3}}>
             <span>10px Small</span><span>13px Default</span><span>20px Large</span>
           </div>
-          <div style={{marginTop:10,padding:"8px 12px",background:"#f9fafb",borderRadius:7,fontSize:prefs.fontSize||13,color:INK}}>
+          <div style={{marginTop:10,padding:"8px 12px",background:"var(--hover-bg,#f9fafb)",borderRadius:7,fontSize:prefs.fontSize||13,color:INK}}>
             Preview: This is how your text will look across the app.
           </div>
         </div>
@@ -474,7 +526,7 @@ class ErrorBoundary extends Component{
 
 // ─── ATOMS ────────────────────────────────────────────────────────────────────
 const Badge=({s,sm})=>{const c=SC[s]||SC.Pending;return<span style={{display:"inline-flex",alignItems:"center",gap:3,padding:sm?"2px 7px":"3px 9px",borderRadius:20,fontSize:sm?10:11,fontWeight:700,background:c.bg,color:c.c,whiteSpace:"nowrap"}}>{c.icon} {s}</span>;};
-const Card=({children,style})=><div style={{background:"#fff",borderRadius:14,border:`1px solid ${BDR}`,...style}}>{children}</div>;
+const Card=({children,style})=><div style={{background:"var(--card,#fff)",borderRadius:14,border:"1px solid var(--bdr)",...style}}>{children}</div>;
 const Btn=({children,onClick,v="primary",style,disabled,title})=>{
   const S={primary:{background:G,color:"#fff",border:"none",boxShadow:"0 2px 8px #7ed95740"},outline:{background:"transparent",color:INK,border:`1.5px solid ${BDR}`},danger:{background:"#ef4444",color:"#fff",border:"none"},ghost:{background:"transparent",color:MUTED,border:"none"},warning:{background:"#f59e0b",color:"#fff",border:"none"},blue:{background:"#3b82f6",color:"#fff",border:"none"},purple:{background:"#7c3aed",color:"#fff",border:"none"},dark:{background:DARK,color:"#fff",border:"none"}};
   return<button title={title} onClick={onClick} disabled={disabled} style={{padding:"9px 18px",borderRadius:9,fontFamily:FB,fontSize:13,fontWeight:600,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.5:1,transition:"all .15s",...(S[v]||S.primary),...style}}>{children}</button>;
@@ -762,7 +814,7 @@ function EditCoModal({data,onClose,onSave}){
   const[industry,setInd]=useState(data.industry||"");
   const[plan,setPlan]=useState(data.plan||"Starter");
   const[maxUsers,setMax]=useState(String(data.maxUsers||5));
-  const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",fontFamily:FB,width:"100%"};
+  const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB,width:"100%"};
   const save=()=>onSave({id:data.id,name,industry,plan,maxUsers:parseInt(maxUsers)||5});
   return(
     <div style={{position:"fixed",inset:0,background:"#00000060",display:"flex",alignItems:"center",justifyContent:"center",zIndex:510,backdropFilter:"blur(3px)"}} onClick={onClose}>
@@ -793,7 +845,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
 
   const toast=(msg,t="success")=>{setNtf({msg,t});setTimeout(()=>setNtf(null),3000);};
   const allCo=SB_ENABLED?(sbCoList||[]):Object.values(DB);
-  const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",fontFamily:FB,width:"100%"};
+  const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB,width:"100%"};
 
   useEffect(()=>{
     if(!SB_ENABLED)return;
@@ -1017,7 +1069,7 @@ function SaUsers({DB,userCounts}){
     }
   };
 
-  const inpS2={padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",fontFamily:FB,width:"100%"};
+  const inpS2={padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB,width:"100%"};
   return(<>
     <Card>
       <div style={{padding:"10px 14px",background:"#fef3c7",borderRadius:"8px 8px 0 0",fontSize:11,color:"#92400e",fontWeight:600}}>
@@ -1045,7 +1097,7 @@ function SaUsers({DB,userCounts}){
     </Card>
     {editUser&&(
       <div style={{position:"fixed",inset:0,background:"#00000060",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,backdropFilter:"blur(3px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)setEditUser(null);}}>
-        <div onMouseDown={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:28,width:"min(420px,94vw)",boxShadow:"0 24px 60px #0003"}}>
+        <div onMouseDown={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:28,width:"min(420px,94vw)",boxShadow:"0 24px 60px #0003"}}>
           <h3 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK,marginBottom:4}}>Change Role</h3>
           <p style={{color:MUTED,fontSize:12,marginBottom:16}}>{editUser.name} · {editUser.companies?.name||editUser.company_id}</p>
           <div style={{marginBottom:16}}>
@@ -1205,7 +1257,7 @@ function Profile({user,users,setUsers,onLogout,updateUserInSB}){
   const [saved,setSaved]=useState(false);
   const [avatarColor,setAvatarColor]=useState(null);
   const role=ROLES.find(r=>r.id===user.role)||ROLES[3];
-  const inpS={width:"100%",padding:"10px 12px",border:`1.5px solid ${BDR}`,borderRadius:9,fontSize:13,background:"#fafff8",outline:"none",fontFamily:FB};
+  const inpS={width:"100%",padding:"10px 12px",border:`1.5px solid ${BDR}`,borderRadius:9,fontSize:13,background:"var(--input-bg,#fafff8)",outline:"none",fontFamily:FB};
 
   const save=async()=>{
     if(updateUserInSB){
@@ -2163,8 +2215,9 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   ];
 
   return(
-    <div style={{display:"flex",minHeight:"100vh",fontFamily:FB,fontSize:appFontSize,background:isDark?"#111827":"#f5faf3",color:isDark?"#f0fdf4":"#1a2e12",transition:"background .2s,color .2s"}}>
+    <div data-dark={String(isDark)} style={{display:"flex",minHeight:"100vh",fontFamily:FB,fontSize:appFontSize,background:isDark?"#0f172a":"#f5faf3",color:isDark?"#f0f9ff":"#1a2e12",transition:"background .2s,color .2s"}}>
       <style>{GLSTYLE}</style>
+      <style>{`[data-dark]{font-size:${appFontSize}px}[data-dark] *{font-size:inherit}`}</style>
       {notif&&<div style={{position:"fixed",top:20,right:20,zIndex:1000,padding:"12px 18px",borderRadius:12,fontWeight:600,fontSize:13,background:notif.t==="error"?"#fee2e2":notif.t==="warn"?"#fef3c7":"#dcfce7",color:notif.t==="error"?"#dc2626":notif.t==="warn"?"#92400e":"#15803d",boxShadow:"0 4px 20px #0002",maxWidth:320}}>{notif.msg}</div>}
       {!online&&<div style={{position:"fixed",bottom:0,left:0,right:0,background:"#92400e",color:"#fef3c7",textAlign:"center",padding:"7px",fontSize:12,fontWeight:600,zIndex:999}}>📴 Offline — claims queued ({queue.length}) · will sync when connected</div>}
       {showHelp&&<HelpManual userRole={user.role} onClose={()=>setSHelp(false)}/>}
@@ -2220,7 +2273,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       </div>
 
       {/* CONTENT */}
-      <div style={{flex:1,padding:"16px 18px",overflow:"auto",minWidth:0,paddingBottom:80}} className="fin">
+      <div style={{flex:1,padding:"16px 18px",overflow:"auto",minWidth:0,paddingBottom:80,background:"var(--bg,#f5faf3)"}} className="fin">
         {/* FX Ticker Tape */}
         <div style={{margin:"-16px -18px 12px -18px"}}><FXTicker/></div>
         {/* Top bar */}
@@ -2266,15 +2319,38 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           sbPushNotif={sbPushNotif} companyUsers={co.users}
           sbCreateTrip={async(trip,assigned)=>{
             if(SB_ENABLED){
-              const tripStatus=isManager?"active":"pending_approval";
-              await supabase.from("trips").insert({id:trip.id,company_id:cid,name:trip.name,type:trip.type,start_date:trip.startDate,end_date:trip.endDate,status:tripStatus,budget:trip.budget,spent:0,created_by:user.id});
-              if(assigned?.length)await supabase.from("trip_assignments").insert(assigned.map(uid=>({trip_id:trip.id,user_id:uid})));
-              // Notify managers if created by employee
-              if(!isManager){
-                const mgrs=co.users.filter(u=>u.role==="manager"||u.role==="admin");
-                for(const m of mgrs)await sbPushNotif(m.id,`New trip "${trip.name}" by ${user.name} awaits your approval`,"info");
+              try{
+                const tripStatus=isManager||isAdmin?"active":"pending_approval";
+                const{error:tripErr}=await supabase.from("trips").insert({
+                  id:trip.id, company_id:cid,
+                  name:trip.name, type:trip.type,
+                  start_date:trip.startDate, end_date:trip.endDate,
+                  status:tripStatus,
+                  budget:parseFloat(trip.budget)||0,
+                  spent:0,
+                  created_by:user.id,
+                  trip_mode:trip.tripMode||"balance",
+                  currency:trip.currency||"INR",
+                  project_code:trip.projectCode||null,
+                  opening_balance:parseFloat(trip.budget)||0,
+                  category_limits:trip.categoryLimits||{},
+                });
+                if(tripErr)throw new Error(tripErr.message);
+                if(assigned?.length){
+                  const{error:assErr}=await supabase.from("trip_assignments").insert(
+                    assigned.map(uid=>({trip_id:trip.id,user_id:uid}))
+                  );
+                  // trip_assignments may not exist yet — not fatal
+                  if(assErr)console.warn("trip_assignments:",assErr.message);
+                }
+                if(!isManager&&!isAdmin){
+                  const mgrs=co.users.filter(u=>u.role==="manager"||u.role==="admin");
+                  for(const m of mgrs)await sbPushNotif(m.id,`New trip "${trip.name}" by ${user.name} awaits approval`,"info");
+                }
+                await loadFromSB();
+              }catch(err){
+                toast("Failed to create trip: "+err.message,"error");
               }
-              await loadFromSB();
             }
           }}/>}
         {tab==="approvals"&&canApprove&&<>
@@ -2288,7 +2364,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="analytics"&&<Analytics claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept||c.empId===user.id;}):co.claims.filter(c=>c.empId===user.id)} trips={co.trips} users={co.users} isManager={isManager} getUser={getUser} policy={co.policy} printSummary={printSummary} user={user}/>}
         {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
         {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={co.auditLog||[]} claims={co.claims} getUser={getUser}/>}
-        {tab==="settlements"&&canApprove&&<SettlementsTab trips={co.trips} claims={co.claims} users={co.users} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept}/>}
+        {tab==="settlements"&&canApprove&&<SettlementsTab trips={co.trips} claims={co.claims} users={co.users} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} cid={cid} sbEnabled={SB_ENABLED}/>}
         {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}/>}
         {tab==="trip_approvals"&&canApprove&&<TripApprovalsTab trips={co.trips} getUser={getUser} approveTrip={approveTrip} rejectTrip={rejectTrip} isAdmin={isAdmin}/>}
         {tab==="editreqs"&&canApprove&&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id}/>}
@@ -2435,7 +2511,7 @@ function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,subm
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
           {onExportPDF&&<Btn v="outline" onClick={()=>onExportPDF(shown,isAdmin?"All Claims":isManager?"Dept Claims":"My Claims",activeMeta?.name)} style={{fontSize:11,padding:"5px 10px"}}>⬇ PDF</Btn>}
           <label style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:MUTED,cursor:"pointer"}} className="mob-hide"><input type="checkbox" checked={anomalyOnly} onChange={e=>setAO(e.target.checked)} style={{accentColor:"#7c3aed"}}/>🔍 Anomalies</label>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search…" style={{padding:"7px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,width:150,background:"#fafff8"}}/>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search…" style={{padding:"7px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,width:150,background:"var(--input-bg,#fafff8)"}}/>
         </div>
       </div>
       <div style={{display:"flex",gap:7,marginBottom:12,flexWrap:"wrap"}}>
@@ -2617,7 +2693,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
   const fm=forms[idx]||forms[0];
   const amt=parseFloat(fm.amount)||0;
   const CONF={high:"#16a34a",medium:"#d97706",low:"#dc2626"};
-  const inpS={width:"100%",padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8"};
+  const inpS={width:"100%",padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)"};
 
   return(
     <div style={{maxWidth:680}}>
@@ -2786,7 +2862,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
   const [showCatLimits,setShowCatLimits]=useState(false);
   const [expandedId,setExpId]=useState(null);
   const emps=users?.filter(u=>u.role==="employee")||[];
-  const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",width:"100%"};
+  const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",width:"100%"};
   const toggle=id=>setForm(f=>({...f,assignedTo:f.assignedTo.includes(id)?f.assignedTo.filter(x=>x!==id):[...f.assignedTo,id]}));
 
   // Can only set budget if manager/admin
@@ -2855,7 +2931,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
           <button type="button" onClick={()=>setShowCatLimits(p=>!p)} style={{background:"none",border:`1px dashed ${BDR}`,borderRadius:7,padding:"6px 12px",cursor:"pointer",fontSize:11,color:MUTED,marginBottom:10}}>
             {showCatLimits?"▲ Hide":"▼ Set"} Per-Category Spending Limits (optional)
           </button>
-          {showCatLimits&&<div style={{background:"#f9fafb",borderRadius:9,padding:14,marginBottom:10}}>
+          {showCatLimits&&<div style={{background:"var(--hover-bg,#f9fafb)",borderRadius:9,padding:14,marginBottom:10}}>
             <div style={{fontSize:10,color:MUTED,marginBottom:8,fontWeight:700,textTransform:"uppercase"}}>Category Budget % of Total Trip Budget</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}} className="mob-grid-2">
               {["Travel","Meals","Accommodation","Office Supplies","Client Entertainment","Software"].map(cat=>(
@@ -3047,7 +3123,7 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
 // ─── TOPUP TAB ────────────────────────────────────────────────────────────────
 function TopupTab({user,topups,setTopups,toast,sbCreateTopup}){
   const [form,setForm]=useState({amount:"",reason:""});
-  const inpS={width:"100%",padding:"10px 12px",border:`1.5px solid ${BDR}`,borderRadius:9,fontSize:13,background:"#fafff8"};
+  const inpS={width:"100%",padding:"10px 12px",border:`1.5px solid ${BDR}`,borderRadius:9,fontSize:13,background:"var(--input-bg,#fafff8)"};
   const submit=async()=>{if(!form.amount||!form.reason){toast("Fill all fields","error");return;}const req={id:"TUP-"+uid(),empId:user.id,amount:parseFloat(form.amount),reason:form.reason,date:today(),status:"Pending"};if(sbCreateTopup){await sbCreateTopup(req);}else{setTopups(p=>[...p,req]);}setForm({amount:"",reason:""});toast("Request sent to manager");};
   return(
     <div style={{maxWidth:480}}>
@@ -3171,7 +3247,7 @@ function Analytics({claims,trips,users,isManager,getUser,policy,printSummary,use
           <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Spend by Category</div>
           {byCat.length===0?<div style={{color:MUTED,fontSize:12}}>No data for selected range</div>:byCat.map((d,i)=>(
             <div key={d.cat} style={{marginBottom:10}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}><span style={{fontSize:12,color:"#374151"}}>{CI[d.cat]} {d.cat}</span><span style={{fontWeight:700,fontSize:12,color:INK}}>{fmt(d.amount)}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}><span style={{fontSize:12,color:"var(--ink)"}}>{CI[d.cat]} {d.cat}</span><span style={{fontWeight:700,fontSize:12,color:INK}}>{fmt(d.amount)}</span></div>
               <div style={{background:"#f3f4f6",borderRadius:4,height:5,overflow:"hidden"}}><div style={{width:`${(d.amount/maxCat)*100}%`,background:COLS[i%COLS.length],height:"100%",borderRadius:4,transition:"width .6s"}}/></div>
             </div>
           ))}
@@ -3301,7 +3377,7 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
   const[busy,     setBusy]    =useState(false);
   const[form,     setForm]    =useState({name:"",username:"",mobile:"",email:"",dept:depts[0]||"Operations",balance:"",password:"",role:"employee"});
   const[editForm, setEF]      =useState({});
-  const inpS={padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",fontFamily:FB,width:"100%"};
+  const inpS={padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB,width:"100%"};
 
   const handleNameChange=e=>{
     const n=e.target.value;
@@ -3311,21 +3387,28 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
   const add=async()=>{
     if(!form.name||!form.username||!form.password){toast("Name, username and password are required","error");return;}
     if(form.password.length<4){toast("Password must be at least 4 characters","error");return;}
-    if(!canAdd){toast(`Active limit (${maxUsers}) reached. Suspend an existing employee to free a slot.`,"error");return;}
-    if(users.find(u=>u.username?.toLowerCase()===form.username.toLowerCase())){toast("Username already taken","error");return;}
+    if(!canAdd){toast(`Active limit (${maxUsers}) reached. Suspend an existing user first.`,"error");return;}
+    if(users.find(u=>u.username?.toLowerCase()===form.username.toLowerCase())){toast("Username already taken in this company","error");return;}
     setBusy(true);
     try{
       if(sbEnabled&&addUserToSB){
-        await addUserToSB({name:form.name,username:form.username.toLowerCase().trim(),email:form.email||null,mobile:form.mobile||null,role:form.role,dept:form.dept,balance:parseFloat(form.balance)||0},form.password);
-        toast("✓ "+form.name+" added — login: "+form.username.toLowerCase());
+        const result=await addUserToSB(
+          {name:form.name,username:form.username.toLowerCase().trim(),email:form.email||null,mobile:form.mobile||null,role:form.role,dept:form.dept,balance:parseFloat(form.balance)||0},
+          form.password
+        );
+        if(result===null||result===undefined)throw new Error("Server returned no response — check Supabase RPC logs");
+        toast(`✓ ${form.name} added · Login: ${form.username.toLowerCase()}`);
       } else {
         const newEmp={id:"emp_"+uid(),cid:companyMeta.id,name:form.name,username:form.username.toLowerCase().trim(),email:form.email||"",mobile:form.mobile||"",password:form.password,role:form.role,avatar:inits(form.name),dept:form.dept,balance:parseFloat(form.balance)||0,reimbursable:0,delegateTo:null,isSuspended:false,authType:"custom"};
         setUsers(p=>[...p,newEmp]);
-        toast("✓ "+form.name+" added");
+        toast(`✓ ${form.name} added`);
       }
-      setForm({name:"",username:"",mobile:"",email:"",dept:depts[0]||"Operations",balance:"",password:"",role:"employee"});
+      setForm({name:"",username:"",mobile:"",email:"",dept:depts[0]||"Operations",balance:"",password:"",role:creatableRoles[creatableRoles.length-1]?.id||"employee"});
       setShowAdd(false);
-    }catch(e){toast(e.message,"error");}
+    }catch(e){
+      // Show the actual error from Supabase
+      toast(e.message||"Failed to create user — check Supabase logs","error");
+    }
     finally{setBusy(false);}
   };
 
@@ -3548,7 +3631,7 @@ function EditRequestsTab({editRequests,claims,getUser,isManager,approveEditReque
                 <div>
                   <div style={{fontWeight:700,color:INK,fontSize:13}}>{req.claim_id||req.claimId}</div>
                   <div style={{color:MUTED,fontSize:11,marginTop:1}}>by {req.requester_name||req.requesterName} · {req.created_at?new Date(req.created_at).toLocaleDateString("en-IN"):""}</div>
-                  {claim&&<div style={{fontSize:11,color:"#374151",marginTop:4}}>Claim: {claim.desc} — {fmt(claim.amount)}</div>}
+                  {claim&&<div style={{fontSize:11,color:"var(--ink)",marginTop:4}}>Claim: {claim.desc} — {fmt(claim.amount)}</div>}
                   <div style={{background:"#fef3c7",borderRadius:6,padding:"6px 10px",marginTop:6,fontSize:12,color:"#92400e"}}><strong>Reason:</strong> {req.reason}</div>
                 </div>
                 {isManager&&<div style={{display:"flex",gap:7,flexShrink:0}}>
@@ -3599,7 +3682,7 @@ function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
   const tier=TIERED.find(t=>emps>=t.min&&emps<=t.max)||TIERED[0];
   const [vendor,setVendor]=useState("");
   const [vMode,setVMode]=useState("blacklist");
-  const inpS={padding:"8px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,background:"#fafff8",width:"100%"};
+  const inpS={padding:"8px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,background:"var(--input-bg,#fafff8)",width:"100%"};
   return(
     <div>
       <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:14}}>Policy & Settings</h1>
@@ -3652,7 +3735,7 @@ function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
           <div style={{fontSize:11,color:MUTED,marginBottom:10}}>Exceeding → sent to manager for approval</div>
           {CATS.map(cat=>(
             <div key={cat} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
-              <span style={{fontSize:12,flex:1,color:"#374151"}}>{CI[cat]} {cat}</span>
+              <span style={{fontSize:12,flex:1,color:"var(--ink)"}}>{CI[cat]} {cat}</span>
               <div style={{display:"flex",alignItems:"center",gap:4}}><input type="number" value={policy.categoryPct?.[cat]||0} onChange={e=>setPolicy({...policy,categoryPct:{...policy.categoryPct,[cat]:parseFloat(e.target.value)||0}})} style={{...inpS,width:52,textAlign:"center"}}/><span style={{fontSize:11,color:MUTED}}>%</span></div>
             </div>
           ))}
@@ -3706,7 +3789,7 @@ function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
           ))}
         </div>
         <div style={{display:"flex",gap:8}}>
-          <input id="newCatInput" placeholder="Add category (e.g. Legal)" style={{padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,flex:1,background:"#fafff8"}}
+          <input id="newCatInput" placeholder="Add category (e.g. Legal)" style={{padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,flex:1,background:"var(--input-bg,#fafff8)"}}
             onKeyDown={e=>{if(e.key==="Enter"){const v=e.target.value.trim();if(v&&!(policy.categories||DEFAULT_CATS).includes(v)){setPolicy({...policy,categories:[...(policy.categories||DEFAULT_CATS),v]});e.target.value="";};}}}/>
           <Btn v="outline" onClick={()=>{const el=document.getElementById("newCatInput");const v=el.value.trim();if(v&&!(policy.categories||DEFAULT_CATS).includes(v)){setPolicy({...policy,categories:[...(policy.categories||DEFAULT_CATS),v]});el.value="";}}} style={{padding:"8px 14px",fontSize:12}}>+ Add</Btn>
         </div>
@@ -3754,7 +3837,7 @@ function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
           ))}
         </div>
         <div style={{display:"flex",gap:8}}>
-          <input id="newDeptInput" placeholder="Add department (e.g. Legal)" style={{padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,flex:1,background:"#fafff8"}}
+          <input id="newDeptInput" placeholder="Add department (e.g. Legal)" style={{padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,flex:1,background:"var(--input-bg,#fafff8)"}}
             onKeyDown={e=>{if(e.key==="Enter"){const v=e.target.value.trim();if(v&&!(policy.departments||DEFAULT_DEPTS).includes(v)){setPolicy({...policy,departments:[...(policy.departments||DEFAULT_DEPTS),v]});e.target.value="";};}}}/>
           <Btn v="outline" onClick={()=>{const el=document.getElementById("newDeptInput");const v=el.value.trim();if(v&&!(policy.departments||DEFAULT_DEPTS).includes(v)){setPolicy({...policy,departments:[...(policy.departments||DEFAULT_DEPTS),v]});el.value="";}}} style={{padding:"8px 14px",fontSize:12}}>+ Add</Btn>
         </div>
@@ -3867,7 +3950,7 @@ function TravelCalendar({trips,users,isAdmin,myDept}){
         ?<div style={{fontSize:12,color:MUTED,textAlign:"center",padding:"10px 0"}}>No employees on trip today</div>
         :<div style={{display:"flex",flexDirection:"column",gap:7}}>
           {travellers.map(({user:u,trip:t},i)=>(
-            <div key={i} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",background:"#f8faf6",borderRadius:8,border:`1px solid ${BDR}`}}>
+            <div key={i} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",background:"var(--hover-bg,#f8faf6)",borderRadius:8,border:`1px solid ${BDR}`}}>
               <div style={{width:26,height:26,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:GD,fontSize:9,flexShrink:0}}>{u.avatar||inits(u.name)}</div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontWeight:600,fontSize:12,color:INK}}>{u.name} <span style={{fontSize:10,color:MUTED}}>({u.dept||"—"})</span></div>
@@ -3882,9 +3965,37 @@ function TravelCalendar({trips,users,isAdmin,myDept}){
 }
 
 // ─── SETTLEMENTS TAB ─────────────────────────────────────────────────────────
-function SettlementsTab({trips,claims,users,getUser,isAdmin,myDept}){
+function SettlementsTab({trips,claims,users,getUser,isAdmin,myDept,cid,sbEnabled}){
   const[expandedEmp,setExpandedEmp]=useState(null);
   const[expandedTrip,setExpandedTrip]=useState(null);
+  const[settling,setSettling]=useState(null); // tripId being settled
+
+  const markSettled=async(trip,empId)=>{
+    setSettling(trip.id);
+    try{
+      if(sbEnabled&&supabase){
+        // Record settlement by updating trip's settled_at and resetting balance tracking
+        await supabase.from("trips").update({
+          settled_at:new Date().toISOString(),
+          settled_by:empId,
+        }).eq("id",trip.id);
+        // Add an audit entry
+        await supabase.from("notifications").insert({
+          id:"SETTLE-"+Date.now(),
+          company_id:cid,
+          user_id:empId,
+          message:`Trip "${trip.name}" marked as settled`,
+          type:"success",
+          read:false,
+          created_at:new Date().toISOString(),
+        });
+      }
+      // Reload page to reflect settlement
+      window.location.reload();
+    }catch(e){
+      alert("Settlement failed: "+e.message);
+    }finally{setSettling(null);}
+  };
 
   // Calculate per-employee settlement
   const empSettlements=users
@@ -3945,22 +4056,29 @@ function SettlementsTab({trips,claims,users,getUser,isAdmin,myDept}){
           </div>
 
           {/* Trip breakdown */}
-          {expandedEmp===u.id&&<div style={{borderTop:`1px solid ${BDR}`,background:"#fafff8"}}>
+          {expandedEmp===u.id&&<div style={{borderTop:`1px solid ${BDR}`,background:"var(--input-bg,#fafff8)"}}>
             {tripData.map(({trip:t,claims:tc,spent,openBal,topups,settlement,isBalance})=>(
               <div key={t.id} style={{borderBottom:`1px solid ${BDR}`}}>
                 <div onClick={()=>setExpandedTrip(expandedTrip===t.id?null:t.id)}
                   style={{display:"flex",alignItems:"center",gap:10,padding:"10px 18px 10px 28px",cursor:"pointer"}}>
                   <div style={{flex:1}}>
-                    <div style={{fontSize:13,fontWeight:600,color:INK}}>{t.name}</div>
+                    <div style={{fontSize:13,fontWeight:600,color:INK}}>{t.name} {t.settled_at&&<span style={{fontSize:9,background:"#dcfce7",color:"#16a34a",padding:"1px 6px",borderRadius:4,marginLeft:5}}>✓ Settled</span>}</div>
                     <div style={{fontSize:10,color:MUTED}}>{t.startDate} → {t.endDate} · {isBalance?"Balance":"Reimbursement"}</div>
                   </div>
-                  <div style={{textAlign:"right"}}>
+                  <div style={{textAlign:"right",flexShrink:0}}>
                     <div style={{fontSize:12,fontWeight:700,color:settlement>0?"#dc2626":settlement<0?"#16a34a":MUTED}}>
                       {settlement>0?`↩ ${fmt(settlement)}`:settlement<0?`↪ ${fmt(-settlement)}`:"Settled"}
                     </div>
                     <div style={{fontSize:9,color:MUTED}}>{tc.length} expenses · {fmt(spent)} spent</div>
                   </div>
-                  <span style={{color:MUTED,fontSize:11}}>{expandedTrip===t.id?"▲":"▼"}</span>
+                  {/* Mark settled button — only for closed, unsettled trips with non-zero balance */}
+                  {t.status==="closed"&&!t.settled_at&&settlement!==0&&(
+                    <button onClick={e=>{e.stopPropagation();if(window.confirm(`Mark trip "${t.name}" as settled? This records that the balance of ${fmt(Math.abs(settlement))} has been ${settlement>0?"recovered from":"paid to"} the employee.`))markSettled(t,u.id);}}
+                      style={{marginLeft:6,padding:"4px 10px",background:"#16a34a",color:"#fff",border:"none",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0}}>
+                      {settling===t.id?"…":"✓ Settle"}
+                    </button>
+                  )}
+                  <span style={{color:MUTED,fontSize:11,marginLeft:4}}>{expandedTrip===t.id?"▲":"▼"}</span>
                 </div>
 
                 {/* Claim list */}
@@ -4018,7 +4136,7 @@ function FinanceTab({claims,trips,getUser,users,isAdmin,policy,onExportPDF}){
         {["All","Manager Approved","Approved"].map(s=>(
           <button key={s} onClick={()=>setFilter(s)} style={{padding:"5px 13px",borderRadius:20,border:`1.5px solid ${filter===s?G:BDR}`,background:filter===s?G:"#fff",color:filter===s?"#fff":MUTED,fontFamily:FB,fontSize:11,fontWeight:600,cursor:"pointer"}}>{s}</button>
         ))}
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search…" style={{padding:"6px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,background:"#fafff8",marginLeft:"auto"}}/>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search…" style={{padding:"6px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,background:"var(--input-bg,#fafff8)",marginLeft:"auto"}}/>
       </div>
       <Card>
         <div className="mob-scroll">
@@ -4105,7 +4223,7 @@ function FundRequestModal({trips,user,cid,onClose,onSubmit,sbEnabled}){
   const[reason,setReason]=useState("");
   const[busy,setBusy]=useState(false);
   const[done,setDone]=useState(false);
-  const inpS={width:"100%",padding:"10px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",outline:"none",fontFamily:FB};
+  const inpS={width:"100%",padding:"10px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",outline:"none",fontFamily:FB};
 
   const submit=async()=>{
     if(!tripId||!amount||!reason){return;}
@@ -4118,7 +4236,7 @@ function FundRequestModal({trips,user,cid,onClose,onSubmit,sbEnabled}){
 
   return(
     <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,backdropFilter:"blur(3px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
-      <div onMouseDown={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:28,width:"min(460px,94vw)",boxShadow:"0 24px 60px #0003"}}>
+      <div onMouseDown={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:28,width:"min(460px,94vw)",boxShadow:"0 24px 60px #0003"}}>
         <h3 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK,marginBottom:6}}>💰 Fund Request</h3>
         <p style={{color:MUTED,fontSize:12,marginBottom:18}}>Request additional funds for a trip. Your manager will review and approve.</p>
         {done?(
@@ -4171,14 +4289,14 @@ const SHORTCUTS=[
 function ShortcutHelp({onClose}){
   return(
     <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
-      <div onMouseDown={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:28,width:"min(480px,94vw)",boxShadow:"0 24px 60px #0003"}}>
+      <div onMouseDown={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:28,width:"min(480px,94vw)",boxShadow:"0 24px 60px #0003"}}>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
           <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>⌨ Keyboard Shortcuts</div>
           <button onClick={onClose} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:MUTED}}>✕</button>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
           {SHORTCUTS.map(s=>(
-            <div key={s.key} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:"#f8faf6",borderRadius:8}}>
+            <div key={s.key} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:"var(--hover-bg,#f8faf6)",borderRadius:8}}>
               <kbd style={{background:"#0f1c09",color:G,padding:"3px 8px",borderRadius:5,fontSize:11,fontWeight:700,fontFamily:"monospace",minWidth:28,textAlign:"center"}}>{s.key}</kbd>
               <div>
                 <div style={{fontSize:12,fontWeight:600,color:INK}}>{s.label}</div>
@@ -4280,9 +4398,9 @@ function HelpManual({userRole,onClose,inline=false}){
         {inline&&<h2 style={{fontFamily:FD,fontSize:18,fontWeight:700,color:INK,marginBottom:12}}>{section.icon} {section.title}</h2>}
         <div style={{flex:1,overflow:"auto",padding:inline?"0":"24px"}}>
           {section.content.split('\n').map((line,i)=>{
-            if(line.startsWith('•')||line.match(/^\d+\./)) return<div key={i} style={{display:"flex",gap:8,marginBottom:7,paddingLeft:4}}><span style={{color:G,fontWeight:700,flexShrink:0,marginTop:1,fontSize:13}}>{line.match(/^\d+\./)?line.match(/^\d+\./)[0]:"•"}</span><span style={{fontSize:13,color:"#374151",lineHeight:1.6}}>{line.replace(/^•\s*/,"").replace(/^\d+\.\s*/,"")}</span></div>;
+            if(line.startsWith('•')||line.match(/^\d+\./)) return<div key={i} style={{display:"flex",gap:8,marginBottom:7,paddingLeft:4}}><span style={{color:G,fontWeight:700,flexShrink:0,marginTop:1,fontSize:13}}>{line.match(/^\d+\./)?line.match(/^\d+\./)[0]:"•"}</span><span style={{fontSize:13,color:"var(--ink)",lineHeight:1.6}}>{line.replace(/^•\s*/,"").replace(/^\d+\.\s*/,"")}</span></div>;
             if(line==="") return<div key={i} style={{height:10}}/>;
-            return<p key={i} style={{fontSize:13,color:"#374151",lineHeight:1.7,marginBottom:4}}>{line}</p>;
+            return<p key={i} style={{fontSize:13,color:"var(--ink)",lineHeight:1.7,marginBottom:4}}>{line}</p>;
           })}
           <div style={{marginTop:20,background:GL,border:`1px solid ${GM}`,borderRadius:10,padding:"14px 16px"}}>
             <div style={{fontSize:10,fontWeight:700,color:GD,textTransform:"uppercase",letterSpacing:1,marginBottom:7}}>💡 Quick Tips</div>
@@ -4353,7 +4471,7 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
 
   return(
     <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:500,backdropFilter:"blur(3px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)setMdl(null);}}>
-      <div onMouseDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:24,width:"min(540px,96vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 20px 60px #0003"}}>
+      <div onMouseDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:24,width:"min(540px,96vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 20px 60px #0003"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:13}}>
           <span style={{fontFamily:FD,fontSize:16,fontWeight:700,color:INK}}>{type==="detail"?"Claim Details":type==="approve"?"Approve Claim":"Reject Claim"}</span>
           <button onClick={()=>setMdl(null)} style={{background:"none",border:"none",fontSize:15,cursor:"pointer",color:MUTED}}>✕</button>
@@ -4409,9 +4527,9 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
           <div style={{fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",letterSpacing:.5,marginBottom:7}}>💬 Comments</div>
           {(c.comments||[]).length===0&&<div style={{fontSize:11,color:MUTED,marginBottom:7}}>No comments yet</div>}
           {(c.comments||[]).map((cm,i)=>(
-            <div key={i} style={{padding:"7px 10px",background:"#f9fafb",borderRadius:7,marginBottom:5}}>
+            <div key={i} style={{padding:"7px 10px",background:"var(--hover-bg,#f9fafb)",borderRadius:7,marginBottom:5}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}><span style={{fontSize:11,fontWeight:600,color:INK}}>{cm.name}</span><span style={{fontSize:9,color:MUTED}}>{cm.time}</span></div>
-              <div style={{fontSize:12,color:"#374151"}}>{cm.text}</div>
+              <div style={{fontSize:12,color:"var(--ink)"}}>{cm.text}</div>
             </div>
           ))}
           <div style={{display:"flex",gap:7,marginTop:5}}>
@@ -4510,20 +4628,24 @@ export default function Root(){
       }
       if(event==="SIGNED_OUT"){
         resolving.current=false;
-        // SIGNED_OUT fires for custom auth users because they have no Supabase JWT
-        // Check localStorage directly — never clear a valid custom auth session
+        // Check if this was intentional (user clicked sign out)
+        const intentional=sessionStorage.getItem("claimx_logout")==="1";
+        if(intentional){
+          try{sessionStorage.removeItem("claimx_logout");}catch(e){}
+          setSession(null);saveSess(null);setLoading(false);return;
+        }
+        // Not intentional — check for custom auth session to restore
         const savedSess=loadSess();
         if(savedSess?.customAuth&&savedSess?.sbUser){
           customAuthRef.current=true;
           setSession(savedSess);
           setLoading(false);return;
         }
-        // Check the ref too (may have been set by handleLogin before event fires)
         if(customAuthRef.current){
           const s=loadSess();
           if(s?.sbUser){setSession(s);setLoading(false);return;}
         }
-        // Genuine Supabase sign out — clear everything and go to login
+        // Genuine Supabase sign out — go to login
         setSession(null);saveSess(null);setIsReset(false);setLoading(false);return;
       }
       if(event==="TOKEN_REFRESHED"&&sess?.user&&!resolving.current){
@@ -4619,20 +4741,21 @@ export default function Root(){
   };
   const handleLogout=async()=>{
     resolving.current=false;
-    const isCustomAuth=session?.customAuth||customAuthRef.current;
     customAuthRef.current=false;
-    // Clear session storage first
+    const isCustomAuth=session?.customAuth;
+    // Set flag FIRST so SIGNED_OUT handler won't restore the session
+    try{sessionStorage.setItem("claimx_logout","1");}catch(e){}
+    // Clear all session data
     saveSess(null);
-    try{
-      localStorage.removeItem(SESSION_KEY);
-      localStorage.removeItem(STORAGE_KEY);
-    }catch(e){}
+    try{localStorage.removeItem(SESSION_KEY);}catch(e){}
+    setSession(null);
+    setIsReset(false);
+    // Sign out from Supabase for Google OAuth users
     if(SB_ENABLED&&!isCustomAuth){
-      try{await supabase.auth.signOut();}catch(e){console.warn("signOut:",e);}
+      try{await supabase.auth.signOut();}catch(e){}
     }
-    setSession(null);setIsReset(false);
-    // Force hard redirect to clear all stale state
-    setTimeout(()=>{ window.location.replace("/"); },50);
+    // Immediate redirect — no setTimeout
+    window.location.replace("/");
   };
 
   // If we have a valid custom auth session already, skip the loading screen entirely
