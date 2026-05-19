@@ -3097,11 +3097,16 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
 // ═══════════════════════════════════════════════════════════════════════════
 export default function Root(){
   const[DB,setDB]          =useState(()=>loadDB()||DB0);
-  const[session,setSession]=useState(null);
+  const[session,setSession]=useState(()=>{ 
+    // On mount, restore custom auth session immediately to avoid flash
+    if(SB_ENABLED){ const s=loadSess(); if(s?.customAuth&&s?.sbUser)return s; }
+    return null;
+  });
   const[loading,setLoading]=useState(true);
   const[isReset,setIsReset]=useState(false);
-  const[loadMsg,setLoadMsg]=useState("Connecting to Supabase…");
+  const[loadMsg,setLoadMsg]=useState("Connecting…");
   const resolving=useRef(false);
+  const customAuthRef=useRef(false); // tracks if current session is custom auth
 
   useEffect(()=>{ if(!SB_ENABLED)saveDB(DB); },[DB]);
 
@@ -3127,24 +3132,30 @@ export default function Root(){
       }
       if(event==="SIGNED_OUT"){
         resolving.current=false;
-        // Only clear session if it was a Supabase Auth session (not custom auth)
-        setSession(prev=>{
-          if(prev?.customAuth)return prev; // keep custom auth session on Supabase signOut event
-          return null;
-        });
-        setIsReset(false);setLoading(false);
+        // Check localStorage directly — ref may not be set yet for custom auth users
+        const savedSess=loadSess();
+        if(savedSess?.customAuth&&savedSess?.sbUser){
+          // This is a custom auth user — Supabase SIGNED_OUT is expected, ignore it
+          customAuthRef.current=true;
+          setSession(savedSess);
+          setLoading(false);clearTimeout(timer);return;
+        }
+        if(customAuthRef.current){
+          setLoading(false);clearTimeout(timer);return;
+        }
+        setSession(null);setIsReset(false);setLoading(false);
         clearTimeout(timer);return;
       }
       if(event==="INITIAL_SESSION"){
         if(!sess?.user){
-          // No Supabase Auth session — but check if we have a persisted custom auth session
+          // No Supabase JWT — check for persisted custom auth session
           const savedSess=loadSess();
           if(savedSess?.customAuth&&savedSess?.sbUser){
+            customAuthRef.current=true;
             setSession(savedSess);
           }
           setLoading(false);clearTimeout(timer);
         }
-        // If Supabase Auth user exists, SIGNED_IN fires right after
         return;
       }
       if((event==="SIGNED_IN"||event==="TOKEN_REFRESHED")&&sess?.user){
@@ -3219,30 +3230,37 @@ export default function Root(){
   const handleLogin=(u,m)=>{
     if(u.role==="superadmin"){
       const s={userId:"sa1",companyId:null,role:"superadmin",sbUser:u};
-      setSession(s);saveSess(s);
+      saveSess(s); // save FIRST so SIGNED_OUT handler can read it
+      customAuthRef.current=false;
+      setSession(s);
     } else {
-      // Store full user object so Root can resolve without another DB query
       const s={
         userId:u.id,
-        companyId:m?.id||null,
+        companyId:m?.id||u.companyId||null,
         role:u.role,
-        sbUser:u,           // ← full user object for instant resolution
-        customAuth:true,    // ← flag: this is a custom auth session (not Supabase JWT)
+        sbUser:u,
+        customAuth:true,
       };
-      setSession(s);saveSess(s);
+      saveSess(s); // save FIRST before any Supabase events fire
+      customAuthRef.current=true;
+      setSession(s);
+      setLoading(false);
     }
   };
   const handleLogout=async()=>{
     resolving.current=false;
-    const isCustomAuth=session?.customAuth;
-    // Only call Supabase signOut for Supabase Auth sessions (Google login etc.)
+    const isCustomAuth=session?.customAuth||customAuthRef.current;
+    customAuthRef.current=false;
     if(SB_ENABLED&&!isCustomAuth){
       try{await supabase.auth.signOut();}catch(e){console.warn("signOut error:",e);}
     }
     setSession(null);setIsReset(false);saveSess(null);
   };
 
-  if(loading)return(
+  // If we have a valid custom auth session already, skip the loading screen entirely
+  const hasValidSession=session&&(session.customAuth?session.sbUser:true);
+
+  if(loading&&!hasValidSession)return(
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(145deg,${DARK},#162e0d)`,fontFamily:FB}}>
       <div style={{textAlign:"center",maxWidth:340}}>
         <Logo width={180} dark/>
@@ -3262,8 +3280,13 @@ export default function Root(){
 
   let currentUser=null,currentMeta=null;
   if(session){
-    if(session.role==="superadmin"){currentUser=session.sbUser||SA;}
-    else if(SB_ENABLED&&session.sbUser){
+    if(session.role==="superadmin"){
+      currentUser=session.sbUser||SA;
+    } else if(session.customAuth&&session.sbUser){
+      // Custom auth — user object is stored directly in session
+      currentUser=session.sbUser;
+      currentMeta={id:session.companyId,name:"",industry:"",plan:"",maxUsers:0,status:"Active",createdOn:""};
+    } else if(SB_ENABLED&&session.sbUser){
       currentUser=session.sbUser;
       currentMeta={id:session.companyId,name:"",industry:"",plan:"",maxUsers:0,status:"Active",createdOn:""};
     } else {
@@ -3274,7 +3297,8 @@ export default function Root(){
     }
   }
 
-  if(session&&!currentUser){saveSess(null);return<ErrorBoundary><Login onLogin={handleLogin} DB={DB}/></ErrorBoundary>;}
+  // Only clear session if it's NOT a valid custom auth session
+  if(session&&!currentUser&&!session.customAuth){saveSess(null);return<ErrorBoundary><Login onLogin={handleLogin} DB={DB}/></ErrorBoundary>;}
   if(!session||!currentUser)return<ErrorBoundary><Login onLogin={handleLogin} DB={DB}/></ErrorBoundary>;
   if(currentUser.role==="superadmin")return<ErrorBoundary><SuperAdmin DB={DB} setDB={setDB} onLogout={handleLogout}/></ErrorBoundary>;
   if(SB_ENABLED)return<ErrorBoundary><CompanyApp user={currentUser} meta={{id:session.companyId,...currentMeta}} DB={DB} setDB={setDB} onLogout={handleLogout}/></ErrorBoundary>;
