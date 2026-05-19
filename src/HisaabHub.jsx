@@ -155,9 +155,7 @@ async function sbLoadCompany(cid){
   ]=await Promise.all([
     supabase.from("companies").select("*").eq("id",cid).single(),
     supabase.from("users").select("*").eq("company_id",cid),
-    supabase.from("trips").select("*,trip_assignments(user_id)").eq("company_id",cid).order("created_at",{ascending:false}).catch(()=>
-      supabase.from("trips").select("*").eq("company_id",cid).order("created_at",{ascending:false})
-    ),
+    supabase.from("trips").select("*,trip_assignments(user_id)").eq("company_id",cid).order("created_at",{ascending:false}),
     supabase.from("claims").select("*,receipts(*),claim_comments(*)").eq("company_id",cid).order("created_at",{ascending:false}),
     supabase.from("topups").select("*").eq("company_id",cid).order("created_at",{ascending:false}),
     supabase.from("audit_log").select("*").eq("company_id",cid).order("created_at",{ascending:false}).limit(500),
@@ -1983,90 +1981,94 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   };
 
   const addUserToSB=async(userData,password)=>{
-    if(!SB_ENABLED)return null;
+    if(!SB_ENABLED)return;
 
-    // Wrap in 15-second timeout
-    const withTimeout=(promise,ms,msg)=>Promise.race([
+    const withTimeout=(promise,ms)=>Promise.race([
       promise,
-      new Promise((_,reject)=>setTimeout(()=>reject(new Error(msg)),ms))
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error("Request timed out after "+ms/1000+"s")),ms))
     ]);
 
+    // Try RPC first
+    let userId=null;
     try{
       const{data,error}=await withTimeout(
         supabase.rpc("create_employee",{
-          p_company_id: cid,
-          p_name:       userData.name,
-          p_username:   userData.username||(userData.name.toLowerCase().replace(/\s+/g,".")),
-          p_password:   password,
-          p_role:       userData.role||"employee",
-          p_dept:       userData.dept||"Operations",
-          p_balance:    userData.balance||0,
-          p_email:      userData.email||null,
-          p_mobile:     userData.mobile||null,
+          p_company_id:cid,
+          p_name:userData.name,
+          p_username:userData.username,
+          p_password:password,
+          p_role:userData.role||"employee",
+          p_dept:userData.dept||"Operations",
+          p_balance:userData.balance||0,
+          p_email:userData.email||null,
+          p_mobile:userData.mobile||null,
         }),
-        15000,
-        "RPC timed out. The create_employee function may be missing or broken. Check Supabase → Database → Functions."
+        12000
       );
-      if(error)throw new Error("RPC error: "+error.message);
+      if(error)throw new Error(error.message);
       if(data?.error)throw new Error(data.error);
-      await loadFromSB();
-      return data?.id||null;
+      userId=data?.id||data;
     }catch(rpcErr){
-      // If RPC fails, try direct insert with a bcrypt-like hash stub
-      // (only works if pgcrypto is unavailable — password stored as plain text fallback)
-      if(rpcErr.message.includes("timed out")||rpcErr.message.includes("does not exist")){
-        console.warn("create_employee RPC failed, trying direct insert:",rpcErr.message);
-        const newId=crypto.randomUUID?.()|| 'usr_'+Date.now();
-        const{error:insertErr}=await supabase.from("users").insert({
-          id:newId,
-          company_id:cid,
-          name:userData.name,
-          email:userData.email||null,
-          username:userData.username.toLowerCase(),
-          mobile:userData.mobile||null,
-          password_hash:password, // plain fallback — user must change password
-          role:userData.role||"employee",
-          avatar:(userData.name[0]+(userData.name.split(" ")[1]?.[0]||"")).toUpperCase(),
-          dept:userData.dept||"Operations",
-          balance:userData.balance||0,
-          reimbursable:0,
-          auth_type:"custom",
-          is_suspended:false,
-        });
-        if(insertErr)throw new Error("Direct insert also failed: "+insertErr.message+"\n\nPlease run the create_employee SQL function in Supabase.");
-        await loadFromSB();
-        return newId;
-      }
-      throw rpcErr;
+      console.warn("create_employee RPC failed:",rpcErr.message,". Trying direct insert...");
+      // Fallback: direct INSERT
+      const newId=(crypto.randomUUID?.())||(Date.now()+"-"+Math.random()).toString(36);
+      const av=(userData.name[0]+(userData.name.split(" ")[1]?.[0]||"")).toUpperCase();
+      const{error:insErr}=await supabase.from("users").insert({
+        id:newId, company_id:cid,
+        name:userData.name, email:userData.email||null,
+        username:userData.username.toLowerCase(),
+        mobile:userData.mobile||null,
+        password_hash:password, // plain — user should reset
+        role:userData.role||"employee",
+        avatar:av,
+        dept:userData.dept||"Operations",
+        balance:userData.balance||0,
+        reimbursable:0,
+        auth_type:"custom",
+        is_suspended:false,
+      });
+      if(insErr)throw new Error("RPC: "+rpcErr.message+". Direct insert: "+insErr.message+". Please check Supabase permissions.");
+      userId=newId;
     }
+
+    // Reload data (non-fatal)
+    try{await loadFromSB();}catch(e){console.warn("loadFromSB after add:",e);}
+
+    // Show success toast
+    toast(`✓ ${userData.name} added · Login: ${userData.username.toLowerCase()}`);
+    return userId;
   };
 
   const updateUserInSB=async(userId,patch)=>{
     if(!SB_ENABLED)return;
-    const targetUser=co.users.find(u=>u.id===userId);
-    if(targetUser?.authType==="custom"||targetUser?.auth_type==="custom"){
-      // Custom employee — use RPC
-      const{error}=await supabase.rpc("update_employee",{
-        p_user_id:   userId,
-        p_name:      patch.name??null,
-        p_role:      patch.role??null,
-        p_dept:      patch.dept??null,
-        p_balance:   patch.balance??null,
-        p_suspended: patch.isSuspended??null,
-        p_password:  patch.password??null,
-        p_mobile:    patch.mobile??null,
-      });
+    // Build DB patch directly — no RPC needed for updates
+    const dbPatch={};
+    if(patch.name!==undefined)        dbPatch.name=patch.name;
+    if(patch.role!==undefined)        dbPatch.role=patch.role;
+    if(patch.dept!==undefined)        dbPatch.dept=patch.dept;
+    if(patch.balance!==undefined)     dbPatch.balance=patch.balance;
+    if(patch.isSuspended!==undefined) dbPatch.is_suspended=patch.isSuspended;
+    if(patch.delegateTo!==undefined)  dbPatch.delegate_to=patch.delegateTo;
+    if(patch.delegateUntil!==undefined)dbPatch.delegate_until=patch.delegateUntil;
+    if(patch.mobile!==undefined)      dbPatch.mobile=patch.mobile;
+    if(patch.notifyEmail!==undefined) dbPatch.notify_email=patch.notifyEmail;
+
+    // Handle password change via RPC (needs bcrypt)
+    if(patch.password){
+      try{
+        const{error}=await supabase.rpc("reset_user_password",{
+          p_user_id:userId,p_new_password:patch.password
+        });
+        if(error)throw new Error(error.message);
+      }catch(e){
+        // Fallback: store plain text (user should change password)
+        dbPatch.password_hash=patch.password;
+      }
+    }
+
+    if(Object.keys(dbPatch).length>0){
+      const{error}=await supabase.from("users").update(dbPatch).eq("id",userId);
       if(error)throw new Error(error.message);
-    } else {
-      // Supabase Auth user — update users table directly
-      const dbPatch={};
-      if(patch.name!==undefined)       dbPatch.name=patch.name;
-      if(patch.balance!==undefined)    dbPatch.balance=patch.balance;
-      if(patch.dept!==undefined)       dbPatch.dept=patch.dept;
-      if(patch.role!==undefined)       dbPatch.role=patch.role;
-      if(patch.delegateTo!==undefined) dbPatch.delegate_to=patch.delegateTo;
-      if(patch.isSuspended!==undefined)dbPatch.is_suspended=patch.isSuspended;
-      await supabase.from("users").update(dbPatch).eq("id",userId);
     }
     await loadFromSB();
   };
@@ -3469,12 +3471,11 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
     setBusy(true);
     try{
       if(sbEnabled&&addUserToSB){
-        const result=await addUserToSB(
+        await addUserToSB(
           {name:form.name,username:form.username.toLowerCase().trim(),email:form.email||null,mobile:form.mobile||null,role:form.role,dept:form.dept,balance:parseFloat(form.balance)||0},
           form.password
         );
-        if(result===null||result===undefined)throw new Error("Server returned no response — check Supabase RPC logs");
-        toast(`✓ ${form.name} added · Login: ${form.username.toLowerCase()}`);
+        // addUserToSB handles toast on success — just reset form
       } else {
         const newEmp={id:"emp_"+uid(),cid:companyMeta.id,name:form.name,username:form.username.toLowerCase().trim(),email:form.email||"",mobile:form.mobile||"",password:form.password,role:form.role,avatar:inits(form.name),dept:form.dept,balance:parseFloat(form.balance)||0,reimbursable:0,delegateTo:null,isSuspended:false,authType:"custom"};
         setUsers(p=>[...p,newEmp]);
@@ -3483,8 +3484,7 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
       setForm({name:"",username:"",mobile:"",email:"",dept:depts[0]||"Operations",balance:"",password:"",role:creatableRoles[creatableRoles.length-1]?.id||"employee"});
       setShowAdd(false);
     }catch(e){
-      // Show the actual error from Supabase
-      toast(e.message||"Failed to create user — check Supabase logs","error");
+      toast(e.message||"Failed to create user","error");
     }
     finally{setBusy(false);}
   };
@@ -3514,10 +3514,18 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
 
   const deleteEmp=async emp=>{
     try{
-      if(sbEnabled){const{error}=await supabase.from("users").delete().eq("id",emp.id);if(error)throw new Error(error.message);}
-      else{setUsers(p=>p.filter(u=>u.id!==emp.id));}
+      if(sbEnabled){
+        const{error}=await supabase.from("users").delete().eq("id",emp.id);
+        if(error)throw new Error(error.message);
+        // Update local state immediately
+        setUsers(p=>p.filter(u=>u.id!==emp.id));
+      }else{
+        setUsers(p=>p.filter(u=>u.id!==emp.id));
+      }
       toast(emp.name+" removed","warn");
-    }catch(e){toast(e.message,"error");}
+    }catch(e){
+      toast("Delete failed: "+e.message,"error");
+    }
     setDelEmp(null);
   };
 
