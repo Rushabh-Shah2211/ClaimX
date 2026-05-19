@@ -35,8 +35,9 @@ const SC={
   Suspended:{c:"#dc2626",bg:"#fee2e2",icon:"⊘"},
 };
 const DEFAULT_DEPTS=["Sales","Marketing","Accounts","Procurement","Operations","HR","IT","Management"];
-const CATS=["Travel","Meals","Accommodation","Office Supplies","Client Entertainment","Software","Training","Miscellaneous"];
-const CI={Travel:"✈️",Meals:"🍽️",Accommodation:"🏨","Office Supplies":"📦","Client Entertainment":"🥂",Software:"💻",Training:"📚",Miscellaneous:"🗂️"};
+const DEFAULT_CATS=["Travel","Meals","Accommodation","Office Supplies","Client Entertainment","Software","Training","Miscellaneous"];
+const CATS=DEFAULT_CATS; // backward compat — actual list comes from policy
+const CI={Travel:"✈️",Meals:"🍽️",Accommodation:"🏨","Office Supplies":"📦","Client Entertainment":"🥂",Software:"💻",Training:"📚",Miscellaneous:"🗂️",Other:"📋"};
 // DEPTS is now dynamic — comes from company policy. Use DEFAULT_DEPTS as fallback.
 const DEPTS=DEFAULT_DEPTS; // backward compat alias
 const CURRENCIES=["INR","USD","EUR","GBP","AED","SGD"];
@@ -138,6 +139,7 @@ const mkPolicy=()=>({
   categoryPct:{Travel:40,Meals:15,Accommodation:20,"Office Supplies":5,"Client Entertainment":20,Software:15,Training:25,Miscellaneous:10},
   scheduledReports:{enabled:false,frequency:"weekly",email:""},
   departments:[...DEFAULT_DEPTS],
+  categories:[...DEFAULT_CATS],
   primaryColor:"#7ED957",
   dualApproveAbove:50000,  // claims above this need both manager + admin approval
 });
@@ -933,26 +935,45 @@ function Lightbox({receipt,onClose}){
 
 // ─── PROFILE SETTINGS ─────────────────────────────────────────────────────────
 function Profile({user,users,setUsers,onLogout,updateUserInSB}){
-  const [form,setForm]=useState({name:user.name,email:user.email,dept:user.dept});
+  const [form,setForm]=useState({
+    email:user.email||"",
+    username:user.username||"",
+    mobile:user.mobile||"",
+  });
   const [pw,setPw]=useState({cur:"",nw:"",cf:""});
   const [pwErr,setPwErr]=useState("");
   const [saved,setSaved]=useState(false);
-  const role=ROLES.find(r=>r.id===user.role)||ROLES[1];
-  const inpS={width:"100%",padding:"10px 12px",border:`1.5px solid ${BDR}`,borderRadius:9,fontSize:13,background:"#fafff8"};
+  const [avatarColor,setAvatarColor]=useState(null);
+  const role=ROLES.find(r=>r.id===user.role)||ROLES[3];
+  const inpS={width:"100%",padding:"10px 12px",border:`1.5px solid ${BDR}`,borderRadius:9,fontSize:13,background:"#fafff8",outline:"none",fontFamily:FB};
 
   const save=async()=>{
-    if(!form.name||!form.email)return;
-    if(updateUserInSB){try{await updateUserInSB(user.id,{name:form.name,dept:form.dept});}catch(e){return;}}
-    setUsers(p=>p.map(u=>u.id===user.id?{...u,name:form.name,email:form.email,dept:form.dept,avatar:inits(form.name)}:u));
+    if(updateUserInSB){
+      try{await updateUserInSB(user.id,{mobile:form.mobile||undefined});}catch(e){return;}
+    }
+    // Update email if changed (Supabase auth email update for auth users)
+    if(form.email&&form.email!==user.email&&SB_ENABLED&&user.authType!=="custom"){
+      const{error}=await supabase.auth.updateUser({email:form.email});
+      if(error){setSaved("err:"+error.message);return;}
+    }
+    setUsers(p=>p.map(u=>u.id===user.id?{...u,email:form.email,username:form.username,mobile:form.mobile}:u));
     setSaved(true);setTimeout(()=>setSaved(false),2000);
   };
+
   const changePw=async()=>{
     setPwErr("");
-    if(pw.nw.length<6){setPwErr("Must be at least 6 characters");return;}
+    if(pw.nw.length<4){setPwErr("Must be at least 4 characters");return;}
     if(pw.nw!==pw.cf){setPwErr("Passwords do not match");return;}
-    if(SB_ENABLED&&supabase){
-      const{error}=await supabase.auth.updateUser({password:pw.nw});
-      if(error){setPwErr(error.message);return;}
+    if(SB_ENABLED){
+      if(user.authType==="custom"){
+        // Custom auth — use RPC to reset own password (verify current pw first via re-auth)
+        const{data}=await supabase.rpc("authenticate_user",{p_login:user.username||user.email,p_password:pw.cur});
+        if(data?.error){setPwErr("Current password incorrect");return;}
+        await supabase.rpc("reset_user_password",{p_user_id:user.id,p_new_password:pw.nw});
+      } else {
+        const{error}=await supabase.auth.updateUser({password:pw.nw});
+        if(error){setPwErr(error.message);return;}
+      }
     } else {
       const u=users.find(x=>x.id===user.id);
       if(!u||u.password!==pw.cur){setPwErr("Current password incorrect");return;}
@@ -961,28 +982,57 @@ function Profile({user,users,setUsers,onLogout,updateUserInSB}){
     setPw({cur:"",nw:"",cf:""});setPwErr("✓ Password updated");
   };
 
+  const avatarColors=["#7ED957","#2563eb","#7c3aed","#db2777","#ea580c","#0891b2","#16a34a","#dc2626","#f59e0b","#374151"];
+
   return(
     <div style={{maxWidth:520,display:"flex",flexDirection:"column",gap:14}}>
       <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>My Profile</h1>
+
+      {/* Avatar + name */}
       <Card style={{padding:20,display:"flex",alignItems:"center",gap:16}}>
-        <div style={{width:60,height:60,borderRadius:"50%",background:`linear-gradient(135deg,${G},${GD})`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,color:"#fff",fontSize:20,flexShrink:0}}>{inits(form.name)}</div>
-        <div><div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>{form.name}</div><div style={{fontSize:12,color:MUTED,marginTop:2}}>{form.email}</div><span style={{display:"inline-block",marginTop:5,background:role.color+"20",color:role.color,padding:"2px 9px",borderRadius:10,fontSize:11,fontWeight:700}}>{role.label}</span></div>
+        <div style={{position:"relative"}}>
+          <div style={{width:64,height:64,borderRadius:"50%",background:avatarColor||`linear-gradient(135deg,${G},${GD})`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,color:"#fff",fontSize:22,flexShrink:0,cursor:"pointer"}}>{user.avatar||inits(user.name)}</div>
+          <div style={{display:"flex",gap:3,marginTop:6,flexWrap:"wrap",maxWidth:70}}>
+            {avatarColors.slice(0,5).map(c=><div key={c} onClick={async()=>{setAvatarColor(c);if(updateUserInSB)await updateUserInSB(user.id,{avatar:user.avatar});}} style={{width:12,height:12,borderRadius:"50%",background:c,cursor:"pointer"}}/>)}
+          </div>
+        </div>
+        <div>
+          <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>{user.name}</div>
+          <div style={{fontSize:11,color:"#dc2626",marginTop:2,background:"#fee2e2",padding:"2px 8px",borderRadius:5,display:"inline-block"}}>Name changes require contacting your Admin</div>
+          <div style={{marginTop:5}}><span style={{background:role.color+"20",color:role.color,padding:"2px 9px",borderRadius:10,fontSize:11,fontWeight:700}}>{role.label}</span></div>
+        </div>
       </Card>
+
+      {/* Editable fields */}
       <Card style={{padding:20}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Edit Profile</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:11}}>
-          <div><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Full Name</label><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} style={inpS}/></div>
-          <div><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Email</label><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} style={inpS}/></div>
+        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Contact Details</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:14}} className="mob-grid-1">
+          <div>
+            <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Username</label>
+            <input value={form.username} onChange={e=>setForm({...form,username:e.target.value.toLowerCase().replace(/\s+/g,"")})} style={inpS} placeholder="your.username"/>
+          </div>
+          <div>
+            <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Mobile</label>
+            <input value={form.mobile} onChange={e=>setForm({...form,mobile:e.target.value})} style={inpS} placeholder="9876543210"/>
+          </div>
+          <div>
+            <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Email</label>
+            <input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} style={inpS} placeholder="you@company.in"/>
+          </div>
         </div>
-        <div style={{marginBottom:14}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Department</label>
-          <select value={form.dept} onChange={e=>setForm({...form,dept:e.target.value})} style={{...inpS,appearance:"none",paddingRight:28}}>{DEPTS.map(d=><option key={d}>{d}</option>)}</select>
-        </div>
-        <Btn onClick={save} style={{padding:"9px 18px"}}>{saved?"✓ Saved!":"Save Changes"}</Btn>
+        {saved===true&&<div style={{fontSize:12,color:"#16a34a",marginBottom:8}}>✓ Saved successfully</div>}
+        {typeof saved==="string"&&saved.startsWith("err:")&&<div style={{fontSize:12,color:"#dc2626",marginBottom:8}}>{saved.slice(4)}</div>}
+        <Btn onClick={save} style={{padding:"9px 18px"}}>Save Changes</Btn>
       </Card>
+
+      {/* Password change */}
       <Card style={{padding:20}}>
         <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Change Password</div>
-        {[["Current","cur"],["New Password","nw"],["Confirm","cf"]].map(([l,k])=>(
-          <div key={k} style={{marginBottom:11}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>{l}</label><input type="password" value={pw[k]} onChange={e=>setPw({...pw,[k]:e.target.value})} style={inpS}/></div>
+        {[["Current Password","cur"],["New Password","nw"],["Confirm New Password","cf"]].map(([l,k])=>(
+          <div key={k} style={{marginBottom:11}}>
+            <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>{l}</label>
+            <input type="password" value={pw[k]} onChange={e=>setPw({...pw,[k]:e.target.value})} style={inpS}/>
+          </div>
         ))}
         {pwErr&&<div style={{fontSize:12,marginBottom:9,color:pwErr.startsWith("✓")?"#16a34a":"#dc2626"}}>{pwErr}</div>}
         <Btn onClick={changePw} style={{padding:"9px 18px"}}>Update Password</Btn>
@@ -1096,6 +1146,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   // Dynamic policy-driven values
   const primaryColor=co?.policy?.primaryColor||G;
   const companyDepts=co?.policy?.departments||DEFAULT_DEPTS;
+  const companyCategories=[...(co?.policy?.categories||DEFAULT_CATS),"Other"];
 
   if(loadingData||!co)return(
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f5faf3",fontFamily:FB}}>
@@ -1222,9 +1273,27 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   const detectAnomaly=(form,amount)=>{
     const reasons=[];
-    if(form.vendor){const dup=co.claims.find(c=>c.vendor===form.vendor&&c.amount===amount&&c.date===form.date);if(dup)reasons.push("Possible duplicate — same vendor, amount, date");}
+    // 1. Duplicate: same vendor + amount + date
+    if(form.vendor){
+      const dup=co.claims.find(c=>c.vendor?.toLowerCase()===form.vendor?.toLowerCase()&&c.amount===amount&&c.date===(form.date||today())&&c.id!==form.id);
+      if(dup)reasons.push(`Possible duplicate — same vendor, amount, date as ${dup.id}`);
+    }
+    // 2. Amount > 2.5× category average
     const prev=co.claims.filter(c=>c.category===form.category&&c.status==="Approved").map(c=>c.amount);
-    if(prev.length>2){const avg=prev.reduce((a,b)=>a+b)/prev.length;if(amount>avg*2.5)reasons.push(`Amount is 2.5× avg for ${form.category}`);}
+    if(prev.length>=3){
+      const avg=prev.reduce((a,b)=>a+b)/prev.length;
+      if(amount>avg*2.5)reasons.push(`Amount ₹${amount.toLocaleString("en-IN")} is ${(amount/avg).toFixed(1)}× the average for ${form.category} (avg: ₹${Math.round(avg).toLocaleString("en-IN")})`);
+    }
+    // 3. Same employee, same vendor, multiple claims within 3 days
+    if(form.vendor){
+      const recentSame=co.claims.filter(c=>c.empId===user.id&&c.vendor?.toLowerCase()===form.vendor?.toLowerCase()&&Math.abs(new Date(c.date)-new Date(form.date||today()))<=3*86400000);
+      if(recentSame.length>=1)reasons.push(`${recentSame.length} other claim(s) from same vendor in last 3 days`);
+    }
+    // 4. Round number (exact multiples of 500/1000 above ₹2000 — often estimates)
+    if(amount>=2000&&amount%500===0)reasons.push(`Round number (₹${amount.toLocaleString("en-IN")}) — verify against actual invoice`);
+    // 5. Very high single meal/entertainment
+    if((form.category==="Meals"||form.category==="Client Entertainment")&&amount>10000)
+      reasons.push(`High ${form.category} expense — may need additional justification`);
     return{isAnomaly:reasons.length>0,reasons};
   };
 
@@ -1706,7 +1775,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           trips={co.trips} isManager={isManager} isAdmin={isAdmin} isFinance={isFinance}
           getUser={getUser} setMdl={setMdl} submitEditRequest={submitEditRequest}
           hasEditWindow={hasEditWindow} userId={user.id}/>}
-        {tab==="submit"&&hasPerm("submit")&&<SubmitTab user={user} co={co} submitClaim={submitClaim} camFile={camFile} clearCamFile={()=>setCamF(null)} onCam={()=>setSCam(true)}/>}
+        {tab==="submit"&&hasPerm("submit")&&<SubmitTab user={user} co={co} submitClaim={submitClaim} camFile={camFile} clearCamFile={()=>setCamF(null)} onCam={()=>setSCam(true)} companyCategories={companyCategories}/>}
         {tab==="trips"&&<TripsTab trips={co.trips} setTrips={fn=>{if(!SB_ENABLED)setTrips(fn);}} claims={co.claims}
           isManager={isManager} isAdmin={isAdmin} getUser={getUser} users={co.users}
           closeTrip={closeTrip} toast={toast} uid={user.id} userRole={user.role}
@@ -1725,7 +1794,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             }
           }}/>}
         {tab==="approvals"&&canApprove&&<>
-          <ApprovalsTab pendingClaims={pendingClaims} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval}/>
+          <ApprovalsTab pendingClaims={pendingClaims} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip}/>
           {editRequests.length>0&&<Card style={{padding:16,marginTop:16}}>
             <div style={{fontFamily:FD,fontSize:14,fontWeight:700,color:INK,marginBottom:12}}>✏ Edit Requests {editRequests.filter(r=>r.status==="Pending").length>0&&<span style={{background:"#fef3c7",color:"#92400e",fontSize:11,padding:"1px 7px",borderRadius:10,marginLeft:7,fontFamily:FB}}>{editRequests.filter(r=>r.status==="Pending").length} pending</span>}</div>
             <EditRequestsPanel editRequests={editRequests} claims={co.claims} getUser={getUser} cid={cid} toast={toast} sbEnabled={SB_ENABLED} onApprove={approveEditRequest} onReject={rejectEditRequest}/>
@@ -1940,7 +2009,8 @@ function ClaimsTab({claims,trips,isManager,getUser,setMdl,submitEditRequest,hasE
 }
 
 // ─── SUBMIT TAB (OCR fixed — no stale closures) ───────────────────────────────
-function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam}){
+function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCategories}){
+  const cats=companyCategories||DEFAULT_CATS;
   const blankForm=()=>({id:uid(),date:today(),category:"",desc:"",amount:"",origAmount:"",currency:"INR",tripId:"",notes:"",vendor:"",receipts:[],ocrState:"idle",ocrData:null,scanning:false});
   const [forms,setForms]=useState([blankForm()]);
   const [idx,setIdx]=useState(0);
@@ -1997,7 +2067,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam}){
         currency:   p.currency||"INR",
         desc:       [p.vendor,p.description].filter(Boolean).join(" — ")||(cur?.desc||""),
         vendor:     p.vendor||(cur?.vendor||""),
-        category:   CATS.includes(p.category)?p.category:(cur?.category||""),
+        category:   cats.includes(p.category)?p.category:(cur?.category||""),
         notes:      [p.invoice_number?"Invoice: "+p.invoice_number:"",p.gst_number?"GSTIN: "+p.gst_number:"",p.line_items?.length?"Items: "+p.line_items.slice(0,3).join(", "):""].filter(Boolean).join(" | ")||(cur?.notes||""),
       });
     }catch(err){
@@ -2153,7 +2223,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam}){
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:10}}>
           <div><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Category *</label>
             <select value={fm.category} onChange={e=>upd(idx,{category:e.target.value})} style={{...inpS,appearance:"none",paddingRight:28,borderColor:fm.ocrState==="done"&&fm.category?G:BDR}}>
-              <option value="">Select…</option>{CATS.map(c=><option key={c}>{c}</option>)}
+              <option value="">Select…</option>{cats.map(c=><option key={c}>{c}</option>)}
             </select>
           </div>
           <div><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Amount (₹) *</label>
@@ -2305,10 +2375,11 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
 }
 
 // ─── APPROVALS TAB ────────────────────────────────────────────────────────────
-function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl}){
+function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip}){
   const [filter,setFilter]=useState("All");
   const [selected,setSelected]=useState(new Set());
-  const shown=filter==="All"?pendingClaims:filter==="Anomaly"?pendingClaims.filter(c=>c.anomaly):pendingClaims.filter(c=>c.flagged||c.weekendFlag);
+  const pendingTrips=(trips||[]).filter(t=>t.status==="pending_approval");
+  const shown=filter==="All"?pendingClaims:filter==="Anomaly"?pendingClaims.filter(c=>c.anomaly):filter==="High Value"?pendingClaims.filter(c=>needsDualApproval&&needsDualApproval(c.amount)):pendingClaims.filter(c=>c.flagged||c.weekendFlag);
 
   const toggleSel=(id)=>setSelected(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n;});
   const toggleAll=()=>setSelected(p=>p.size===shown.length?new Set():new Set(shown.map(c=>c.id)));
@@ -2317,7 +2388,27 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
   return(
     <div>
       <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:4}}>Approvals</h1>
-      <p style={{color:MUTED,fontSize:12,marginBottom:12}}>{pendingClaims.length} claims · {pendingTopups.length} top-ups · {pendingClaims.filter(c=>c.anomaly).length} anomalies</p>
+      <p style={{color:MUTED,fontSize:12,marginBottom:12}}>{pendingClaims.length} claims · {pendingTopups.length} top-ups · {pendingTrips.length} trips · {pendingClaims.filter(c=>c.anomaly).length} anomalies</p>
+
+      {/* ── Pending Trips ── */}
+      {pendingTrips.length>0&&<Card style={{padding:16,marginBottom:16,borderColor:"#fcd34d",background:"#fffbeb"}}>
+        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:"#92400e",marginBottom:10}}>⏳ Trips Awaiting Approval ({pendingTrips.length})</div>
+        {pendingTrips.map(t=>{
+          const creator=getUser(t.createdBy);
+          return(
+            <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",background:"#fff",borderRadius:9,marginBottom:7,border:`1px solid #fcd34d`}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:13,color:INK}}>{t.name}</div>
+                <div style={{fontSize:11,color:MUTED}}>{t.startDate} → {t.endDate} · Created by {creator?.name||"Unknown"} ({creator?.dept||"—"})</div>
+              </div>
+              <div style={{display:"flex",gap:7,flexShrink:0}}>
+                <Btn onClick={()=>approveTrip&&approveTrip(t)} style={{padding:"6px 12px",fontSize:11}}>✓ Approve Trip</Btn>
+                <Btn v="danger" onClick={()=>rejectTrip&&rejectTrip(t)} style={{padding:"6px 10px",fontSize:11}}>✗ Reject</Btn>
+              </div>
+            </div>
+          );
+        })}
+      </Card>}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
         <div style={{display:"flex",gap:7}}>
           {["All","Anomaly","Flagged"].map(f=><button key={f} onClick={()=>{setFilter(f);setSelected(new Set());}} style={{padding:"5px 13px",borderRadius:20,border:`1.5px solid ${filter===f?G:BDR}`,background:filter===f?G:"#fff",color:filter===f?"#fff":MUTED,fontFamily:FB,fontSize:11,fontWeight:600,cursor:"pointer"}}>{f}</button>)}
@@ -2563,10 +2654,12 @@ function Audit({auditLog,claims,getUser}){
 // ─── EMPLOYEES TAB ────────────────────────────────────────────────────────────
 function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,updateUserInSB,sbEnabled,companyDepts,isAdmin}){
   const depts=companyDepts||policy?.departments||DEFAULT_DEPTS;
-  // Admin can create any role; manager can only create employee/finance
   const creatableRoles=isAdmin?ROLES:ROLES.filter(r=>["employee","finance"].includes(r.id));
-  const emps=users.filter(u=>u.role!=="manager");
-  const activeEmps=emps.filter(u=>!u.isSuspended);
+  // Admin accounts are free (1 per company, created by SA)
+  // All managers + employees + finance count toward the limit
+  const countedUsers=users.filter(u=>u.role!=="admin");
+  const emps=users.filter(u=>u.role!=="admin"); // show all non-admin in table
+  const activeEmps=countedUsers.filter(u=>!u.isSuspended);
   const maxUsers=companyMeta.maxUsers||0;
   const canAdd=activeEmps.length<maxUsers;
   const slotsLeft=Math.max(0,maxUsers-activeEmps.length);
@@ -2970,6 +3063,26 @@ function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
         </Card>
       </div>
 
+      {/* ── Expense Categories ── */}
+      <Card style={{padding:18,marginTop:12}}>
+        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Expense Categories</div>
+        <p style={{color:MUTED,fontSize:11,marginBottom:12}}>Employees select from these categories when submitting expenses. "Other" is always available.</p>
+        <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>
+          {(policy.categories||DEFAULT_CATS).map((cat,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:4,background:GL,border:`1px solid ${GM}`,borderRadius:7,padding:"4px 10px"}}>
+              <span style={{fontSize:12}}>{CI[cat]||"📋"}</span>
+              <span style={{fontSize:12,fontWeight:600,color:GD}}>{cat}</span>
+              {cat!=="Other"&&<button onClick={()=>{const nc=(policy.categories||DEFAULT_CATS).filter((_,j)=>j!==i);setPolicy({...policy,categories:nc});}} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:12,padding:"0 2px"}}>✕</button>}
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <input id="newCatInput" placeholder="Add category (e.g. Legal)" style={{padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,flex:1,background:"#fafff8"}}
+            onKeyDown={e=>{if(e.key==="Enter"){const v=e.target.value.trim();if(v&&!(policy.categories||DEFAULT_CATS).includes(v)){setPolicy({...policy,categories:[...(policy.categories||DEFAULT_CATS),v]});e.target.value="";};}}}/>
+          <Btn v="outline" onClick={()=>{const el=document.getElementById("newCatInput");const v=el.value.trim();if(v&&!(policy.categories||DEFAULT_CATS).includes(v)){setPolicy({...policy,categories:[...(policy.categories||DEFAULT_CATS),v]});el.value="";}}} style={{padding:"8px 14px",fontSize:12}}>+ Add</Btn>
+        </div>
+      </Card>
+
       {/* ── Departments ── */}
       <Card style={{padding:18,marginTop:12}}>
         <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Departments</div>
@@ -3190,12 +3303,13 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
   const [comment,setComment]=useState("");
   const [receiptsWithUrls,setRWU]=useState(null);
 
-  // ALL hooks must be before any conditional return (React rules)
-  // Get claim data safely — will be null for lightbox type
   const isLightbox=modal?.type==="lightbox";
   const c=isLightbox?null:modal?.data;
 
-  // Fetch signed receipt URLs — runs for all modal types but only does work when c exists
+  // Reset remarks when claim changes
+  useEffect(()=>{setRemarks("");setComment("");},[c?.id]);
+
+  // Fetch signed receipt URLs
   useEffect(()=>{
     if(!c?.receipts?.length){setRWU([]);return;}
     const needsFetch=c.receipts.some(r=>!r.url&&r.storagePath);
@@ -3210,7 +3324,6 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
     })).then(setRWU);
   },[c?.id]);
 
-  // Early return for lightbox — safe because all hooks are above
   if(isLightbox)return<Lightbox receipt={modal.data} onClose={()=>setMdl(null)}/>;
 
   const{type,data}=modal;
@@ -3226,8 +3339,8 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
   };
 
   return(
-    <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:500,backdropFilter:"blur(3px)"}} onClick={()=>setMdl(null)}>
-      <div onClick={ev=>ev.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:24,width:530,maxHeight:"90vh",overflow:"auto",boxShadow:"0 20px 60px #0003"}}>
+    <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:500,backdropFilter:"blur(3px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)setMdl(null);}}>
+      <div onMouseDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:24,width:"min(540px,96vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 20px 60px #0003"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:13}}>
           <span style={{fontFamily:FD,fontSize:16,fontWeight:700,color:INK}}>{type==="detail"?"Claim Details":type==="approve"?"Approve Claim":"Reject Claim"}</span>
           <button onClick={()=>setMdl(null)} style={{background:"none",border:"none",fontSize:15,cursor:"pointer",color:MUTED}}>✕</button>
@@ -3277,7 +3390,7 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
         {/* Approve/Reject actions */}
         {(type==="approve"||type==="reject")&&<div style={{marginTop:12}}>
           <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Remarks (optional)</label>
-          <textarea value={remarks} onChange={e=>setRemarks(e.target.value)} rows={2} placeholder="Add a note…" style={{width:"100%",padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontFamily:FB,fontSize:12,resize:"none"}}/>
+          <textarea value={remarks} onChange={e=>setRemarks(e.target.value)} rows={2} placeholder="Add a note…" style={{width:"100%",padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontFamily:FB,fontSize:12,resize:"vertical",outline:"none",display:"block",boxSizing:"border-box"}}/>
           <div style={{display:"flex",gap:8,marginTop:10}}>
             {type==="approve"&&<Btn onClick={()=>handleDecision(c.id,"Approved",remarks)} style={{flex:1}}>✓ Confirm Approval</Btn>}
             {type==="reject"&&<Btn v="danger" onClick={()=>handleDecision(c.id,"Rejected",remarks)} style={{flex:1}}>✗ Confirm Rejection</Btn>}
