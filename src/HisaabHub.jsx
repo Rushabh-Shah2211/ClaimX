@@ -670,18 +670,10 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
               {busy?"Signing in…":"Sign In →"}
             </button>
 
-            {/* Demo accounts */}
-            <div style={{marginTop:16,padding:"12px",background:"rgba(126,217,87,0.05)",border:"1px solid rgba(126,217,87,0.12)",borderRadius:10}}>
-              <div style={{fontSize:10,color:"rgba(255,255,255,0.3)",fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>Demo accounts {SB_ENABLED?"(click to fill, then Sign In)":""}</div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5}}>
-                {[["🔑 Super Admin","rushabh@rbshah.co.in","(your password)"],["👔 Manager","rushabh@rbshah.in","admin@123"],["👤 Employee","janvi@rbshah.in","janvi@111"],["🚗 Roger Motors","rajesh@rogermotors.in","rajesh@123"]].map(([role,em,pw])=>(
-                  <div key={em} onClick={()=>{setLogin(em);setPass(pw);setErr("");setMsg("");}} style={{cursor:"pointer",padding:"6px 8px",background:"rgba(255,255,255,0.04)",borderRadius:7,border:"1px solid rgba(255,255,255,0.07)"}}>
-                    <div style={{fontSize:10,color:"rgba(255,255,255,0.3)",marginBottom:1}}>{role}</div>
-                    <div style={{fontSize:10,color:"rgba(255,255,255,0.55)",fontWeight:600}}>{em}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
+            {/* Demo hint - dev only, hidden in production */}
+            {!SB_ENABLED&&<div style={{marginTop:14,padding:"10px 12px",background:"rgba(126,217,87,0.05)",border:"1px solid rgba(126,217,87,0.1)",borderRadius:9,fontSize:11,color:"rgba(255,255,255,.3)",textAlign:"center"}}>
+              Demo mode — use credentials from your admin
+            </div>}
           </>)}
         </div>
         <div style={{marginTop:14,textAlign:"center",fontSize:10,color:"rgba(255,255,255,0.2)"}}>© 2026 ClaimX by RB · Privacy · Terms</div>
@@ -1340,6 +1332,39 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const[editRequests,setEditRequests]=useState([]);
   const{queue,online,enqueue,flush}=useOffline();
   const{perm:pushPerm,ask:askPush,send:sendPush}=usePush();
+  const[showFundReq,setSFR]=useState(false);
+  const[showShortcuts,setSSC]=useState(false);
+
+  // Keyboard shortcuts
+  useEffect(()=>{
+    const handler=(e)=>{
+      if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"||e.target.tagName==="SELECT")return;
+      if(e.key==="?"||e.key==="/"){e.preventDefault();setSSC(p=>!p);return;}
+      if(e.key==="Escape"){setMdl(null);setSSC(false);setSFR(false);return;}
+      if(e.ctrlKey||e.metaKey||e.altKey)return;
+      const map={n:"submit",a:"approvals",c:"claims",t:"trips",d:"dashboard",f:"finance_view",i:"inbox"};
+      if(map[e.key.toLowerCase()]){e.preventDefault();setTab(map[e.key.toLowerCase()]);}
+    };
+    window.addEventListener("keydown",handler);
+    return()=>window.removeEventListener("keydown",handler);
+  },[]);
+
+  // Fund request handler
+  const handleFundRequest=async(req)=>{
+    const tripName=co.trips.find(t=>t.id===req.tripId)?.name||req.tripId;
+    const deptMgrs=co.users.filter(u=>["manager","admin"].includes(u.role));
+    for(const m of deptMgrs){
+      await sbPushNotif(m.id,`💰 Fund request: ${req.empName} needs ₹${req.amount.toLocaleString("en-IN")} for "${tripName}" — ${req.reason}`,"warn");
+    }
+    if(SB_ENABLED){
+      await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});
+      await loadFromSB();
+    }
+    toast("✓ Fund request sent to manager");
+  };
+
+  // ── Edit Request handlers ──────────────────────────────────────────────────
+  // Resolve the effective approver (handles delegation)
 
   // toast must be defined before any useEffect that calls it
   const toast=(msg,t="success")=>{setNtf({msg,t});setTimeout(()=>setNtf(null),3200);};
@@ -1440,39 +1465,6 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     }
   };
 
-  const[showFundReq,setSFR]=useState(false);
-  const[showShortcuts,setSSC]=useState(false);
-
-  // Keyboard shortcuts
-  useEffect(()=>{
-    const handler=(e)=>{
-      if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"||e.target.tagName==="SELECT")return;
-      if(e.key==="?"||e.key==="/"){e.preventDefault();setSSC(p=>!p);return;}
-      if(e.key==="Escape"){setMdl(null);setSSC(false);setSFR(false);return;}
-      if(e.ctrlKey||e.metaKey||e.altKey)return;
-      const map={n:"submit",a:"approvals",c:"claims",t:"trips",d:"dashboard",f:"finance_view",i:"inbox"};
-      if(map[e.key.toLowerCase()]){e.preventDefault();setTab(map[e.key.toLowerCase()]);}
-    };
-    window.addEventListener("keydown",handler);
-    return()=>window.removeEventListener("keydown",handler);
-  },[]);
-
-  // Fund request handler
-  const handleFundRequest=async(req)=>{
-    const tripName=co.trips.find(t=>t.id===req.tripId)?.name||req.tripId;
-    const deptMgrs=co.users.filter(u=>["manager","admin"].includes(u.role));
-    for(const m of deptMgrs){
-      await sbPushNotif(m.id,`💰 Fund request: ${req.empName} needs ₹${req.amount.toLocaleString("en-IN")} for "${tripName}" — ${req.reason}`,"warn");
-    }
-    if(SB_ENABLED){
-      await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});
-      await loadFromSB();
-    }
-    toast("✓ Fund request sent to manager");
-  };
-
-  // ── Edit Request handlers ──────────────────────────────────────────────────
-  // Resolve the effective approver (handles delegation)
   const effectiveApprover=(userId)=>{
     const u=co.users.find(x=>x.id===userId);
     if(!u)return userId;
