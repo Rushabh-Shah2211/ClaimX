@@ -207,10 +207,155 @@ const DB0={
   },
 };
 
-// ─── EMAIL SIMULATION (replace with Resend/SendGrid in production) ────────────
-const emailAlert=(to,sub,body)=>console.log(`[EMAIL→${to}] ${sub}\n${body}`);
+// ─── NOTIFICATION HELPERS ─────────────────────────────────────────────────────
+const emailAlert=async(to,subject,body,htmlBody)=>{
+  if(!to||!SB_ENABLED)return;
+  try{
+    await fetch("/api/email",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({to,subject,html:htmlBody||
+        `<div style="font-family:sans-serif;padding:24px;max-width:560px;margin:0 auto">
+        <div style="background:#0f1c09;padding:16px 22px;border-radius:10px 10px 0 0">
+          <span style="color:#7ED957;font-weight:800;font-size:18px">ClaimX</span>
+          <span style="color:rgba(255,255,255,.4);font-size:11px;margin-left:8px">by RB</span>
+        </div>
+        <div style="background:#f8faf6;padding:22px;border:1px solid #e8f0e5;border-top:none;border-radius:0 0 10px 10px">
+          <p style="color:#1a2e12;font-size:14px;line-height:1.7;margin:0 0 16px">${body}</p>
+          <div style="font-size:11px;color:#9ca3af;padding-top:12px;border-top:1px solid #e8f0e5">ClaimX by RB · claim-x-beta.vercel.app</div>
+        </div></div>`
+      })});
+  }catch(e){console.warn("Email:",e.message);}
+};
+const whatsappAlert=async(phone,templateName,params=[])=>{
+  if(!phone||!SB_ENABLED)return;
+  try{
+    await fetch("/api/whatsapp",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({phone,templateName,params})});
+  }catch(e){console.warn("WhatsApp:",e.message);}
+};
+const claimEmailHtml=(action,claim,remarks,companyName)=>{
+  const rows=[["Claim ID",claim.id],["Amount","\u20b9"+(claim.amount||0).toLocaleString("en-IN")],["Date",claim.date||""],["Category",claim.category||""],["Description",claim.desc||""],...(remarks?[["Remarks",remarks]]:[])];
+  return `<div style="font-family:sans-serif;max-width:560px;margin:0 auto">
+  <div style="background:#0f1c09;padding:18px 26px;border-radius:12px 12px 0 0"><span style="color:#7ED957;font-size:18px;font-weight:800">ClaimX</span><span style="color:rgba(255,255,255,.4);font-size:11px;margin-left:8px">${companyName||""}</span></div>
+  <div style="background:#fff;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px">
+    <h2 style="color:${action==="Approved"?"#15803d":"#dc2626"};font-size:16px;margin:0 0 14px">${action==="Approved"?"\u2713 Claim Approved":"\u2717 Claim Rejected"}</h2>
+    <table style="font-size:13px;width:100%;border-collapse:collapse">${rows.map(([l,v])=>`<tr><td style="padding:6px 0;color:#6b7280;width:38%">${l}</td><td style="padding:6px 0;font-weight:600;color:#111">${v}</td></tr>`).join("")}</table>
+    <div style="margin-top:16px;padding:10px 14px;background:${action==="Approved"?"#f0fde9":"#fef2f2"};border-radius:7px;font-size:12px;color:${action==="Approved"?"#15803d":"#dc2626"}">${action==="Approved"?"Amount will be settled as per company policy.":"Please contact your manager for details."}</div>
+    <div style="margin-top:18px;font-size:10px;color:#9ca3af">ClaimX by RB · ${new Date().toLocaleDateString("en-IN")}</div>
+  </div></div>`;
+};
 
-// ─── PUSH NOTIFICATIONS HOOK ──────────────────────────────────────────────────
+
+// ─── TRIP SETTLEMENT PDF ──────────────────────────────────────────────────────
+const generateSettlementPDF=async(trip,claims,getUser,companyName)=>{
+  // Dynamic import jsPDF from CDN
+  const {jsPDF}=await import("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js").then(m=>m.default||m);
+  const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
+  const W=210,M=20;
+  let y=M;
+
+  // Header
+  doc.setFillColor(15,28,9);
+  doc.rect(0,0,W,28,"F");
+  doc.setTextColor(126,217,87);
+  doc.setFont("helvetica","bold");
+  doc.setFontSize(18);
+  doc.text("ClaimX",M,16);
+  doc.setTextColor(200,200,200);
+  doc.setFontSize(9);
+  doc.text("by RB · Trip Settlement Statement",M+26,16);
+  doc.setTextColor(150,150,150);
+  doc.text(companyName||"",W-M,16,{align:"right"});
+  y=38;
+
+  // Trip details
+  doc.setTextColor(20,20,20);
+  doc.setFontSize(14);
+  doc.setFont("helvetica","bold");
+  doc.text(trip.name||"Trip",M,y);
+  y+=6;
+  doc.setFontSize(9);
+  doc.setFont("helvetica","normal");
+  doc.setTextColor(100,100,100);
+  doc.text(`${trip.startDate||""} → ${trip.endDate||""} · ${trip.type||"Trip"} · ${trip.currency||"INR"}${trip.projectCode?" · "+trip.projectCode:""}`,M,y);
+  y+=10;
+
+  // Summary box
+  const tripClaims=claims.filter(c=>c.tripId===trip.id&&c.status==="Approved");
+  const totalSpent=tripClaims.reduce((s,c)=>s+c.amount,0);
+  const budget=trip.budget||0;
+  const topups=trip.topupsTotal||0;
+  const openBal=trip.openingBalance||budget;
+  const isBalance=trip.tripMode!=="reimbursement";
+  const settlement=isBalance?(openBal+topups-totalSpent):totalSpent;
+  const recoverable=isBalance&&settlement>0;
+
+  doc.setFillColor(240,253,233);
+  doc.roundedRect(M,y,W-2*M,32,3,3,"F");
+  doc.setTextColor(20,20,20);
+  const cols=isBalance
+    ?[["Opening Balance","₹"+openBal.toLocaleString("en-IN")],["Top-ups","₹"+topups.toLocaleString("en-IN")],["Total Spent","₹"+totalSpent.toLocaleString("en-IN")],["Settlement",`₹${Math.abs(settlement).toLocaleString("en-IN")} ${recoverable?"(Return)":"(Payable)"}`]]
+    :[["Total Expenses","₹"+totalSpent.toLocaleString("en-IN")],["Budget","₹"+budget.toLocaleString("en-IN")],["Variance",`₹${Math.abs(totalSpent-budget).toLocaleString("en-IN")} ${totalSpent>budget?"Over":"Under"}`],["Status","Reimbursement"]];
+  const colW=(W-2*M)/cols.length;
+  cols.forEach(([l,v],i)=>{
+    const cx=M+i*colW+colW/2;
+    doc.setFontSize(8);doc.setTextColor(100,100,100);doc.text(l,cx,y+8,{align:"center"});
+    doc.setFontSize(12);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);doc.text(v,cx,y+18,{align:"center"});
+    doc.setFont("helvetica","normal");
+  });
+  y+=38;
+
+  // Expense table
+  doc.setFontSize(10);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);
+  doc.text("Approved Expenses",M,y);y+=5;
+  doc.setFillColor(21,128,61);
+  doc.rect(M,y,W-2*M,6,"F");
+  doc.setTextColor(255,255,255);doc.setFontSize(7.5);doc.setFont("helvetica","bold");
+  const th=["Date","Vendor","Category","Description","Amount"];
+  const tw=[22,32,28,52,26];
+  let tx=M+2;
+  th.forEach((h,i)=>{doc.text(h,tx,y+4.5);tx+=tw[i];});
+  y+=7;
+
+  tripClaims.forEach((c,idx)=>{
+    if(y>265){doc.addPage();y=20;}
+    doc.setFillColor(idx%2===0?250:245,idx%2===0?253:250,idx%2===0?243:238);
+    doc.rect(M,y,W-2*M,5.5,"F");
+    doc.setTextColor(40,40,40);doc.setFontSize(7.5);doc.setFont("helvetica","normal");
+    tx=M+2;
+    const vals=[c.date||"",c.vendor?.slice(0,14)||"—",c.category||"",c.desc?.slice(0,24)||"","₹"+(c.amount).toLocaleString("en-IN")];
+    vals.forEach((v,i)=>{doc.text(v,tx,y+4);tx+=tw[i];});
+    y+=6;
+  });
+
+  y+=4;
+  doc.setDrawColor(200,230,180);doc.line(M,y,W-M,y);y+=5;
+  doc.setFontSize(9);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);
+  doc.text(`Total: ₹${totalSpent.toLocaleString("en-IN")}`,W-M,y,{align:"right"});
+
+  // Footer
+  y+=10;
+  if(isBalance){
+    const box=recoverable?"#fef3c7":"#f0fde9";
+    doc.setFillColor(...(recoverable?[254,243,199]:[240,253,233]));
+    doc.roundedRect(M,y,W-2*M,14,2,2,"F");
+    doc.setFontSize(9);doc.setFont("helvetica","bold");
+    doc.setTextColor(recoverable?146:21,recoverable?64:128,recoverable?0:61);
+    doc.text(
+      recoverable
+        ?`₹${settlement.toLocaleString("en-IN")} is recoverable from employee`
+        :`₹${Math.abs(settlement).toLocaleString("en-IN")} is payable to employee`,
+      W/2,y+9,{align:"center"}
+    );
+    y+=18;
+  }
+
+  doc.setFontSize(8);doc.setTextColor(150,150,150);doc.setFont("helvetica","normal");
+  doc.text(`Generated by ClaimX · ${new Date().toLocaleDateString("en-IN","dd MMM yyyy")} · ${companyName||""}`,W/2,285,{align:"center"});
+
+  return doc;
+};
+
+
 function usePush(){
   const[perm,setPerm]=useState(typeof Notification!=="undefined"?Notification.permission:"denied");
   const ask=async()=>{if(typeof Notification==="undefined")return;const p=await Notification.requestPermission();setPerm(p);};
@@ -1037,6 +1182,37 @@ function Profile({user,users,setUsers,onLogout,updateUserInSB}){
         {pwErr&&<div style={{fontSize:12,marginBottom:9,color:pwErr.startsWith("✓")?"#16a34a":"#dc2626"}}>{pwErr}</div>}
         <Btn onClick={changePw} style={{padding:"9px 18px"}}>Update Password</Btn>
       </Card>
+      {/* Delegation — managers only */}
+      {(user.role==="manager"||user.role==="admin")&&<Card style={{padding:20}}>
+        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Approval Delegation</div>
+        <p style={{color:MUTED,fontSize:11,marginBottom:12}}>While on leave, delegate your approval authority to another manager temporarily. The delegate can approve/reject in your name until the date set.</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:14}} className="mob-grid-1">
+          <div>
+            <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Delegate To</label>
+            <select value={user.delegateTo||""} onChange={async e=>{
+              const val=e.target.value||null;
+              if(updateUserInSB)await updateUserInSB(user.id,{delegateTo:val});
+              setUsers(p=>p.map(u=>u.id===user.id?{...u,delegateTo:val}:u));
+            }} style={{...inpS,appearance:"none"}}>
+              <option value="">— No delegation —</option>
+              {users.filter(u=>["manager","admin"].includes(u.role)&&u.id!==user.id).map(u=>(
+                <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Delegate Until</label>
+            <input type="date" min={today()} defaultValue={user.delegateUntil||""} onBlur={async e=>{
+              if(updateUserInSB)await updateUserInSB(user.id,{delegateUntil:e.target.value});
+              setUsers(p=>p.map(u=>u.id===user.id?{...u,delegateUntil:e.target.value}:u));
+            }} style={inpS}/>
+          </div>
+        </div>
+        {user.delegateTo&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"8px 12px",fontSize:11,color:"#92400e"}}>
+          ⚠ Approvals are currently delegated to <strong>{users.find(u=>u.id===user.delegateTo)?.name||"—"}</strong>
+          {user.delegateUntil&&` until ${user.delegateUntil}`}
+        </div>}
+      </Card>}
       <Card style={{padding:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div><div style={{fontWeight:600,color:INK,fontSize:13}}>Sign Out</div><div style={{fontSize:11,color:MUTED}}>Sign out of this device</div></div>
         <Btn v="danger" onClick={onLogout} style={{padding:"8px 16px",fontSize:12}}>Sign Out</Btn>
@@ -1216,6 +1392,14 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   };
 
   // ── Edit Request handlers ──────────────────────────────────────────────────
+  // Resolve the effective approver (handles delegation)
+  const effectiveApprover=(userId)=>{
+    const u=co.users.find(x=>x.id===userId);
+    if(!u)return userId;
+    if(u.delegateTo&&(!u.delegateUntil||u.delegateUntil>=today()))return u.delegateTo;
+    return userId;
+  };
+
   const loadEditRequests=async()=>{
     if(!SB_ENABLED){return;}
     const{data}=await supabase.from("edit_requests").select("*").eq("company_id",cid).order("created_at",{ascending:false});
@@ -1328,7 +1512,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const{isAnomaly,reasons}=detectAnomaly(form,amount);
     const claimId="EXP-"+uid();
 
-    const claimData={id:claimId,tripId,empId:user.id,date:claimDate,category:form.category,desc:form.desc,amount,origAmount:parseFloat(form.origAmount||amount),origCur:form.currency||"INR",status:auto?"Approved":"Pending",autoApproved:auto,receipts:form.receipts||[],remarks:auto?"Auto-approved":"",flagged:catEx,anomaly:isAnomaly,anomalyReasons:reasons,comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||""};
+    const claimData={id:claimId,tripId,empId:user.id,date:claimDate,category:form.category,desc:form.desc,amount,origAmount:parseFloat(form.origAmount||amount),origCur:form.currency||"INR",status:auto?"Approved":"Pending",autoApproved:auto,receipts:form.receipts||[],remarks:auto?"Auto-approved":"",flagged:catEx,anomaly:isAnomaly,anomalyReasons:reasons,comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||"",projectCode:form.projectCode||trip?.projectCode||""};
 
     if(!online){
       if(SB_ENABLED){
@@ -1384,7 +1568,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       else{
         // Notify manager of employee's dept + all admins
         const deptMgr=co.users.find(u=>u.role==="manager"&&u.dept===myUser?.dept);
-        const approverId=user.delegateTo||deptMgr?.id||co.users.find(u=>["manager","admin"].includes(u.role)&&u.id!==user.id)?.id;
+        const rawApproverId=user.delegateTo||deptMgr?.id||co.users.find(u=>["manager","admin"].includes(u.role)&&u.id!==user.id)?.id;
+        const approverId=rawApproverId?effectiveApprover(rawApproverId):rawApproverId;
         if(approverId)sbPushNotif(approverId,`New claim ${claimId} from ${user.name} — ${fmt(amount)} awaiting approval`,"info");
         // Notify all admins
         for(const a of co.users.filter(u=>u.role==="admin"&&u.id!==approverId))sbPushNotif(a.id,`${user.name} submitted ${fmt(amount)} expense — ${claimId}`,"info");
@@ -1432,6 +1617,24 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         const admins=co.users.filter(u=>u.role==="admin");
         for(const a of admins)await sbPushNotif(a.id,`${user.name} ${finalStatus.toLowerCase()} claim ${claimId} — ${fmt(claim.amount)}`,"info");
       }
+      const emp=co.users.find(u=>u.id===claim.empId);
+      // Send email notification
+      if(emp?.email&&co.policy?.notifyEmailOnApprove!==false){
+        emailAlert(
+          emp.email,
+          `Claim ${finalStatus} — ${fmt(claim.amount)} | ClaimX`,
+          `Your expense claim ${claimId} for ${fmt(claim.amount)} has been ${finalStatus.toLowerCase()}.${remarks?" Remarks: "+remarks:""}`,
+          claimEmailHtml(isFullyApproved?"Approved":"Rejected",claim,remarks,activeMeta?.name)
+        );
+      }
+      // Send WhatsApp notification if employee has WA number
+      const empPhone=emp?.whatsappNumber||emp?.mobile;
+      if(empPhone&&co.policy?.notifyWaOnApprove!==false){
+        whatsappAlert(empPhone,
+          isFullyApproved?"claimx_claim_approved":"claimx_claim_rejected",
+          [emp?.name||"",claimId,fmt(claim.amount),remarks||""]
+        );
+      }
       sendPush(isFullyApproved?"✓ Claim Approved":finalStatus==="Manager Approved"?"⏳ Awaiting Admin":"✗ Rejected",`${fmt(claim.amount)} — ${claim.desc}`);
       await loadFromSB();
     } else {
@@ -1470,22 +1673,36 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     if(SB_ENABLED){await supabase.from("trips").update({status:"closed"}).eq("id",tripId);await loadFromSB();}
     else setTrips(p=>p.map(t=>t.id===tripId?{...t,status:"closed"}:t));
 
-    // Send summary notifications to all stakeholders
     const tripClaims=co.claims.filter(c=>c.tripId===tripId&&c.status==="Approved");
     const total=tripClaims.reduce((s,c)=>s+c.amount,0);
     const summaryMsg=`Trip "${trip.name}" closed. ${tripClaims.length} approved expenses, total ${fmt(total)} of ${fmt(trip.budget)} budget.`;
 
-    // Notify all assigned employees
-    const assignedUsers=trip.assignedTo||[];
-    for(const uid of assignedUsers)await sbPushNotif(uid,summaryMsg,"info");
-    // Notify all admins
-    for(const u of co.users.filter(u=>u.role==="admin"))await sbPushNotif(u.id,summaryMsg,"info");
-    // Notify manager of creator's dept
-    for(const u of co.users.filter(u=>u.role==="manager"))await sbPushNotif(u.id,summaryMsg,"info");
-    // Notify finance
-    for(const u of co.users.filter(u=>u.role==="finance"))await sbPushNotif(u.id,`Finance: ${summaryMsg}`,"info");
+    // Generate PDF settlement
+    try{
+      const doc=await generateSettlementPDF(trip,co.claims,getUser,activeMeta?.name);
+      const pdfBlob=doc.output("blob");
+      const url=URL.createObjectURL(pdfBlob);
+      const a=document.createElement("a");
+      a.href=url;a.download=`Settlement_${trip.name.replace(/\s+/g,"_")}_${trip.endDate||today()}.pdf`;
+      document.body.appendChild(a);a.click();document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }catch(e){console.warn("PDF generation failed:",e.message);}
 
-    toast(`✓ Trip closed — summary sent to all stakeholders`);
+    // Notify all stakeholders
+    const notifyUsers=[
+      ...(trip.assignedTo||[]),
+      ...co.users.filter(u=>u.role==="admin").map(u=>u.id),
+      ...co.users.filter(u=>u.role==="manager").map(u=>u.id),
+      ...co.users.filter(u=>u.role==="finance").map(u=>u.id),
+    ];
+    const uniqueIds=[...new Set(notifyUsers)];
+    for(const uid of uniqueIds){
+      await sbPushNotif(uid,summaryMsg,"info");
+      const u=co.users.find(x=>x.id===uid);
+      if(u?.email)emailAlert(u.email,`Trip Closed: ${trip.name}`,summaryMsg);
+      if(u?.mobile)whatsappAlert(u.mobile,"claimx_trip_summary",[trip.name,tripClaims.length.toString(),fmt(total)]);
+    }
+    toast(`✓ Trip closed — PDF downloaded — summary sent to all stakeholders`);
   };
 
   const savePolicyToSB=async(newPolicy)=>{
@@ -2157,25 +2374,32 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
           {fm.ocrState==="error"&&<span style={{background:"#fee2e2",color:"#dc2626",padding:"2px 8px",borderRadius:8,fontSize:10,fontWeight:700}}>⚠ Failed — fill manually</span>}
           {fm.ocrState==="scanning"&&<span style={{color:GD,fontSize:11,display:"flex",alignItems:"center",gap:5}}><span style={{width:12,height:12,border:`2px solid ${GM}`,borderTopColor:G,borderRadius:"50%",animation:"spin .7s linear infinite",display:"inline-block"}}/> Scanning…</span>}
         </div>
-        {/* Drop zone */}
-        <div onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();handleFile(idx,e.dataTransfer.files);}} onClick={()=>fileRefs.current[idx]?.click()}
-          style={{border:`2px dashed ${fm.receipts.length>0?G:GM}`,borderRadius:9,padding:fm.receipts.length>0?"10px":"16px",textAlign:"center",cursor:"pointer",background:fm.receipts.length>0?GL:"#fafff8",transition:"all .2s"}}>
-          <input ref={r=>fileRefs.current[idx]=r} type="file" accept="image/*,application/pdf" multiple style={{display:"none"}} onChange={e=>handleFile(idx,e.target.files)}/>
-          {fm.receipts.length>0?(
-            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              {fm.receipts.map((r,i)=>(
-                <div key={i} style={{position:"relative"}}>
-                  {r.type.startsWith("image/")?<img src={r.url} alt={r.name} style={{width:54,height:54,objectFit:"cover",borderRadius:7,border:`1px solid ${BDR}`}}/>:<div style={{width:54,height:54,background:"#fee2e2",borderRadius:7,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",border:"1px solid #fca5a5"}}><span style={{fontSize:18}}>📄</span><span style={{fontSize:8,color:"#dc2626"}}>PDF</span></div>}
-                  <button onClick={ev=>{ev.stopPropagation();upd(idx,{receipts:fm.receipts.filter((_,j)=>j!==i)});}} style={{position:"absolute",top:-3,right:-3,width:13,height:13,background:"#ef4444",border:"none",borderRadius:"50%",color:"#fff",fontSize:9,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>×</button>
-                  <a href={r.url} download={r.name||`receipt_${i+1}`} onClick={e=>e.stopPropagation()} style={{display:"block",fontSize:8,color:GD,textAlign:"center",marginTop:2}}>⬇</a>
-                </div>
-              ))}
-              <div style={{width:34,height:34,border:`2px dashed ${GM}`,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",color:MUTED,fontSize:16}}>+</div>
-            </div>
-          ):(
-            <><div style={{fontSize:24,marginBottom:4}}>📄</div><div style={{fontSize:13,fontWeight:600,color:INK}}>Upload receipt or invoice</div><div style={{fontSize:11,color:MUTED,marginTop:2}}>JPG · PNG · PDF · Handwritten — AI reads automatically</div></>
-          )}
-        </div>
+        {/* Drop zone - works on both desktop (drag/drop + click) and mobile (label tap) */}
+        <label htmlFor={`file-input-${idx}`} style={{display:"block",cursor:"pointer"}}>
+          <input id={`file-input-${idx}`} ref={r=>fileRefs.current[idx]=r} type="file" accept="image/*,application/pdf" multiple style={{display:"none"}} onChange={e=>handleFile(idx,e.target.files)}/>
+          <div onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();handleFile(idx,e.dataTransfer.files);}}
+            style={{border:`2px dashed ${fm.receipts.length>0?G:GM}`,borderRadius:9,padding:fm.receipts.length>0?"10px":"20px",textAlign:"center",background:fm.receipts.length>0?GL:"#fafff8",transition:"all .2s"}}>
+            {fm.receipts.length>0?(
+              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                {fm.receipts.map((r,i)=>(
+                  <div key={i} style={{position:"relative"}}>
+                    {r.type?.startsWith("image/")?<img src={r.url} alt={r.name} style={{width:64,height:64,objectFit:"cover",borderRadius:7,border:`1px solid ${BDR}`}}/>:<div style={{width:64,height:64,background:"#fee2e2",borderRadius:7,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",border:"1px solid #fca5a5"}}><span style={{fontSize:22}}>📄</span><span style={{fontSize:9,color:"#dc2626",marginTop:2}}>PDF</span></div>}
+                    <button type="button" onClick={ev=>{ev.preventDefault();ev.stopPropagation();upd(idx,{receipts:fm.receipts.filter((_,j)=>j!==i)});}} style={{position:"absolute",top:-4,right:-4,width:16,height:16,background:"#ef4444",border:"none",borderRadius:"50%",color:"#fff",fontSize:10,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+                    <a href={r.url} download={r.name||`receipt_${i+1}`} onClick={e=>e.stopPropagation()} style={{display:"block",fontSize:9,color:GD,textAlign:"center",marginTop:2,textDecoration:"none"}}>⬇</a>
+                  </div>
+                ))}
+                <div style={{width:44,height:44,border:`2px dashed ${GM}`,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",color:MUTED,fontSize:20}}>+</div>
+              </div>
+            ):(
+              <div>
+                <div style={{fontSize:32,marginBottom:6}}>📎</div>
+                <div style={{fontSize:14,fontWeight:700,color:INK,marginBottom:3}}>Tap to upload invoice</div>
+                <div style={{fontSize:11,color:MUTED}}>JPG · PNG · PDF · drag & drop · or use Camera</div>
+                <div style={{marginTop:10,display:"inline-block",background:G,color:"#fff",borderRadius:8,padding:"8px 20px",fontSize:12,fontWeight:700}}>📁 Choose File</div>
+              </div>
+            )}
+          </div>
+        </label>
         {fm.receipts.length>0&&fm.ocrState!=="done"&&!fm.scanning&&(
           <button onClick={()=>fm.receipts[0]&&doOCR(idx,fm.receipts[0].b64,fm.receipts[0].type,forms)} style={{marginTop:9,width:"100%",padding:10,background:`linear-gradient(135deg,${G},${GD})`,border:"none",borderRadius:8,color:"#fff",fontFamily:FB,fontWeight:700,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
             🤖 Scan & Auto-Fill with AI
@@ -2248,7 +2472,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
 // ─── TRIPS TAB ────────────────────────────────────────────────────────────────
 function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTrip,toast,uid:userId,userRole,sbCreateTrip,sbPushNotif,companyUsers}){
   const [showNew,setShowNew]=useState(false);
-  const [form,setForm]=useState({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[]});
+  const [form,setForm]=useState({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[],projectCode:"",tripMode:"balance",currency:"INR"});
   const [expandedId,setExpId]=useState(null);
   const emps=users?.filter(u=>u.role==="employee")||[];
   const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",width:"100%"};
@@ -2268,7 +2492,12 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
       id:"TRP-"+uid(),name:form.name,type:form.type,
       startDate:form.startDate,endDate:form.endDate,
       status,budget:parseFloat(form.budget)||0,
-      spent:0,assignedTo:assigned,createdBy:userId
+      spent:0,assignedTo:assigned,createdBy:userId,
+      projectCode:form.projectCode||"",
+      tripMode:form.tripMode||"balance",
+      currency:form.currency||"INR",
+      openingBalance:parseFloat(form.budget)||0,
+      topupsTotal:0,
     };
     if(sbCreateTrip){await sbCreateTrip(newTrip,assigned);}
     else{setTrips(p=>[newTrip,...p]);}
@@ -2309,6 +2538,20 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
           <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>End Date *</label><input type="date" value={form.endDate} min={form.startDate} onChange={e=>setForm({...form,endDate:e.target.value})} style={inpS}/></div>
           {canSetBudget&&<div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Budget ₹ *</label><input type="number" value={form.budget} onChange={e=>setForm({...form,budget:e.target.value})} style={inpS}/></div>}
         </div>
+        {/* Second row: project code, trip mode, currency */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}} className="mob-grid-1">
+          <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Project / Cost Centre</label>
+            <input value={form.projectCode} onChange={e=>setForm({...form,projectCode:e.target.value})} placeholder="e.g. PRJ-001 or Client Name" style={inpS}/></div>
+          <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Expense Mode</label>
+            <select value={form.tripMode} onChange={e=>setForm({...form,tripMode:e.target.value})} style={{...inpS,appearance:"none"}}>
+              <option value="balance">Balance (Advance given)</option>
+              <option value="reimbursement">Reimbursement (Employee pays)</option>
+            </select></div>
+          <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Trip Currency</label>
+            <select value={form.currency||"INR"} onChange={e=>setForm({...form,currency:e.target.value})} style={{...inpS,appearance:"none"}}>
+              {CURRENCIES.map(c=><option key={c}>{c}</option>)}
+            </select></div>
+        </div>
         {!canSetBudget&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"8px 12px",marginBottom:10,fontSize:11,color:"#92400e"}}>💡 Budget is set by your manager after approval. Your trip will start as <strong>Pending Approval</strong>.</div>}
         {isManager&&emps.length>0&&<div style={{marginBottom:12}}>
           <label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:7,textTransform:"uppercase"}}>Assign Employees (empty = all)</label>
@@ -2348,7 +2591,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                   <Btn onClick={()=>approveTrip(t)} style={{fontSize:10,padding:"5px 10px"}}>✓ Approve</Btn>
                   <Btn v="danger" onClick={()=>rejectTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>✗</Btn>
                 </>}
-                {(isAdmin||isManager)&&t.status==="active"&&<Btn v="warning" onClick={()=>closeTrip(t.id)} style={{fontSize:10,padding:"5px 10px"}}>🔒 Close</Btn>}
+                {(isAdmin||isManager)&&t.status==="active"&&<><Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"");doc.output("dataurlnewwindow");}catch(e){toast("PDF failed","error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄</Btn><Btn v="warning" onClick={()=>closeTrip(t.id)} style={{fontSize:10,padding:"5px 10px"}}>🔒 Close</Btn></>}
               </div>
             </div>
             <div style={{display:"flex",gap:16,marginBottom:6,flexWrap:"wrap"}}>
@@ -3080,6 +3323,35 @@ function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
           <input id="newCatInput" placeholder="Add category (e.g. Legal)" style={{padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,flex:1,background:"#fafff8"}}
             onKeyDown={e=>{if(e.key==="Enter"){const v=e.target.value.trim();if(v&&!(policy.categories||DEFAULT_CATS).includes(v)){setPolicy({...policy,categories:[...(policy.categories||DEFAULT_CATS),v]});e.target.value="";};}}}/>
           <Btn v="outline" onClick={()=>{const el=document.getElementById("newCatInput");const v=el.value.trim();if(v&&!(policy.categories||DEFAULT_CATS).includes(v)){setPolicy({...policy,categories:[...(policy.categories||DEFAULT_CATS),v]});el.value="";}}} style={{padding:"8px 14px",fontSize:12}}>+ Add</Btn>
+        </div>
+      </Card>
+
+      {/* ── Notifications ── */}
+      <Card style={{padding:18,marginTop:12}}>
+        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Notifications</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}} className="mob-grid-1">
+          <div>
+            <div style={{fontSize:11,fontWeight:700,color:MUTED,marginBottom:8,textTransform:"uppercase"}}>📧 Email (via Resend)</div>
+            {[["Notify on Approval","notifyEmailOnApprove"],["Notify on Rejection","notifyEmailOnReject"]].map(([l,k])=>(
+              <label key={k} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,cursor:"pointer"}}>
+                <input type="checkbox" checked={policy[k]!==false} onChange={e=>setPolicy({...policy,[k]:e.target.checked})} style={{width:15,height:15,cursor:"pointer"}}/>
+                <span style={{fontSize:12,color:INK}}>{l}</span>
+              </label>
+            ))}
+          </div>
+          <div>
+            <div style={{fontSize:11,fontWeight:700,color:MUTED,marginBottom:8,textTransform:"uppercase"}}>💬 WhatsApp (via Interakt)</div>
+            {[["Notify on Approval","notifyWaOnApprove"],["Notify on Rejection","notifyWaOnReject"]].map(([l,k])=>(
+              <label key={k} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,cursor:"pointer"}}>
+                <input type="checkbox" checked={!!policy[k]} onChange={e=>setPolicy({...policy,[k]:e.target.checked})} style={{width:15,height:15,cursor:"pointer"}}/>
+                <span style={{fontSize:12,color:INK}}>{l}</span>
+              </label>
+            ))}
+            <div style={{fontSize:10,color:MUTED,marginTop:4}}>Requires INTERAKT_API_KEY in Vercel env vars + approved message templates</div>
+          </div>
+        </div>
+        <div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"8px 12px",fontSize:11,color:"#92400e"}}>
+          💡 Required WhatsApp templates: <strong>claimx_claim_approved</strong>, <strong>claimx_claim_rejected</strong>, <strong>claimx_trip_summary</strong> — submit these to Interakt for approval before enabling.
         </div>
       </Card>
 

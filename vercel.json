@@ -1,12 +1,8 @@
 {
   "rewrites": [
-    {
-      "source": "/api/anthropic/(.*)",
-      "destination": "/api/anthropic"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/index.html"
-    }
+    { "source": "/api/anthropic/(.*)", "destination": "/api/anthropic" },
+    { "source": "/api/email",          "destination": "/api/email" },
+    { "source": "/api/whatsapp",       "destination": "/api/whatsapp" },
+    { "source": "/(.*)",               "destination": "/index.html" }
   ]
 }
