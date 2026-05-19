@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, Component } from "react";
+import React,{ useState, useRef, useEffect, useCallback, Component, createContext, useContext } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // ─── SUPABASE CLIENT ──────────────────────────────────────────────────────────
@@ -378,13 +378,13 @@ const generateSettlementPDF=async(trip,claims,getUser,companyName)=>{
 const PREFS_KEY="claimx_prefs_v1";
 const loadPrefs=()=>{try{const p=localStorage.getItem(PREFS_KEY);return p?JSON.parse(p):{darkMode:false,fontSize:13};}catch{return{darkMode:false,fontSize:13};}};
 const savePrefs=p=>{try{localStorage.setItem(PREFS_KEY,JSON.stringify(p));}catch{}};
-const PrefsContext=React.createContext([{darkMode:false,fontSize:13},()=>{}]);
+const PrefsContext=createContext([{darkMode:false,fontSize:13},()=>{}]);
 function PrefsProvider({children}){
   const[prefs,setPrefsState]=useState(loadPrefs);
   const setPrefs=p=>{const next={...prefs,...p};setPrefsState(next);savePrefs(next);};
   return<PrefsContext.Provider value={[prefs,setPrefs]}>{children}</PrefsContext.Provider>;
 }
-function usePrefs(){return React.useContext(PrefsContext);}
+function usePrefs(){return useContext(PrefsContext);}
 
 function PrefsModal({onClose}){
   const[prefs,setPrefs]=usePrefs();
