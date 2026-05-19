@@ -3130,25 +3130,39 @@ export default function Root(){
       return;
     }
 
-    // Immediately check for existing custom auth session
+    // 1. Immediately restore custom auth session — no Supabase needed
     const saved=loadSess();
     if(saved?.customAuth&&saved?.sbUser){
       customAuthRef.current=true;
       setSession(saved);
       setLoading(false);
-      return; // Don't wait for Supabase at all for custom auth users
+      return;
     }
 
-    // Safety timeout — 5 seconds then force to login
-    const timer=setTimeout(()=>{
-      setLoading(false);
-    },5000);
+    // 2. Hard timeout — always fires, no matter what
+    const hardTimer=setTimeout(()=>setLoading(false), 6000);
 
-    // Listen for Supabase auth events
+    // 3. Check existing session directly (fast path)
+    supabase.auth.getSession().then(async({data:{session:sess},error})=>{
+      if(error||!sess?.user){
+        // No active Supabase session → show login
+        clearTimeout(hardTimer);
+        setLoading(false);
+        return;
+      }
+      // Has a Supabase session → resolve who they are
+      clearTimeout(hardTimer);
+      await resolveSupabaseUser(sess.user.id);
+    }).catch(()=>{
+      clearTimeout(hardTimer);
+      setLoading(false);
+    });
+
+    // 4. Also listen for auth changes (password recovery, token refresh)
     const{data:{subscription}}=supabase.auth.onAuthStateChange(async(event,sess)=>{
       if(event==="PASSWORD_RECOVERY"){
         setIsReset(true);setSession(null);setLoading(false);
-        clearTimeout(timer);return;
+        clearTimeout(hardTimer);return;
       }
       if(event==="SIGNED_OUT"){
         resolving.current=false;
@@ -3156,45 +3170,26 @@ export default function Root(){
         if(savedSess?.customAuth&&savedSess?.sbUser){
           customAuthRef.current=true;
           setSession(savedSess);
-          setLoading(false);clearTimeout(timer);return;
+          setLoading(false);clearTimeout(hardTimer);return;
         }
-        if(customAuthRef.current){
-          setLoading(false);clearTimeout(timer);return;
-        }
+        if(customAuthRef.current){setLoading(false);clearTimeout(hardTimer);return;}
         setSession(null);setIsReset(false);setLoading(false);
-        clearTimeout(timer);return;
+        clearTimeout(hardTimer);return;
       }
-      if(event==="INITIAL_SESSION"){
-        if(!sess?.user){
-          setLoading(false);clearTimeout(timer);
-        }
-        return;
-      }
-      if((event==="SIGNED_IN"||event==="TOKEN_REFRESHED")&&sess?.user){
-        if(resolving.current)return;
+      // TOKEN_REFRESHED — update session silently
+      if(event==="TOKEN_REFRESHED"&&sess?.user&&!resolving.current){
         resolving.current=true;
-        clearTimeout(timer);
+        await resolveSupabaseUser(sess.user.id);
+      }
+      // SIGNED_IN fires after Google OAuth redirect
+      if(event==="SIGNED_IN"&&sess?.user&&!resolving.current){
+        resolving.current=true;
+        clearTimeout(hardTimer);
         await resolveSupabaseUser(sess.user.id);
       }
     });
 
-    // Also try getSession directly in case onAuthStateChange is slow
-    supabase.auth.getSession().then(({data:{session:sess}})=>{
-      if(sess?.user&&!resolving.current){
-        resolving.current=true;
-        clearTimeout(timer);
-        resolveSupabaseUser(sess.user.id);
-      } else if(!sess){
-        // No session at all — go straight to login
-        setLoading(false);
-        clearTimeout(timer);
-      }
-    }).catch(()=>{
-      setLoading(false);
-      clearTimeout(timer);
-    });
-
-    return()=>{subscription.unsubscribe();clearTimeout(timer);};
+    return()=>{subscription.unsubscribe();clearTimeout(hardTimer);};
   },[]);
 
   const resolveSupabaseUser=async(authUserId)=>{
