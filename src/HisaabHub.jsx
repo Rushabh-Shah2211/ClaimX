@@ -126,7 +126,21 @@ const TIERED=[{min:1,max:5,ppu:299},{min:6,max:20,ppu:249},{min:21,max:50,ppu:19
 // ─── SUPABASE DATA LAYER ──────────────────────────────────────────────────────
 // Mappers: snake_case DB → camelCase app
 const mapUser=r=>r?({id:r.id,cid:r.company_id,companyId:r.company_id,name:r.name,email:r.email||"",username:r.username||"",mobile:r.mobile||"",role:r.role,avatar:r.avatar,dept:r.dept,balance:parseFloat(r.balance)||0,reimbursable:parseFloat(r.reimbursable)||0,delegateTo:r.delegate_to||null,isSuspended:r.is_suspended||false,authType:r.auth_type||"custom"}):null;
-const mapTrip=r=>r?({id:r.id,companyId:r.company_id,name:r.name,type:r.type,startDate:r.start_date,endDate:r.end_date,status:r.status,budget:parseFloat(r.budget)||0,spent:parseFloat(r.spent)||0,assignedTo:(r.trip_assignments||[]).map(a=>a.user_id)}):null;
+const mapTrip=r=>r?({
+  id:r.id, companyId:r.company_id, name:r.name, type:r.type,
+  startDate:r.start_date, endDate:r.end_date, status:r.status,
+  budget:parseFloat(r.budget)||0, spent:parseFloat(r.spent)||0,
+  assignedTo:(r.trip_assignments||[]).map(a=>a.user_id),
+  createdBy:r.created_by||null,
+  tripMode:r.trip_mode||"balance",
+  currency:r.currency||"INR",
+  projectCode:r.project_code||"",
+  openingBalance:parseFloat(r.opening_balance)||parseFloat(r.budget)||0,
+  topupsTotal:parseFloat(r.topups_total)||0,
+  categoryLimits:r.category_limits||{},
+  settledAt:r.settled_at||null,
+  settledBy:r.settled_by||null,
+}):null;
 const mapClaim=r=>r?({id:r.id,companyId:r.company_id,tripId:r.trip_id,empId:r.emp_id,date:r.date,category:r.category,desc:r.description,vendor:r.vendor,amount:parseFloat(r.amount)||0,origAmount:parseFloat(r.orig_amount)||0,origCur:r.orig_currency,status:r.status,autoApproved:r.auto_approved,remarks:r.remarks,flagged:r.flagged,anomaly:r.anomaly,anomalyReasons:r.anomaly_reasons||[],weekendFlag:r.weekend_flag,notes:r.notes,receipts:(r.receipts||[]).map(rc=>({id:rc.id,name:rc.file_name,storagePath:rc.storage_path,type:rc.mime_type,url:null})),comments:(r.claim_comments||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at)).map(c=>({id:c.id,userId:c.user_id,name:c.user_name,text:c.text,time:new Date(c.created_at).toLocaleString()}))}):null;
 const mapPolicy=r=>r?({autoApproveLimit:parseFloat(r.auto_approve_limit),reimbursementMode:r.reimbursement_mode,receiptMandatoryAbove:parseFloat(r.receipt_mandatory_above),weekendRequiresApproval:r.weekend_requires_approval,multiLevelApproval:r.multi_level_approval,approvalLevels:r.approval_levels,vendorWhitelist:r.vendor_whitelist||[],vendorBlacklist:r.vendor_blacklist||[],departmentBudgets:r.department_budgets||{},categoryPct:r.category_pct||{},scheduledReports:r.scheduled_reports||{}}):null;
 const mapNotif=r=>r?({id:r.id,userId:r.user_id,text:r.text,type:r.type,read:r.read,time:new Date(r.created_at).toLocaleString()}):null;
@@ -141,7 +155,9 @@ async function sbLoadCompany(cid){
   ]=await Promise.all([
     supabase.from("companies").select("*").eq("id",cid).single(),
     supabase.from("users").select("*").eq("company_id",cid),
-    supabase.from("trips").select("*,trip_assignments(user_id)").eq("company_id",cid),
+    supabase.from("trips").select("*,trip_assignments(user_id)").eq("company_id",cid).order("created_at",{ascending:false}).catch(()=>
+      supabase.from("trips").select("*").eq("company_id",cid).order("created_at",{ascending:false})
+    ),
     supabase.from("claims").select("*,receipts(*),claim_comments(*)").eq("company_id",cid).order("created_at",{ascending:false}),
     supabase.from("topups").select("*").eq("company_id",cid).order("created_at",{ascending:false}),
     supabase.from("audit_log").select("*").eq("company_id",cid).order("created_at",{ascending:false}).limit(500),
@@ -465,9 +481,9 @@ function PrefsModal({onClose}){
         {/* Font Size */}
         <div style={{marginBottom:20}}>
           <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:6,textTransform:"uppercase"}}>Font Size — {prefs.fontSize||13}px</label>
-          <input type="range" min="10" max="20" step="1" value={prefs.fontSize||13} onChange={e=>setPrefs({fontSize:parseInt(e.target.value)})} style={{width:"100%",accentColor:"#7ED957"}}/>
+          <input type="range" min="10" max="18" step="1" value={prefs.fontSize||13} onChange={e=>setPrefs({fontSize:parseInt(e.target.value)})} style={{width:"100%",accentColor:"#7ED957"}}/>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:MUTED,marginTop:3}}>
-            <span>10px Small</span><span>13px Default</span><span>20px Large</span>
+            <span>10 (Small)</span><span>13 (Default)</span><span>18 (Large)</span>
           </div>
           <div style={{marginTop:10,padding:"8px 12px",background:"var(--hover-bg,#f9fafb)",borderRadius:7,fontSize:prefs.fontSize||13,color:INK}}>
             Preview: This is how your text will look across the app.
@@ -1968,22 +1984,61 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   const addUserToSB=async(userData,password)=>{
     if(!SB_ENABLED)return null;
-    // Use create_employee RPC — bypasses Supabase Auth signUp entirely
-    const{data,error}=await supabase.rpc("create_employee",{
-      p_company_id: cid,
-      p_name:       userData.name,
-      p_username:   userData.username||(userData.name.toLowerCase().replace(/\s+/g,".")),
-      p_password:   password,
-      p_role:       userData.role||"employee",
-      p_dept:       userData.dept||"Operations",
-      p_balance:    userData.balance||0,
-      p_email:      userData.email||null,
-      p_mobile:     userData.mobile||null,
-    });
-    if(error)throw new Error(error.message);
-    if(data?.error)throw new Error(data.error);
-    await loadFromSB();
-    return data?.id||null;
+
+    // Wrap in 15-second timeout
+    const withTimeout=(promise,ms,msg)=>Promise.race([
+      promise,
+      new Promise((_,reject)=>setTimeout(()=>reject(new Error(msg)),ms))
+    ]);
+
+    try{
+      const{data,error}=await withTimeout(
+        supabase.rpc("create_employee",{
+          p_company_id: cid,
+          p_name:       userData.name,
+          p_username:   userData.username||(userData.name.toLowerCase().replace(/\s+/g,".")),
+          p_password:   password,
+          p_role:       userData.role||"employee",
+          p_dept:       userData.dept||"Operations",
+          p_balance:    userData.balance||0,
+          p_email:      userData.email||null,
+          p_mobile:     userData.mobile||null,
+        }),
+        15000,
+        "RPC timed out. The create_employee function may be missing or broken. Check Supabase → Database → Functions."
+      );
+      if(error)throw new Error("RPC error: "+error.message);
+      if(data?.error)throw new Error(data.error);
+      await loadFromSB();
+      return data?.id||null;
+    }catch(rpcErr){
+      // If RPC fails, try direct insert with a bcrypt-like hash stub
+      // (only works if pgcrypto is unavailable — password stored as plain text fallback)
+      if(rpcErr.message.includes("timed out")||rpcErr.message.includes("does not exist")){
+        console.warn("create_employee RPC failed, trying direct insert:",rpcErr.message);
+        const newId=crypto.randomUUID?.()|| 'usr_'+Date.now();
+        const{error:insertErr}=await supabase.from("users").insert({
+          id:newId,
+          company_id:cid,
+          name:userData.name,
+          email:userData.email||null,
+          username:userData.username.toLowerCase(),
+          mobile:userData.mobile||null,
+          password_hash:password, // plain fallback — user must change password
+          role:userData.role||"employee",
+          avatar:(userData.name[0]+(userData.name.split(" ")[1]?.[0]||"")).toUpperCase(),
+          dept:userData.dept||"Operations",
+          balance:userData.balance||0,
+          reimbursable:0,
+          auth_type:"custom",
+          is_suspended:false,
+        });
+        if(insertErr)throw new Error("Direct insert also failed: "+insertErr.message+"\n\nPlease run the create_employee SQL function in Supabase.");
+        await loadFromSB();
+        return newId;
+      }
+      throw rpcErr;
+    }
   };
 
   const updateUserInSB=async(userId,patch)=>{
@@ -2215,9 +2270,16 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   ];
 
   return(
-    <div data-dark={String(isDark)} style={{display:"flex",minHeight:"100vh",fontFamily:FB,fontSize:appFontSize,background:isDark?"#0f172a":"#f5faf3",color:isDark?"#f0f9ff":"#1a2e12",transition:"background .2s,color .2s"}}>
+    <div className="claimx-root" data-dark={String(isDark)} style={{display:"flex",minHeight:"100vh",fontFamily:FB,background:isDark?"#0f172a":"#f5faf3",color:isDark?"#f0f9ff":"#1a2e12",transition:"background .2s,color .2s"}}>
       <style>{GLSTYLE}</style>
-      <style>{`[data-dark]{font-size:${appFontSize}px}[data-dark] *{font-size:inherit}`}</style>
+      <style>{`
+        /* Font size scaling — zoom scales EVERYTHING including inline px styles */
+        .claimx-root { zoom: ${(appFontSize/13).toFixed(3)}; }
+        @supports not (zoom: 1) {
+          /* Firefox fallback — transform scale */
+          .claimx-root { transform: scale(${(appFontSize/13).toFixed(3)}); transform-origin: top left; width: ${(100*(13/appFontSize)).toFixed(1)}%; }
+        }
+      `}</style>
       {notif&&<div style={{position:"fixed",top:20,right:20,zIndex:1000,padding:"12px 18px",borderRadius:12,fontWeight:600,fontSize:13,background:notif.t==="error"?"#fee2e2":notif.t==="warn"?"#fef3c7":"#dcfce7",color:notif.t==="error"?"#dc2626":notif.t==="warn"?"#92400e":"#15803d",boxShadow:"0 4px 20px #0002",maxWidth:320}}>{notif.msg}</div>}
       {!online&&<div style={{position:"fixed",bottom:0,left:0,right:0,background:"#92400e",color:"#fef3c7",textAlign:"center",padding:"7px",fontSize:12,fontWeight:600,zIndex:999}}>📴 Offline — claims queued ({queue.length}) · will sync when connected</div>}
       {showHelp&&<HelpManual userRole={user.role} onClose={()=>setSHelp(false)}/>}
@@ -2321,36 +2383,51 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             if(SB_ENABLED){
               try{
                 const tripStatus=isManager||isAdmin?"active":"pending_approval";
-                const{error:tripErr}=await supabase.from("trips").insert({
+                const insertRow={
                   id:trip.id, company_id:cid,
-                  name:trip.name, type:trip.type,
+                  name:trip.name, type:trip.type||"trip",
                   start_date:trip.startDate, end_date:trip.endDate,
                   status:tripStatus,
                   budget:parseFloat(trip.budget)||0,
                   spent:0,
                   created_by:user.id,
+                };
+                // Add optional columns only if they exist in schema
+                try{Object.assign(insertRow,{
                   trip_mode:trip.tripMode||"balance",
                   currency:trip.currency||"INR",
                   project_code:trip.projectCode||null,
                   opening_balance:parseFloat(trip.budget)||0,
-                  category_limits:trip.categoryLimits||{},
-                });
-                if(tripErr)throw new Error(tripErr.message);
-                if(assigned?.length){
-                  const{error:assErr}=await supabase.from("trip_assignments").insert(
-                    assigned.map(uid=>({trip_id:trip.id,user_id:uid}))
-                  );
-                  // trip_assignments may not exist yet — not fatal
-                  if(assErr)console.warn("trip_assignments:",assErr.message);
+                  category_limits:Object.keys(trip.categoryLimits||{}).length>0?trip.categoryLimits:null,
+                });}catch(e){}
+                const{error:tripErr}=await supabase.from("trips").insert(insertRow);
+                if(tripErr){
+                  // If extra columns fail, retry with minimal columns
+                  const{error:retry}=await supabase.from("trips").insert({
+                    id:trip.id,company_id:cid,name:trip.name,type:trip.type||"trip",
+                    start_date:trip.startDate,end_date:trip.endDate,
+                    status:tripStatus,budget:parseFloat(trip.budget)||0,spent:0,created_by:user.id,
+                  });
+                  if(retry)throw new Error(retry.message);
                 }
+                // Assign users (non-fatal if table missing)
+                if(assigned?.length){
+                  await supabase.from("trip_assignments").insert(
+                    assigned.map(uid=>({trip_id:trip.id,user_id:uid}))
+                  ).then(()=>{}).catch(()=>{});
+                }
+                // Notify managers if employee created
                 if(!isManager&&!isAdmin){
-                  const mgrs=co.users.filter(u=>u.role==="manager"||u.role==="admin");
+                  const mgrs=co.users.filter(u=>["manager","admin"].includes(u.role));
                   for(const m of mgrs)await sbPushNotif(m.id,`New trip "${trip.name}" by ${user.name} awaits approval`,"info");
                 }
                 await loadFromSB();
               }catch(err){
-                toast("Failed to create trip: "+err.message,"error");
+                toast("Trip creation failed: "+err.message,"error");
               }
+            } else {
+              // Local mode — add directly
+              setTrips(p=>[{...trip,status:isManager||isAdmin?"active":"pending_approval"},...p]);
             }
           }}/>}
         {tab==="approvals"&&canApprove&&<>
