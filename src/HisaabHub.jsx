@@ -3118,13 +3118,21 @@ export default function Root(){
       return;
     }
 
-    // Safety: if Supabase never responds in 10s, show login
-    const timer=setTimeout(()=>{
-      setLoadMsg("Taking too long — showing login…");
-      setTimeout(()=>setLoading(false),1500);
-    },10000);
+    // Immediately check for existing custom auth session
+    const saved=loadSess();
+    if(saved?.customAuth&&saved?.sbUser){
+      customAuthRef.current=true;
+      setSession(saved);
+      setLoading(false);
+      return; // Don't wait for Supabase at all for custom auth users
+    }
 
-    // Listen FIRST — handles INITIAL_SESSION, SIGNED_IN, PASSWORD_RECOVERY
+    // Safety timeout — 5 seconds then force to login
+    const timer=setTimeout(()=>{
+      setLoading(false);
+    },5000);
+
+    // Listen for Supabase auth events
     const{data:{subscription}}=supabase.auth.onAuthStateChange(async(event,sess)=>{
       if(event==="PASSWORD_RECOVERY"){
         setIsReset(true);setSession(null);setLoading(false);
@@ -3132,10 +3140,8 @@ export default function Root(){
       }
       if(event==="SIGNED_OUT"){
         resolving.current=false;
-        // Check localStorage directly — ref may not be set yet for custom auth users
         const savedSess=loadSess();
         if(savedSess?.customAuth&&savedSess?.sbUser){
-          // This is a custom auth user — Supabase SIGNED_OUT is expected, ignore it
           customAuthRef.current=true;
           setSession(savedSess);
           setLoading(false);clearTimeout(timer);return;
@@ -3148,12 +3154,6 @@ export default function Root(){
       }
       if(event==="INITIAL_SESSION"){
         if(!sess?.user){
-          // No Supabase JWT — check for persisted custom auth session
-          const savedSess=loadSess();
-          if(savedSess?.customAuth&&savedSess?.sbUser){
-            customAuthRef.current=true;
-            setSession(savedSess);
-          }
           setLoading(false);clearTimeout(timer);
         }
         return;
@@ -3164,6 +3164,22 @@ export default function Root(){
         clearTimeout(timer);
         await resolveSupabaseUser(sess.user.id);
       }
+    });
+
+    // Also try getSession directly in case onAuthStateChange is slow
+    supabase.auth.getSession().then(({data:{session:sess}})=>{
+      if(sess?.user&&!resolving.current){
+        resolving.current=true;
+        clearTimeout(timer);
+        resolveSupabaseUser(sess.user.id);
+      } else if(!sess){
+        // No session at all — go straight to login
+        setLoading(false);
+        clearTimeout(timer);
+      }
+    }).catch(()=>{
+      setLoading(false);
+      clearTimeout(timer);
     });
 
     return()=>{subscription.unsubscribe();clearTimeout(timer);};
