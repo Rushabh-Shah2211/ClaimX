@@ -757,7 +757,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
         const{data:hashData,error:hashErr}=await supabase.rpc("create_manager_account",{
           p_company_id:id, p_name:managerName, p_email:form.adminEmail,
           p_username:username, p_password:form.adminPw,
-          p_mobile:null, p_avatar:inits(managerName)
+          p_mobile:null, p_avatar:inits(managerName), p_role:"admin"
         });
         if(hashErr)throw new Error(hashErr.message);
         if(hashData?.error)throw new Error(hashData.error);
@@ -767,7 +767,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
         if(data)setSbCoList(data.map(c=>({meta:{id:c.id,name:c.name,industry:c.industry,plan:c.plan,maxUsers:c.max_users,status:c.status,createdOn:c.created_on},users:[]})));
       } else {
         // localStorage demo mode
-        const mgr={id:"mgr_"+uid(),cid:id,name:form.adminName||form.adminEmail.split("@")[0],email:form.adminEmail,username:(form.adminName||form.adminEmail.split("@")[0]).toLowerCase().replace(/\s+/g,"."),password:form.adminPw,role:"manager",avatar:inits(form.adminName||form.adminEmail),dept:"Management",balance:0,reimbursable:0,delegateTo:null,isSuspended:false,authType:"custom"};
+        const mgr={id:"adm_"+uid(),cid:id,name:form.adminName||form.adminEmail.split("@")[0],email:form.adminEmail,username:(form.adminName||form.adminEmail.split("@")[0]).toLowerCase().replace(/\s+/g,"."),password:form.adminPw,role:"admin",avatar:inits(form.adminName||form.adminEmail),dept:"Management",balance:0,reimbursable:0,delegateTo:null,isSuspended:false,authType:"custom"};
         setDB(p=>({...p,[id]:{meta:{id,name:form.name,industry:form.industry||"General",plan:form.plan,maxUsers:parseInt(form.maxUsers)||5,status:"Active",createdOn:today()},users:[mgr],trips:[],claims:[],topups:[],auditLog:[],notifications:[],policy:mkPolicy()}}));
         toast(`✓ ${form.name} created`);
       }
@@ -880,9 +880,10 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
               <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:4,textTransform:"uppercase"}}>Plan</label><select value={form.plan} onChange={e=>setForm({...form,plan:e.target.value})} style={{...inpS,appearance:"none"}}>{["Starter","Pro","Enterprise"].map(p=><option key={p}>{p}</option>)}</select></div>
             </div>
             <div style={{background:GL,borderRadius:10,padding:"12px 14px",marginBottom:12}}>
-              <div style={{fontSize:10,fontWeight:700,color:GD,marginBottom:8,textTransform:"uppercase"}}>Admin Account</div>
+              <div style={{fontSize:10,fontWeight:700,color:GD,marginBottom:4,textTransform:"uppercase"}}>Company Admin Account</div>
+              <div style={{fontSize:10,color:MUTED,marginBottom:8}}>This person gets full access to the company. They can create managers and employees.</div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9}}>
-                {[["Admin Name","adminName","text","Full name"],["Email *","adminEmail","email","admin@co.in"],["Password *","adminPw","password","min 8 chars"]].map(([l,k,t,ph])=>(
+                {[["Admin Name","adminName","text","e.g. Rajesh Shah"],["Email","adminEmail","email","admin@company.in"],["Password *","adminPw","password","min 8 chars"]].map(([l,k,t,ph])=>(
                   <div key={k}><label style={{fontSize:9,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>{l}</label><input type={t} value={form[k]} onChange={e=>setForm({...form,[k]:e.target.value})} placeholder={ph} style={inpS}/></div>
                 ))}
               </div>
@@ -1883,12 +1884,69 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     w.document.close();w.print();
   };
 
-  const printSummary=(claims,empUser,trip)=>{
-    const approved=claims.filter(c=>c.status==="Approved");const total=approved.reduce((s,c)=>s+c.amount,0);
-    const w=window.open("","_blank");
-    w.document.write(`<html><head><title>Expense Summary</title><style>body{font-family:sans-serif;max-width:640px;margin:40px auto;color:#1a2e12}h1{font-size:22px}h2{font-size:13px;color:#6b7280;font-weight:400;margin-bottom:20px}table{width:100%;border-collapse:collapse;margin:14px 0}th{background:#f0fde9;padding:8px 12px;font-size:11px;text-align:left;text-transform:uppercase;color:#5CB83A}td{padding:8px 12px;border-bottom:1px solid #e8f0e5;font-size:12px}.tot{text-align:right;font-size:18px;font-weight:700;color:#7ED957;padding:12px;background:#f0fde9;border-radius:8px;margin-top:12px}</style></head><body><h1>ClaimX — Expense Summary</h1><h2>${empUser?.name||""} · ${trip?trip.name:"All Trips"} · ${new Date().toLocaleDateString("en-IN")}</h2><table><tr><th>Date</th><th>Description</th><th>Category</th><th>Vendor</th><th>Amount</th></tr>${approved.map(c=>`<tr><td>${c.date}</td><td>${c.desc}</td><td>${c.category}</td><td>${c.vendor||"—"}</td><td>₹${c.amount.toLocaleString("en-IN")}</td></tr>`).join("")}</table><div class="tot">Total: ₹${total.toLocaleString("en-IN")}</div><p style="font-size:10px;color:#9ca3af;margin-top:20px">ClaimX by RB · ${new Date().toISOString()}</p></body></html>`);
-    w.document.close();w.print();
+  const exportClaimsPDF=async(claimsToExport,title,subtitle)=>{
+    try{
+      const {jsPDF}=await import("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js").then(m=>m.default||m);
+      const doc=new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
+      const W=297,M=14;let y=M;
+
+      // Header
+      doc.setFillColor(15,28,9);doc.rect(0,0,W,22,"F");
+      doc.setTextColor(126,217,87);doc.setFont("helvetica","bold");doc.setFontSize(14);doc.text("ClaimX",M,14);
+      doc.setTextColor(200,200,200);doc.setFontSize(9);doc.text("by RB",M+20,14);
+      doc.setTextColor(255,255,255);doc.setFontSize(10);doc.text(title||"Expense Report",W/2,14,{align:"center"});
+      doc.setTextColor(150,150,150);doc.setFontSize(8);doc.text(subtitle||new Date().toLocaleDateString("en-IN"),W-M,14,{align:"right"});
+      y=28;
+
+      // Summary
+      const approved=claimsToExport.filter(c=>c.status==="Approved");
+      const total=claimsToExport.reduce((s,c)=>s+c.amount,0);
+      doc.setFontSize(9);doc.setFont("helvetica","normal");doc.setTextColor(100,100,100);
+      doc.text(`${claimsToExport.length} claims · ₹${total.toLocaleString("en-IN")} total · ${approved.length} approved`,M,y);y+=7;
+
+      // Table header
+      doc.setFillColor(21,128,61);doc.rect(M,y,W-2*M,6.5,"F");
+      doc.setTextColor(255,255,255);doc.setFont("helvetica","bold");doc.setFontSize(7.5);
+      const cols=[["ID",18],["Date",20],["Employee",28],["Dept",22],["Trip/Project",30],["Category",24],["Vendor",28],["Description",40],["Amount",18],["Status",18]];
+      let tx=M+1;
+      cols.forEach(([h,w])=>{doc.text(h,tx,y+4.5);tx+=w;});
+      y+=7;
+
+      // Rows
+      claimsToExport.forEach((c,i)=>{
+        if(y>188){doc.addPage();y=14;}
+        doc.setFillColor(i%2===0?248:242,i%2===0?252:248,i%2===0?242:236);
+        doc.rect(M,y,W-2*M,5.5,"F");
+        doc.setTextColor(40,40,40);doc.setFont("helvetica","normal");doc.setFontSize(7);
+        const emp=getUser(c.empId);
+        const trip=co.trips.find(t=>t.id===c.tripId);
+        const vals=[c.id?.slice(-6)||"",c.date||"",emp?.name?.slice(0,14)||"—",emp?.dept?.slice(0,10)||"—",(trip?.name||c.projectCode||"—").slice(0,16),c.category?.slice(0,12)||"",c.vendor?.slice(0,14)||"—",c.desc?.slice(0,20)||"","₹"+(c.amount||0).toLocaleString("en-IN"),c.status?.slice(0,10)||""];
+        tx=M+1;
+        vals.forEach((v,vi)=>{doc.text(String(v),tx,y+4);tx+=cols[vi][1];});
+        y+=6;
+      });
+
+      // Total row
+      y+=2;doc.setDrawColor(21,128,61);doc.setLineWidth(0.4);doc.line(M,y,W-M,y);y+=4;
+      doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(21,128,61);
+      doc.text(`Total: ₹${total.toLocaleString("en-IN")}`,W-M,y,{align:"right"});
+
+      // Footer
+      doc.setFont("helvetica","normal");doc.setFontSize(7.5);doc.setTextColor(150,150,150);
+      doc.text(`ClaimX by RB · ${activeMeta?.name||""} · Generated ${new Date().toLocaleDateString("en-IN")}`,W/2,200,{align:"center"});
+
+      doc.save(`ClaimX_${(title||"Export").replace(/\s+/g,"_")}_${today()}.pdf`);
+      toast("✓ PDF downloaded");
+    }catch(e){
+      console.error("PDF error:",e);
+      toast("PDF generation failed — "+e.message,"error");
+    }
   };
+
+  const printSummary=(clms,empUser,trip)=>exportClaimsPDF(clms,
+    trip?`Trip: ${trip.name}`:empUser?`Claims: ${empUser.name}`:"All Claims",
+    `${activeMeta?.name||""} · ${new Date().toLocaleDateString("en-IN")}`
+  );
 
   const navItems=[
     {id:"dashboard", icon:"▦",  label:"Dashboard"},
@@ -1991,7 +2049,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept||c.empId===user.id;}):isFinance?co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved"):co.claims.filter(c=>c.empId===user.id)}
           trips={co.trips} isManager={isManager} isAdmin={isAdmin} isFinance={isFinance}
           getUser={getUser} setMdl={setMdl} submitEditRequest={submitEditRequest}
-          hasEditWindow={hasEditWindow} userId={user.id}/>}
+          hasEditWindow={hasEditWindow} userId={user.id} onExportPDF={exportClaimsPDF}/>}
         {tab==="submit"&&hasPerm("submit")&&<SubmitTab user={user} co={co} submitClaim={submitClaim} camFile={camFile} clearCamFile={()=>setCamF(null)} onCam={()=>setSCam(true)} companyCategories={companyCategories}/>}
         {tab==="trips"&&<TripsTab trips={co.trips} setTrips={fn=>{if(!SB_ENABLED)setTrips(fn);}} claims={co.claims}
           isManager={isManager} isAdmin={isAdmin} getUser={getUser} users={co.users}
@@ -2021,7 +2079,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="analytics"&&<Analytics claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept||c.empId===user.id;}):co.claims.filter(c=>c.empId===user.id)} trips={co.trips} users={co.users} isManager={isManager} getUser={getUser} policy={co.policy} printSummary={printSummary} user={user}/>}
         {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
         {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={co.auditLog||[]} claims={co.claims} getUser={getUser}/>}
-        {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy}/>}
+        {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}/>}
         {tab==="editreqs"&&canApprove&&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id}/>}
         {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={co.users} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin}/>}
         {tab==="policy"&&isAdmin&&<Policy policy={co.policy} setPolicy={setCoPolicy} savePolicy={savePolicyToSB} toast={toast} users={co.users} sbEnabled={SB_ENABLED}/>}
@@ -2152,7 +2210,7 @@ function MgrDash({co,meta,setTab,getUser}){
 }
 
 // ─── CLAIMS TAB ───────────────────────────────────────────────────────────────
-function ClaimsTab({claims,trips,isManager,getUser,setMdl,submitEditRequest,hasEditWindow,userId}){
+function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,submitEditRequest,hasEditWindow,userId,onExportPDF}){
   const [filter,setFilter]=useState("All");
   const [search,setSearch]=useState("");
   const [anomalyOnly,setAO]=useState(false);
@@ -2162,8 +2220,9 @@ function ClaimsTab({claims,trips,isManager,getUser,setMdl,submitEditRequest,hasE
   return(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
-        <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>{isManager?"All Claims":"My Claims"}</h1>
+        <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>{isAdmin?"All Claims":isManager?"Dept Claims":"My Claims"}</h1>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          {onExportPDF&&<Btn v="outline" onClick={()=>onExportPDF(shown,isAdmin?"All Claims":isManager?"Dept Claims":"My Claims",activeMeta?.name)} style={{fontSize:11,padding:"5px 10px"}}>⬇ PDF</Btn>}
           <label style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:MUTED,cursor:"pointer"}} className="mob-hide"><input type="checkbox" checked={anomalyOnly} onChange={e=>setAO(e.target.checked)} style={{accentColor:"#7c3aed"}}/>🔍 Anomalies</label>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search…" style={{padding:"7px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,width:150,background:"#fafff8"}}/>
         </div>
@@ -2319,15 +2378,20 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
 
   // ─────────────────────────────────────────────────────────────────────────
 
+  const MAX_FILE_SIZE=5*1024*1024; // 5MB
+
   const handleFile=(i,files)=>{
     const f=files[0];if(!f)return;
+    if(f.size>MAX_FILE_SIZE){
+      alert(`File too large. Maximum size is 5MB. Your file: ${(f.size/1024/1024).toFixed(1)}MB`);
+      return;
+    }
     const reader=new FileReader();
     reader.onload=ev=>{
       const url=ev.target.result,b64=url.split(",")[1],mime=f.type||"image/jpeg";
       const receipt={name:f.name,url,b64,type:mime};
       setForms(prev=>{
         const updated=prev.map((x,j)=>j===i?{...x,receipts:[...x.receipts,receipt]}:x);
-        // Trigger OCR immediately with fresh state snapshot
         doOCR(i,b64,mime,updated);
         return updated;
       });
@@ -2897,7 +2961,9 @@ function Audit({auditLog,claims,getUser}){
 // ─── EMPLOYEES TAB ────────────────────────────────────────────────────────────
 function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,updateUserInSB,sbEnabled,companyDepts,isAdmin}){
   const depts=companyDepts||policy?.departments||DEFAULT_DEPTS;
-  const creatableRoles=isAdmin?ROLES:ROLES.filter(r=>["employee","finance"].includes(r.id));
+  const creatableRoles=isAdmin
+    ?ROLES.filter(r=>["manager","finance","employee"].includes(r.id))   // admin creates manager/finance/employee
+    :ROLES.filter(r=>["finance","employee"].includes(r.id));             // manager creates employee/finance only
   // Admin accounts are free (1 per company, created by SA)
   // All managers + employees + finance count toward the limit
   const countedUsers=users.filter(u=>u.role!=="admin");
@@ -3399,7 +3465,7 @@ function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
 }
 
 // ─── FINANCE TAB ─────────────────────────────────────────────────────────────
-function FinanceTab({claims,trips,getUser,users,isAdmin,policy}){
+function FinanceTab({claims,trips,getUser,users,isAdmin,policy,onExportPDF}){
   const[filter,setFilter]=useState("All");
   const[search,setSearch]=useState("");
   const shown=claims.filter(c=>
@@ -3415,6 +3481,9 @@ function FinanceTab({claims,trips,getUser,users,isAdmin,policy}){
         <div>
           <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Finance View</h1>
           <p style={{color:MUTED,fontSize:11,marginTop:2}}>Approved expenses ready for accounting · {shown.length} records · {fmt(total)} total</p>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn v="outline" onClick={()=>onExportPDF&&onExportPDF(shown,"Finance Report",`${shown.length} records · ₹${total.toLocaleString("en-IN")}`)} style={{fontSize:11,padding:"6px 12px"}}>⬇ PDF</Btn>
         </div>
       </div>
       <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
