@@ -2969,22 +2969,19 @@ function HelpManual({userRole,onClose,inline=false}){
 function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled,cid,editRequests,onEditRequest,onApproveEditRequest,onRejectEditRequest}){
   const [remarks,setRemarks]=useState("");
   const [comment,setComment]=useState("");
-  const [receiptsWithUrls,setRWU]=useState(null); // receipts with fetched signed URLs
+  const [receiptsWithUrls,setRWU]=useState(null);
 
-  if(modal?.type==="lightbox")return<Lightbox receipt={modal.data} onClose={()=>setMdl(null)}/>;
+  // ALL hooks must be before any conditional return (React rules)
+  // Get claim data safely — will be null for lightbox type
+  const isLightbox=modal?.type==="lightbox";
+  const c=isLightbox?null:modal?.data;
 
-  const{type,data}=modal;
-  const c=data;
-  const e=getUser(c.empId);
-  const trip=trips.find(t=>t.id===c.tripId);
-
-  // Fetch signed URLs for receipts that don't have them yet
+  // Fetch signed receipt URLs — runs for all modal types but only does work when c exists
   useEffect(()=>{
     if(!c?.receipts?.length){setRWU([]);return;}
     const needsFetch=c.receipts.some(r=>!r.url&&r.storagePath);
     if(!needsFetch){setRWU(c.receipts);return;}
     if(!SB_ENABLED){setRWU(c.receipts);return;}
-    // Fetch all signed URLs in parallel
     Promise.all(c.receipts.map(async r=>{
       if(r.url||!r.storagePath)return r;
       try{
@@ -2994,6 +2991,12 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
     })).then(setRWU);
   },[c?.id]);
 
+  // Early return for lightbox — safe because all hooks are above
+  if(isLightbox)return<Lightbox receipt={modal.data} onClose={()=>setMdl(null)}/>;
+
+  const{type,data}=modal;
+  const e=getUser(c.empId);
+  const trip=trips.find(t=>t.id===c.tripId);
   const displayReceipts=receiptsWithUrls||c.receipts||[];
 
   const addComment=async()=>{
