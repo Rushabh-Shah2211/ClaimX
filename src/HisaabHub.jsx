@@ -14,7 +14,8 @@ const SB_ENABLED = !!supabase; // false → falls back to localStorage demo mode
 const G="#7ED957",GD="#5CB83A",GL="#f0fde9",GM="#d1fae5";
 const DARK="#0f1c09",INK="#1a2e12",MUTED="#6b7280",BDR="#e8f0e5";
 const FD="'Playfair Display',serif",FB="'DM Sans',sans-serif";
-const GLSTYLE=`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&family=Noto+Sans+Devanagari:wght@800&family=Sora:wght@300;400&display=swap');*{box-sizing:border-box;margin:0;padding:0}@keyframes spin{to{transform:rotate(360deg)}}@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}.fin{animation:fadeIn .2s ease}input::placeholder{color:rgba(255,255,255,0.25)}th{text-align:left;padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #e8f0e5}td{padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f8faf6}.rh:hover{background:#fafff8!important;cursor:pointer}input,select,textarea{font-family:'DM Sans',sans-serif;outline:none}input:focus,select:focus,textarea:focus{border-color:#7ED957!important}select{appearance:none}`;
+const GLSTYLE=`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&family=Sora:wght@300;400&display=swap');*{box-sizing:border-box;margin:0;padding:0}@keyframes spin{to{transform:rotate(360deg)}}@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}.fin{animation:fadeIn .2s ease}input::placeholder{color:rgba(255,255,255,0.25)}th{text-align:left;padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #e8f0e5}td{padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f8faf6}.rh:hover{background:#fafff8!important;cursor:pointer}input,select,textarea{font-family:'DM Sans',sans-serif;outline:none}input:focus,select:focus,textarea:focus{border-color:#7ED957!important}select{appearance:none}@media(max-width:768px){.mob-hide{display:none!important}.mob-bottom-nav{display:flex!important}.mob-stack{flex-direction:column!important}.mob-full{width:100%!important}.mob-p-sm{padding:12px!important}.mob-grid-1{grid-template-columns:1fr!important}.mob-grid-2{grid-template-columns:1fr 1fr!important}.mob-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}th{padding:7px 8px;font-size:10px}td{padding:7px 8px;font-size:11px}}@media(max-width:480px){.mob-grid-2{grid-template-columns:1fr!important}.mob-hide-xs{display:none!important}}`;
+
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const fmt   = n  => "₹"+Number(n).toLocaleString("en-IN");
@@ -1034,6 +1035,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const[showProf,setSPro]=useState(false);
   const[showHelp,setSHelp]=useState(false);
   const[camFile,setCamF] =useState(null);
+  const[editRequests,setEditRequests]=useState([]);
   const{queue,online,enqueue,flush}=useOffline();
   const{perm:pushPerm,ask:askPush,send:sendPush}=usePush();
 
@@ -1131,6 +1133,60 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     }
   };
 
+  // ── Edit Request handlers ──────────────────────────────────────────────────
+  const loadEditRequests=async()=>{
+    if(!SB_ENABLED){return;}
+    const{data}=await supabase.from("edit_requests").select("*").eq("company_id",cid).order("created_at",{ascending:false});
+    if(data)setEditRequests(data);
+  };
+  useEffect(()=>{if(co)loadEditRequests();},[!!co]);
+
+  const submitEditRequest=async(claim,reason)=>{
+    const req={company_id:cid,claim_id:claim.id,requested_by:user.id,requester_name:user.name,reason,status:"Pending"};
+    if(SB_ENABLED){
+      await supabase.from("edit_requests").insert(req);
+      // Notify managers
+      const mgr=co.users.find(u=>u.role==="manager");
+      if(mgr)await sbPushNotif(mgr.id,`Edit request for ${claim.id} from ${user.name}: "${reason}"`,"warn");
+      await loadEditRequests();
+    } else {
+      setEditRequests(p=>[{...req,id:uid(),createdAt:new Date().toISOString()},...p]);
+    }
+    toast("✓ Edit request submitted — awaiting manager approval");
+  };
+
+  const approveEditRequest=async(req)=>{
+    const expires=new Date(Date.now()+24*60*60*1000).toISOString(); // 24h window
+    if(SB_ENABLED){
+      await supabase.from("edit_requests").update({status:"Approved",reviewed_by:user.id,reviewer_name:user.name,window_open:true,window_expires:expires}).eq("id",req.id);
+      // Notify employee
+      await sbPushNotif(req.requested_by,`Your edit request for ${req.claim_id} was approved. You have 24 hours to edit.`,"success");
+      await loadEditRequests();
+    } else {
+      setEditRequests(p=>p.map(r=>r.id===req.id?{...r,status:"Approved",reviewerName:user.name,windowOpen:true,windowExpires:expires}:r));
+    }
+    toast("✓ Edit window opened for 24 hours");
+  };
+
+  const rejectEditRequest=async(req)=>{
+    if(SB_ENABLED){
+      await supabase.from("edit_requests").update({status:"Rejected",reviewed_by:user.id,reviewer_name:user.name}).eq("id",req.id);
+      await sbPushNotif(req.requested_by,`Your edit request for ${req.claim_id} was rejected.`,"error");
+      await loadEditRequests();
+    } else {
+      setEditRequests(p=>p.map(r=>r.id===req.id?{...r,status:"Rejected",reviewerName:user.name}:r));
+    }
+    toast("Edit request rejected");
+  };
+
+  // Check if claim has an approved edit window open
+  const hasEditWindow=(claimId)=>{
+    const req=editRequests.find(r=>(r.claim_id||r.claimId)===claimId&&r.status==="Approved"&&(r.window_open||r.windowOpen));
+    if(!req)return false;
+    const expires=new Date(req.window_expires||req.windowExpires||0);
+    return expires>new Date();
+  };
+
   const catSpend=(empId,tripId,cat)=>co.claims.filter(c=>c.empId===empId&&c.tripId===tripId&&c.category===cat&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
   const tripSpend=(empId,tripId)=>co.claims.filter(c=>c.empId===empId&&c.tripId===tripId&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
 
@@ -1146,8 +1202,18 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const amount=parseFloat(form.amount);
     const tripId=form.tripId||co.trips.find(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(user.id)))?.id;
     if(!tripId){toast("No active trip assigned","error");return;}
-    const catEx=(()=>{const cur=catSpend(user.id,tripId,form.category);const tot=tripSpend(user.id,tripId)+amount;const nc=cur+amount;const al=co.policy.categoryPct[form.category]||100;return tot>0&&(nc/tot)*100>al;})();
-    const weekend=co.policy.weekendRequiresApproval&&isWknd(form.date||today());
+    const claimDate=form.date||today();
+    // Validate claim date is within trip date range
+    if(tripId){
+      const selectedTrip=co.trips.find(t=>t.id===tripId);
+      if(selectedTrip?.startDate&&selectedTrip?.endDate){
+        if(claimDate<selectedTrip.startDate||claimDate>selectedTrip.endDate){
+          toast(`Expense date ${claimDate} is outside trip range (${selectedTrip.startDate} to ${selectedTrip.endDate})`,"error");
+          return;
+        }
+      }
+    }
+    const weekend=co.policy.weekendRequiresApproval&&isWknd(claimDate);
     const noRcpt=co.policy.receiptMandatoryAbove>0&&amount>co.policy.receiptMandatoryAbove&&(!form.receipts||!form.receipts.length);
     const vLow=(form.vendor||"").toLowerCase();
     if(co.policy.vendorBlacklist?.some(v=>vLow.includes(v.toLowerCase()))){toast(`Vendor "${form.vendor}" is blacklisted`,"error");return;}
@@ -1155,11 +1221,11 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const{isAnomaly,reasons}=detectAnomaly(form,amount);
     const claimId="EXP-"+uid();
 
-    const claimData={id:claimId,tripId,empId:user.id,date:form.date||today(),category:form.category,desc:form.desc,amount,origAmount:parseFloat(form.origAmount||amount),origCur:form.currency||"INR",status:auto?"Approved":"Pending",autoApproved:auto,receipts:form.receipts||[],remarks:auto?"Auto-approved":"",flagged:catEx,anomaly:isAnomaly,anomalyReasons:reasons,comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||""};
+    const claimData={id:claimId,tripId,empId:user.id,date:claimDate,category:form.category,desc:form.desc,amount,origAmount:parseFloat(form.origAmount||amount),origCur:form.currency||"INR",status:auto?"Approved":"Pending",autoApproved:auto,receipts:form.receipts||[],remarks:auto?"Auto-approved":"",flagged:catEx,anomaly:isAnomaly,anomalyReasons:reasons,comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||""};
 
     if(!online){
       if(SB_ENABLED){
-        const sbRow={id:claimId,company_id:cid,trip_id:tripId,emp_id:user.id,date:form.date||today(),category:form.category,description:form.desc,vendor:form.vendor||"",amount,orig_amount:parseFloat(form.origAmount||amount),orig_currency:form.currency||"INR",status:auto?"Approved":"Pending",auto_approved:auto,remarks:auto?"Auto-approved":"",flagged:catEx,anomaly:isAnomaly,anomaly_reasons:reasons,weekend_flag:weekend,notes:form.notes||""};
+        const sbRow={id:claimId,company_id:cid,trip_id:tripId,emp_id:user.id,date:claimDate,category:form.category,description:form.desc,vendor:form.vendor||"",amount,orig_amount:parseFloat(form.origAmount||amount),orig_currency:form.currency||"INR",status:auto?"Approved":"Pending",auto_approved:auto,remarks:auto?"Auto-approved":"",flagged:catEx,anomaly:isAnomaly,anomaly_reasons:reasons,weekend_flag:weekend,notes:form.notes||""};
         enqueue({type:"claim",data:claimData,sbRow});
       } else {
         enqueue({type:"claim",data:claimData});
@@ -1172,7 +1238,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       // ── Supabase write path ──────────────────────────────────────────────
       const{error:claimErr}=await supabase.from("claims").insert({
         id:claimId,company_id:cid,trip_id:tripId,emp_id:user.id,
-        date:form.date||today(),category:form.category,description:form.desc,
+        date:claimDate,category:form.category,description:form.desc,
         vendor:form.vendor||"",amount,orig_amount:parseFloat(form.origAmount||amount),
         orig_currency:form.currency||"INR",status:auto?"Approved":"Pending",
         auto_approved:auto,remarks:auto?"Auto-approved":"",flagged:catEx,
@@ -1360,6 +1426,89 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const csv=rows.map(r=>r.map(v=>`"${v}"`).join(",")).join("\n");
     const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`ZohoBooks_${cid}_${today()}.csv`;a.click();toast("📊 Zoho Books exported");
   };
+
+  // ── SAP Export (FI-compatible CSV for journal entry upload) ──────────────
+  const exportSAP=()=>{
+    const month=new Date().toISOString().slice(0,7);
+    // SAP FI format: posting date, document type, GL account, cost center, amount, text
+    const rows=[
+      ["Posting Date","Document Type","Company Code","Currency","GL Account","Cost Center","Profit Center","Amount","Tax Code","Reference","Assignment","Text","Employee","Vendor","Category","Trip"]
+    ];
+    co.claims.filter(c=>c.status==="Approved").forEach(c=>{
+      const e=getUser(c.empId);
+      const glMap={Travel:"40100001","Meals":"40100002","Accommodation":"40100003","Office Supplies":"40100004","Client Entertainment":"40100005","Software":"40100006","Training":"40100007","Miscellaneous":"40100009"};
+      const gl=glMap[c.category]||"40100009";
+      const costCenter=`CC_${(e?.dept||"OPS").toUpperCase().replace(/\s+/g,"_").slice(0,8)}`;
+      rows.push([
+        c.date.replace(/-/g,"/"),  // Posting date
+        "KR",                       // Vendor invoice document type
+        cid.toUpperCase().slice(0,4)||"CMPN", // Company code
+        c.origCur||"INR",           // Currency
+        gl,                         // GL Account
+        costCenter,                 // Cost Center
+        `PC_${(e?.dept||"OPS").slice(0,4).toUpperCase()}`, // Profit Center
+        c.amount.toFixed(2),        // Amount
+        c.origCur==="INR"?"V5":"V0",// Tax code
+        c.id,                       // Reference document
+        c.tripId||"",              // Assignment (trip)
+        `${c.category}: ${c.desc}`.slice(0,50), // Text (max 50)
+        e?.name||"",               // Employee name
+        c.vendor||"",              // Vendor
+        c.category,                // Category
+        co.trips.find(t=>t.id===c.tripId)?.name||"", // Trip name
+      ]);
+    });
+    // Also create balance sheet entry for employee payable
+    const totalPayable=co.claims.filter(c=>c.status==="Approved"&&co.policy.reimbursementMode).reduce((s,c)=>s+c.amount,0);
+    if(totalPayable>0){
+      rows.push([today().replace(/-/g,"/"),"SA","CMPN","INR","20100001","","",totalPayable.toFixed(2),"","BAL_CTRL","","Employee Expense Payable "+month,"System","","",""]);}
+
+    const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"})); // BOM for SAP
+    a.download=`SAP_FI_${cid}_${month}.csv`;
+    a.click();
+    toast("📊 SAP FI export ready — import via SAP FB50/FAGLL03");
+  };
+
+  // ── Monthly digest + override summary for finance ────────────────────────
+  const exportMonthlyDigest=()=>{
+    const month=new Date().toISOString().slice(0,7);
+    const approved=co.claims.filter(c=>c.status==="Approved");
+    const overrides=editRequests.filter(r=>r.status==="Approved");
+    const byDept={};
+    approved.forEach(c=>{const e=getUser(c.empId);const d=e?.dept||"Unknown";byDept[d]=(byDept[d]||0)+c.amount;});
+    const w=window.open("","_blank");
+    w.document.write(`<!DOCTYPE html><html><head><title>ClaimX Monthly Digest ${month}</title>
+    <style>body{font-family:sans-serif;max-width:800px;margin:30px auto;color:#111;font-size:13px}
+    h1{font-size:20px;color:#0f1c09}h2{font-size:14px;margin:20px 0 8px;color:#5CB83A;border-bottom:2px solid #e8f0e5;padding-bottom:4px}
+    table{width:100%;border-collapse:collapse;margin:10px 0}th{background:#f0fde9;padding:7px 10px;font-size:11px;text-align:left}
+    td{padding:7px 10px;border-bottom:1px solid #f3f4f6;font-size:12px}.total{font-weight:700;color:#16a34a}
+    .warn{background:#fef3c7;color:#92400e;padding:8px 12px;border-radius:6px;margin:8px 0;font-size:12px}
+    .footer{font-size:10px;color:#9ca3af;margin-top:20px;border-top:1px solid #f3f4f6;padding-top:10px}</style></head><body>
+    <h1>📊 ClaimX Monthly Digest — ${month}</h1>
+    <p style="color:#6b7280">Company: ${activeMeta.name} · Generated: ${new Date().toLocaleString("en-IN")}</p>
+    <h2>Summary</h2>
+    <table><tr><th>Metric</th><th>Value</th></tr>
+    <tr><td>Total Claims</td><td>${approved.length}</td></tr>
+    <tr><td>Total Approved Amount</td><td class="total">₹${approved.reduce((s,c)=>s+c.amount,0).toLocaleString("en-IN")}</td></tr>
+    <tr><td>Pending Claims</td><td>${co.claims.filter(c=>c.status==="Pending").length}</td></tr>
+    <tr><td>Edit Overrides (Approved)</td><td style="color:${overrides.length>0?"#dc2626":"#16a34a"}">${overrides.length}</td></tr>
+    </table>
+    <h2>Spend by Department</h2>
+    <table><tr><th>Department</th><th>Amount</th></tr>
+    ${Object.entries(byDept).sort((a,b)=>b[1]-a[1]).map(([d,a])=>`<tr><td>${d}</td><td>₹${a.toLocaleString("en-IN")}</td></tr>`).join("")}
+    </table>
+    ${overrides.length>0?`<h2>⚠ Edit Overrides (Audit Trail)</h2>
+    ${overrides.length>0?'<div class="warn">'+overrides.length+' expense edit(s) were approved by managers this period. See detail below.</div>':''}
+    <table><tr><th>Claim ID</th><th>Requested By</th><th>Approved By</th><th>Reason</th><th>Date</th></tr>
+    ${overrides.map(r=>`<tr><td>${r.claim_id||r.claimId}</td><td>${r.requester_name||r.requesterName}</td><td>${r.reviewer_name||r.reviewerName||"—"}</td><td>${r.reason}</td><td>${r.created_at?new Date(r.created_at).toLocaleDateString("en-IN"):""}</td></tr>`).join("")}
+    </table>`:""}
+    <div class="footer">ClaimX by RB · This digest should be reviewed by the Finance team. All override entries require supporting justification.</div>
+    </body></html>`);
+    w.document.close();w.print();
+  };
+
   const printSummary=(claims,empUser,trip)=>{
     const approved=claims.filter(c=>c.status==="Approved");const total=approved.reduce((s,c)=>s+c.amount,0);
     const w=window.open("","_blank");
@@ -1373,6 +1522,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
     {id:"trips",    icon:"🗂️", label:"Trips / Periods"},
     ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:pendingClaims.length+pendingTopups.length}]:[{id:"topup",icon:"💰",label:"Top-up"}]),
+    ...(canApprove&&editRequests.filter(r=>r.status==="Pending").length>0?[{id:"editreqs",icon:"✏️",label:"Edit Requests",badge:editRequests.filter(r=>r.status==="Pending").length}]:[]),
     {id:"analytics",icon:"📊", label:"Analytics"},
     {id:"inbox",    icon:"🔔", label:"Inbox",badge:myNotifs.length},
     {id:"audit",    icon:"🗒️", label:"Audit Log"},
@@ -1399,8 +1549,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         </div>
       )}
 
-      {/* SIDEBAR */}
-      <div style={{width:sidebar?222:60,background:DARK,display:"flex",flexDirection:"column",padding:sidebar?"20px 12px":"20px 8px",position:"sticky",top:0,height:"100vh",overflow:"hidden",transition:"width .22s ease",flexShrink:0}}>
+      {/* SIDEBAR — desktop only */}
+      <div className="mob-hide" style={{width:sidebar?222:60,background:DARK,display:"flex",flexDirection:"column",padding:sidebar?"20px 12px":"20px 8px",position:"sticky",top:0,height:"100vh",overflow:"hidden",transition:"width .22s ease",flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:sidebar?"space-between":"center",marginBottom:14,minHeight:48}}>
           {sidebar&&<div style={{overflow:"hidden",width:140}}><Logo width={140} dark/></div>}
           <button onClick={()=>setSB(!sidebar)} style={{width:26,height:26,borderRadius:7,background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.1)",color:"rgba(255,255,255,.4)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,flexShrink:0}}>{sidebar?"◀":"▶"}</button>
@@ -1435,48 +1585,77 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       </div>
 
       {/* CONTENT */}
-      <div style={{flex:1,padding:"22px 26px",overflow:"auto",minWidth:0}} className="fin">
-        {/* Top bar */}
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,paddingBottom:12,borderBottom:`1px solid ${BDR}`}}>
+      <div style={{flex:1,padding:"16px 18px",overflow:"auto",minWidth:0,paddingBottom:72}} className="fin">
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,paddingBottom:12,borderBottom:`1px solid ${BDR}`}}>
           <div style={{display:"flex",alignItems:"center",gap:9}}>
-            <div style={{width:30,height:30,borderRadius:8,background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,color:GD,fontSize:11}}>{inits(meta.name)}</div>
+            <div style={{width:30,height:30,borderRadius:8,background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,color:GD,fontSize:11}}>{inits(activeMeta.name)}</div>
             <div><div style={{fontWeight:700,color:INK,fontSize:14}}>{activeMeta.name}</div><div style={{fontSize:10,color:MUTED}}>{activeMeta.industry} · {activeMeta.plan} Plan{user.delegateTo?` · Delegating→${getUser(user.delegateTo)?.name}`:""}</div></div>
           </div>
           <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}>
-            {pushPerm==="granted"&&<span style={{fontSize:10,color:GD,background:GL,padding:"2px 7px",borderRadius:6,fontWeight:600}}>🔔 Push</span>}
             {hasPerm("export")&&<>
-              <Btn v="outline" onClick={exportCSV}   style={{fontSize:11,padding:"6px 10px"}}>⬇ CSV</Btn>
-              <Btn v="outline" onClick={exportTally} style={{fontSize:11,padding:"6px 10px"}}>⬇ Tally</Btn>
-              <Btn v="outline" onClick={exportGSTR}  style={{fontSize:11,padding:"6px 10px"}}>⬇ GSTR-2A</Btn>
-              <Btn v="outline" onClick={exportZoho}  style={{fontSize:11,padding:"6px 10px"}}>⬇ Zoho</Btn>
+              <Btn v="outline" onClick={exportCSV}   style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ CSV</Btn>
+              <Btn v="outline" onClick={exportTally} style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ Tally</Btn>
+              <Btn v="outline" onClick={exportGSTR}  style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ GSTR</Btn>
+              <Btn v="outline" onClick={exportZoho}  style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ Zoho</Btn>
+              <Btn v="dark"    onClick={exportSAP}   style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ SAP</Btn>
+              {isManager&&<Btn v="outline" onClick={exportMonthlyDigest} style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">📊 Digest</Btn>}
             </>}
-            <button onClick={()=>setSCam(true)} title="Camera capture" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:14}}>📷</button>
-            <button onClick={()=>{setTab("inbox");markRead();}} style={{position:"relative",background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:14}}>🔔{myNotifs.length>0&&<span style={{position:"absolute",top:-4,right:-4,width:16,height:16,background:"#ef4444",borderRadius:"50%",color:"#fff",fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{myNotifs.length}</span>}</button>
-            <button onClick={()=>setSHelp(true)} title="Help Manual" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:14}}>❓</button>
-            {SB_ENABLED&&<button onClick={loadFromSB} title="Refresh" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:14}}>🔄</button>}
+            <button onClick={()=>setSCam(true)} title="Camera" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>📷</button>
+            <button onClick={()=>{setTab("inbox");markRead();}} style={{position:"relative",background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>🔔{myNotifs.length>0&&<span style={{position:"absolute",top:-4,right:-4,width:16,height:16,background:"#ef4444",borderRadius:"50%",color:"#fff",fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{myNotifs.length}</span>}</button>
+            <button onClick={()=>setSHelp(true)} style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>❓</button>
+            {SB_ENABLED&&<button onClick={loadFromSB} style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>🔄</button>}
           </div>
         </div>
 
         {/* TABS */}
         {tab==="dashboard" &&!isManager&&<EmpDash  user={user} myUser={myUser} co={co} setTab={setTab}/>}
         {tab==="dashboard" && isManager&&<MgrDash  co={co} meta={activeMeta} setTab={setTab} getUser={getUser}/>}
-        {tab==="claims"              &&<ClaimsTab claims={isManager?co.claims:co.claims.filter(c=>c.empId===user.id)} trips={co.trips} isManager={isManager} getUser={getUser} setMdl={setMdl}/>}
+        {tab==="claims"              &&<ClaimsTab claims={isManager?co.claims:co.claims.filter(c=>c.empId===user.id)} trips={co.trips} isManager={isManager} getUser={getUser} setMdl={setMdl} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id}/>}
         {tab==="submit" &&hasPerm("submit")&&<SubmitTab user={user} co={co} submitClaim={submitClaim} camFile={camFile} clearCamFile={()=>setCamF(null)} onCam={()=>setSCam(true)}/>}
         {tab==="trips"               &&<TripsTab trips={co.trips} setTrips={fn=>{if(!SB_ENABLED)setTrips(fn);}} claims={co.claims} isManager={isManager} getUser={getUser} users={co.users} closeTrip={closeTrip} toast={toast} uid={user.id} sbCreateTrip={async(trip,assigned)=>{if(SB_ENABLED){await supabase.from("trips").insert({id:trip.id,company_id:cid,name:trip.name,type:trip.type,start_date:trip.startDate,end_date:trip.endDate,status:"active",budget:trip.budget,spent:0});if(assigned?.length)await supabase.from("trip_assignments").insert(assigned.map(uid=>({trip_id:trip.id,user_id:uid})));await loadFromSB();}}}/>}
-        {tab==="approvals"&&canApprove&&<ApprovalsTab pendingClaims={pendingClaims} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl}/>}
+        {tab==="approvals"&&canApprove&&<>
+          <ApprovalsTab pendingClaims={pendingClaims} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl}/>
+          {editRequests.length>0&&<Card style={{padding:16,marginTop:16}}>
+            <div style={{fontFamily:FD,fontSize:14,fontWeight:700,color:INK,marginBottom:12}}>✏ Edit Requests {editRequests.filter(r=>r.status==="Pending").length>0&&<span style={{background:"#fef3c7",color:"#92400e",fontSize:11,padding:"1px 7px",borderRadius:10,marginLeft:7,fontFamily:FB}}>{editRequests.filter(r=>r.status==="Pending").length} pending</span>}</div>
+            <EditRequestsPanel editRequests={editRequests} claims={co.claims} getUser={getUser} cid={cid} toast={toast} sbEnabled={SB_ENABLED} onApprove={approveEditRequest} onReject={rejectEditRequest}/>
+          </Card>}
+        </>}
         {tab==="topup"   &&!canApprove&&<TopupTab user={user} topups={co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} sbCreateTopup={async(req)=>{if(SB_ENABLED){await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending"});await loadFromSB();}}}/>}
         {tab==="analytics"           &&<Analytics claims={isManager?co.claims:co.claims.filter(c=>c.empId===user.id)} trips={co.trips} users={co.users} isManager={isManager} getUser={getUser} policy={co.policy} printSummary={printSummary} user={user}/>}
         {tab==="inbox"               &&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
         {tab==="audit"               &&<Audit auditLog={co.auditLog||[]} claims={co.claims} getUser={getUser}/>}
+        {tab==="editreqs"            &&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id}/>}
         {tab==="employees"&&hasPerm("manage_employees")&&<Employees companyMeta={activeMeta} users={co.users} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts}/>}
         {tab==="policy"  &&hasPerm("manage_employees")&&<Policy policy={co.policy} setPolicy={setCoPolicy} savePolicy={savePolicyToSB} toast={toast} users={co.users} sbEnabled={SB_ENABLED}/>}
         {tab==="help"                &&<HelpManual userRole={user.role} onClose={()=>setTab("dashboard")} inline={true}/>}
       </div>
 
-      {modal&&<ClaimModal modal={modal} setMdl={setMdl} handleDecision={handleDecision} getUser={getUser} trips={co.trips} claims={co.claims} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}} userId={user.id} userName={user.name} addCommentToSB={addCommentToSB} sbEnabled={SB_ENABLED}/>}
+      {modal?.type==="editRequest"&&<EditRequestModal claim={modal.data} userId={user.id} userName={user.name} cid={cid} onClose={()=>setMdl(null)} onSubmit={submitEditRequest} sbEnabled={SB_ENABLED}/>}
+      {modal&&modal.type!=="editRequest"&&<ClaimModal modal={modal} setMdl={setMdl} handleDecision={handleDecision} getUser={getUser} trips={co.trips} claims={co.claims} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}} userId={user.id} userName={user.name} addCommentToSB={addCommentToSB} sbEnabled={SB_ENABLED} cid={cid} editRequests={editRequests} onEditRequest={submitEditRequest} onApproveEditRequest={approveEditRequest} onRejectEditRequest={rejectEditRequest}/>}
+
+      {/* MOBILE BOTTOM NAV */}
+      <div style={{display:"none",position:"fixed",bottom:0,left:0,right:0,background:DARK,borderTop:"1px solid rgba(255,255,255,.1)",padding:"6px 0 10px",zIndex:100,justifyContent:"space-around"}} className="mob-bottom-nav">
+        {[
+          {id:"dashboard",icon:"▦",label:"Home"},
+          ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"Expense"}]:[]),
+          ...(canApprove?[{id:"approvals",icon:"✓",label:"Approve",badge:pendingClaims.length+pendingTopups.length}]:[]),
+          {id:"claims",icon:"📋",label:"Claims"},
+          {id:"inbox",icon:"🔔",label:"Inbox",badge:myNotifs.length},
+          {id:"more",icon:"⋯",label:"More"},
+        ].map(item=>(
+          <button key={item.id} onClick={()=>item.id==="more"?setSPro(true):setTab(item.id)}
+            style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2,background:"none",border:"none",cursor:"pointer",padding:"4px 2px",position:"relative",minWidth:0}}>
+            <span style={{fontSize:17,lineHeight:1,color:tab===item.id?primaryColor:"rgba(255,255,255,.45)"}}>{item.icon}</span>
+            <span style={{fontSize:9,color:tab===item.id?primaryColor:"rgba(255,255,255,.4)",fontFamily:FB,fontWeight:tab===item.id?700:400}}>{item.label}</span>
+            {item.badge>0&&<span style={{position:"absolute",top:0,right:"25%",width:14,height:14,background:"#ef4444",borderRadius:"50%",color:"#fff",fontSize:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{item.badge}</span>}
+          </button>
+        ))}
+      </div>
     </div>
   );
+
 }
+
 
 // ─── EMPLOYEE DASHBOARD ───────────────────────────────────────────────────────
 function EmpDash({user,myUser,co,setTab}){
@@ -1575,41 +1754,73 @@ function MgrDash({co,meta,setTab,getUser}){
 }
 
 // ─── CLAIMS TAB ───────────────────────────────────────────────────────────────
-function ClaimsTab({claims,trips,isManager,getUser,setMdl}){
+function ClaimsTab({claims,trips,isManager,getUser,setMdl,submitEditRequest,hasEditWindow,userId}){
   const [filter,setFilter]=useState("All");
   const [search,setSearch]=useState("");
   const [anomalyOnly,setAO]=useState(false);
+  const [reqEditClaim,setReqEdit]=useState(null);
+  const [editReason,setEditReason]=useState("");
   const shown=claims.filter(c=>(filter==="All"||c.status===filter)&&(!anomalyOnly||c.anomaly)&&(c.desc.toLowerCase().includes(search.toLowerCase())||c.category.toLowerCase().includes(search.toLowerCase())));
   return(
     <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
         <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>{isManager?"All Claims":"My Claims"}</h1>
-        <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          <label style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:MUTED,cursor:"pointer"}}><input type="checkbox" checked={anomalyOnly} onChange={e=>setAO(e.target.checked)} style={{accentColor:"#7c3aed"}}/>🔍 Anomalies</label>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search…" style={{padding:"7px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,width:170,background:"#fafff8"}}/>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <label style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:MUTED,cursor:"pointer"}} className="mob-hide"><input type="checkbox" checked={anomalyOnly} onChange={e=>setAO(e.target.checked)} style={{accentColor:"#7c3aed"}}/>🔍 Anomalies</label>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search…" style={{padding:"7px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,width:150,background:"#fafff8"}}/>
         </div>
       </div>
-      <div style={{display:"flex",gap:7,marginBottom:12}}>
+      <div style={{display:"flex",gap:7,marginBottom:12,flexWrap:"wrap"}}>
         {["All","Pending","Approved","Rejected"].map(s=><button key={s} onClick={()=>setFilter(s)} style={{padding:"5px 13px",borderRadius:20,border:`1.5px solid ${filter===s?G:BDR}`,background:filter===s?G:"#fff",color:filter===s?"#fff":MUTED,fontFamily:FB,fontSize:11,fontWeight:600,cursor:"pointer"}}>{s}</button>)}
       </div>
+
+      {/* Request edit modal */}
+      {reqEditClaim&&(
+        <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,backdropFilter:"blur(3px)"}} onClick={()=>setReqEdit(null)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:14,padding:24,width:"min(420px,92vw)",boxShadow:"0 20px 60px #0003"}}>
+            <h3 style={{fontFamily:FD,fontSize:16,fontWeight:700,color:INK,marginBottom:6}}>Request Edit — {reqEditClaim.id}</h3>
+            <p style={{color:MUTED,fontSize:12,marginBottom:14,lineHeight:1.5}}>This expense is approved. Editing requires manager approval. Explain why you need to edit it.</p>
+            <div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"8px 12px",marginBottom:12,fontSize:11,color:"#92400e"}}>
+              ⚠ All edit requests and approvals are permanently recorded in the audit trail.
+            </div>
+            <textarea value={editReason} onChange={e=>setEditReason(e.target.value)} rows={3} placeholder="Reason for edit request (e.g. wrong amount entered, receipt was corrected…)" style={{width:"100%",padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontFamily:FB,fontSize:12,resize:"none",marginBottom:12}}/>
+            <div style={{display:"flex",gap:8}}>
+              <Btn onClick={async()=>{if(!editReason.trim())return;await submitEditRequest(reqEditClaim,editReason);setReqEdit(null);setEditReason("");}} disabled={!editReason.trim()} style={{flex:1,padding:10}}>Submit Request →</Btn>
+              <Btn v="outline" onClick={()=>setReqEdit(null)}>Cancel</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
       <Card>
-        <table style={{width:"100%"}}>
-          <thead><tr><th>ID</th><th>Date</th>{isManager&&<th>Employee</th>}<th>Trip</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th>{isManager&&<th>Act.</th>}</tr></thead>
+        <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",minWidth:500}}>
+          <thead><tr><th>ID</th><th>Date</th>{isManager&&<th>Employee</th>}<th className="mob-hide">Trip</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th><th>Act.</th></tr></thead>
           <tbody>{shown.map(c=>{
             const trip=trips.find(t=>t.id===c.tripId);const e=getUser(c.empId);
+            const canRequestEdit=!isManager&&c.status==="Approved"&&!hasEditWindow(c.id);
+            const editWindowOpen=!isManager&&hasEditWindow(c.id);
             return(<tr key={c.id} className="rh" onClick={()=>setMdl({type:"detail",data:c})}>
               <td style={{fontFamily:"monospace",color:GD,fontSize:10,fontWeight:600}}>{c.id}</td>
               <td style={{color:MUTED,fontSize:11}}>{c.date}</td>
               {isManager&&<td><div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:22,height:22,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,fontWeight:700,color:GD}}>{e?.avatar}</div><span style={{fontSize:12}}>{e?.name}</span></div></td>}
-              <td style={{fontSize:10,color:MUTED}}>{trip?.name?.slice(0,14)}…</td>
+              <td className="mob-hide" style={{fontSize:10,color:MUTED}}>{trip?.name?.slice(0,14)||"—"}</td>
               <td><span style={{background:GL,color:GD,padding:"1px 6px",borderRadius:4,fontSize:10,fontWeight:600}}>{CI[c.category]} {c.category}</span></td>
               <td style={{fontSize:12}}>{c.flagged&&<span title="Cat%" style={{marginRight:2}}>⚠️</span>}{c.anomaly&&<span title="Anomaly" style={{marginRight:2}}>🔍</span>}{c.weekendFlag&&<span title="Weekend" style={{marginRight:2}}>📅</span>}{c.desc}</td>
               <td style={{fontWeight:700,fontSize:12}}>{fmt(c.amount)}{c.origCur&&c.origCur!=="INR"&&<div style={{fontSize:9,color:MUTED}}>{c.origCur} {c.origAmount}</div>}</td>
               <td><Badge s={c.autoApproved&&c.status==="Approved"?"Auto-Approved":c.status} sm/></td>
-              {isManager&&<td onClick={ev=>ev.stopPropagation()}>{c.status==="Pending"&&<div style={{display:"flex",gap:3}}><Btn onClick={()=>setMdl({type:"approve",data:c})} style={{padding:"4px 8px",fontSize:10}}>✓</Btn><Btn v="danger" onClick={()=>setMdl({type:"reject",data:c})} style={{padding:"4px 8px",fontSize:10}}>✗</Btn></div>}</td>}
+              <td onClick={ev=>ev.stopPropagation()}>
+                {isManager&&c.status==="Pending"&&<div style={{display:"flex",gap:3}}>
+                  <Btn onClick={()=>setMdl({type:"approve",data:c})} style={{padding:"4px 8px",fontSize:10}}>✓</Btn>
+                  <Btn v="danger" onClick={()=>setMdl({type:"reject",data:c})} style={{padding:"4px 8px",fontSize:10}}>✗</Btn>
+                </div>}
+                {canRequestEdit&&<button onClick={()=>{setReqEdit(c);setEditReason("");}} style={{background:"none",border:"1px solid #fcd34d",color:"#92400e",borderRadius:5,padding:"3px 7px",fontSize:10,cursor:"pointer"}} title="Request edit">✏ Edit</button>}
+                {editWindowOpen&&<span style={{background:"#dcfce7",color:"#16a34a",padding:"2px 7px",borderRadius:5,fontSize:10,fontWeight:700}}>✓ Edit OK</span>}
+              </td>
             </tr>);
           })}</tbody>
         </table>
+        </div>
         {shown.length===0&&<div style={{padding:36,textAlign:"center",color:MUTED}}>No claims found</div>}
       </Card>
     </div>
@@ -1650,7 +1861,11 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam}){
           }]
         })
       });
-      if(!res.ok)throw new Error(`HTTP ${res.status}`);
+      if(!res.ok){
+        let errMsg=`HTTP ${res.status}`;
+        try{const errData=await res.json();errMsg=errData?.error?.message||errMsg;}catch{}
+        throw new Error(errMsg);
+      }
       const data=await res.json();
       if(data.error)throw new Error(data.error.message||"API error");
       const raw=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
@@ -1873,10 +2088,11 @@ function TripsTab({trips,setTrips,claims,isManager,getUser,users,closeTrip,toast
       </div>
       {showNew&&<Card style={{padding:20,marginBottom:12,borderColor:G,background:GL}}>
         <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>New Trip / Period</div>
-        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",gap:10,marginBottom:10}}>
+        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr",gap:10,marginBottom:10}}>
           <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Name *</label><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Delhi Trip Apr 2026" style={inpS}/></div>
           <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Type</label><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})} style={{...inpS,appearance:"none"}}><option value="trip">Trip</option><option value="period">Period</option></select></div>
-          <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>End Date *</label><input type="date" value={form.endDate} onChange={e=>setForm({...form,endDate:e.target.value})} style={inpS}/></div>
+          <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Start Date *</label><input type="date" value={form.startDate} onChange={e=>setForm({...form,startDate:e.target.value})} style={inpS}/></div>
+          <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>End Date *</label><input type="date" value={form.endDate} min={form.startDate} onChange={e=>setForm({...form,endDate:e.target.value})} style={inpS}/></div>
           <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Budget ₹ *</label><input type="number" value={form.budget} onChange={e=>setForm({...form,budget:e.target.value})} style={inpS}/></div>
         </div>
         {isManager&&emps.length>0&&<div style={{marginBottom:12}}>
@@ -2421,6 +2637,79 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
   );
 }
 
+// ─── EDIT REQUESTS TAB ────────────────────────────────────────────────────────
+function EditRequestsTab({editRequests,claims,getUser,isManager,approveEditRequest,rejectEditRequest,hasEditWindow,userId}){
+  const pending=editRequests.filter(r=>r.status==="Pending");
+  const resolved=editRequests.filter(r=>r.status!=="Pending");
+
+  const getClaimInfo=req=>{
+    const claimId=req.claim_id||req.claimId;
+    return claims.find(c=>c.id===claimId);
+  };
+
+  return(
+    <div>
+      <div style={{marginBottom:16}}>
+        <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Edit Requests</h1>
+        <p style={{color:MUTED,fontSize:12,marginTop:3}}>Employees can request to edit approved expenses. Manager approves a 24-hour edit window. All overrides are audit-trailed.</p>
+      </div>
+
+      {pending.length>0&&<>
+        <div style={{fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>Pending ({pending.length})</div>
+        {pending.map(req=>{
+          const claim=getClaimInfo(req);
+          const emp=getUser(req.requested_by||req.requestedBy);
+          return(
+            <Card key={req.id} style={{padding:16,marginBottom:8,borderLeft:`3px solid #f59e0b`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+                <div>
+                  <div style={{fontWeight:700,color:INK,fontSize:13}}>{req.claim_id||req.claimId}</div>
+                  <div style={{color:MUTED,fontSize:11,marginTop:1}}>by {req.requester_name||req.requesterName} · {req.created_at?new Date(req.created_at).toLocaleDateString("en-IN"):""}</div>
+                  {claim&&<div style={{fontSize:11,color:"#374151",marginTop:4}}>Claim: {claim.desc} — {fmt(claim.amount)}</div>}
+                  <div style={{background:"#fef3c7",borderRadius:6,padding:"6px 10px",marginTop:6,fontSize:12,color:"#92400e"}}><strong>Reason:</strong> {req.reason}</div>
+                </div>
+                {isManager&&<div style={{display:"flex",gap:7,flexShrink:0}}>
+                  <Btn onClick={()=>approveEditRequest(req)} style={{padding:"7px 12px",fontSize:11}}>✓ Approve (24h)</Btn>
+                  <Btn v="danger" onClick={()=>rejectEditRequest(req)} style={{padding:"7px 10px",fontSize:11}}>✗ Reject</Btn>
+                </div>}
+              </div>
+            </Card>
+          );
+        })}
+      </>}
+
+      {pending.length===0&&<div style={{background:GL,border:`1px solid ${GM}`,borderRadius:10,padding:24,textAlign:"center",marginBottom:16}}>
+        <div style={{fontSize:24,marginBottom:6}}>✅</div>
+        <div style={{fontWeight:600,color:INK,fontSize:13}}>No pending edit requests</div>
+        <div style={{color:MUTED,fontSize:11,marginTop:3}}>All edit requests have been reviewed.</div>
+      </div>}
+
+      {resolved.length>0&&<>
+        <div style={{fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",letterSpacing:1,marginBottom:8,marginTop:16}}>History ({resolved.length})</div>
+        <Card>
+          <table style={{width:"100%"}}>
+            <thead><tr><th>Claim</th><th>Requested By</th><th>Reason</th><th>Status</th><th>Reviewed By</th><th>Date</th></tr></thead>
+            <tbody>{resolved.map(req=>(
+              <tr key={req.id} className="rh">
+                <td style={{fontFamily:"monospace",fontSize:11,fontWeight:600,color:GD}}>{req.claim_id||req.claimId}</td>
+                <td style={{fontSize:12}}>{req.requester_name||req.requesterName}</td>
+                <td style={{fontSize:11,color:MUTED,maxWidth:180}}>{req.reason}</td>
+                <td><Badge s={req.status==="Approved"?"Approved":"Rejected"} sm/></td>
+                <td style={{fontSize:11,color:MUTED}}>{req.reviewer_name||req.reviewerName||"—"}</td>
+                <td style={{fontSize:10,color:MUTED}}>{req.created_at?new Date(req.created_at).toLocaleDateString("en-IN"):""}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </Card>
+      </>}
+
+      <div style={{marginTop:16,padding:"12px 14px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:9,fontSize:11,color:"#92400e"}}>
+        ⚠ <strong>Audit note:</strong> All approved edit requests are recorded with timestamps and included in the monthly finance digest. Override history cannot be deleted.
+      </div>
+    </div>
+  );
+}
+
 // ─── POLICY TAB ───────────────────────────────────────────────────────────────
 function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
   const emps=users.filter(u=>u.role==="employee").length;
@@ -2676,24 +2965,41 @@ function HelpManual({userRole,onClose,inline=false}){
     </div>
   );
 }
-function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled}){
+// ─── EDIT REQUEST MODAL ───────────────────────────────────────────────────────
+function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled,cid,editRequests,onEditRequest,onApproveEditRequest,onRejectEditRequest}){
   const [remarks,setRemarks]=useState("");
   const [comment,setComment]=useState("");
-  const {type,data}=modal;
+  const [receiptsWithUrls,setRWU]=useState(null); // receipts with fetched signed URLs
 
-  if(type==="lightbox")return<Lightbox receipt={data} onClose={()=>setMdl(null)}/>;
+  if(modal?.type==="lightbox")return<Lightbox receipt={modal.data} onClose={()=>setMdl(null)}/>;
 
+  const{type,data}=modal;
   const c=data;
   const e=getUser(c.empId);
   const trip=trips.find(t=>t.id===c.tripId);
 
+  // Fetch signed URLs for receipts that don't have them yet
+  useEffect(()=>{
+    if(!c?.receipts?.length){setRWU([]);return;}
+    const needsFetch=c.receipts.some(r=>!r.url&&r.storagePath);
+    if(!needsFetch){setRWU(c.receipts);return;}
+    if(!SB_ENABLED){setRWU(c.receipts);return;}
+    // Fetch all signed URLs in parallel
+    Promise.all(c.receipts.map(async r=>{
+      if(r.url||!r.storagePath)return r;
+      try{
+        const{data}=await supabase.storage.from("receipts").createSignedUrl(r.storagePath,3600);
+        return{...r,url:data?.signedUrl||null};
+      }catch{return r;}
+    })).then(setRWU);
+  },[c?.id]);
+
+  const displayReceipts=receiptsWithUrls||c.receipts||[];
+
   const addComment=async()=>{
     if(!comment.trim())return;
-    if(sbEnabled&&addCommentToSB){
-      await addCommentToSB(c.id,comment);
-    } else {
-      setClaims(p=>p.map(x=>x.id===c.id?{...x,comments:[...(x.comments||[]),{userId,name:userName,text:comment,time:new Date().toLocaleString()}]}:x));
-    }
+    if(sbEnabled&&addCommentToSB){await addCommentToSB(c.id,comment);}
+    else{setClaims(p=>p.map(x=>x.id===c.id?{...x,comments:[...(x.comments||[]),{userId,name:userName,text:comment,time:new Date().toLocaleString()}]}:x));}
     setComment("");
   };
 
@@ -2714,13 +3020,19 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
         ))}
         {c.anomaly&&<div style={{background:"#ede9fe",border:"1px solid #c4b5fd",borderRadius:7,padding:"8px 11px",marginTop:9,fontSize:11,color:"#7c3aed"}}>🔍 Anomaly: {(c.anomalyReasons||[]).join(" · ")}</div>}
         {/* Receipts */}
-        {c.receipts?.length>0&&<div style={{marginTop:10}}>
-          <div style={{fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",letterSpacing:.5,marginBottom:7}}>Receipts</div>
+        {displayReceipts.length>0&&<div style={{marginTop:10}}>
+          <div style={{fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",letterSpacing:.5,marginBottom:7}}>Receipts ({displayReceipts.length})</div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            {c.receipts.map((r,i)=>(
+            {displayReceipts.map((r,i)=>(
               <div key={i} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
-                {r.type?.startsWith("image/")?<img src={r.url} alt={r.name||"receipt"} style={{width:80,height:80,objectFit:"cover",borderRadius:7,border:`1px solid ${BDR}`,cursor:"zoom-in"}} onClick={()=>setMdl({type:"lightbox",data:r})}/>:<div style={{width:80,height:80,background:"#fee2e2",borderRadius:7,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",border:"1px solid #fca5a5",cursor:"pointer"}} onClick={()=>setMdl({type:"lightbox",data:r})}><span style={{fontSize:28}}>📄</span></div>}
-                <a href={r.url} download={r.name||`receipt_${i+1}`} style={{fontSize:9,color:GD,textDecoration:"none",background:GL,padding:"1px 6px",borderRadius:4,fontWeight:600}}>⬇ Download</a>
+                {r.url?(
+                  r.type?.startsWith("image/")
+                    ?<img src={r.url} alt={r.name||"receipt"} style={{width:80,height:80,objectFit:"cover",borderRadius:7,border:`1px solid ${BDR}`,cursor:"zoom-in"}} onClick={()=>setMdl({type:"lightbox",data:r})}/>
+                    :<div style={{width:80,height:80,background:"#fee2e2",borderRadius:7,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",border:"1px solid #fca5a5",cursor:"pointer"}} onClick={()=>setMdl({type:"lightbox",data:r})}><span style={{fontSize:28}}>📄</span></div>
+                ):(
+                  <div style={{width:80,height:80,background:"#f3f4f6",borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${BDR}`}}><span style={{fontSize:24}}>⏳</span></div>
+                )}
+                {r.url&&<a href={r.url} download={r.name||`receipt_${i+1}`} style={{fontSize:9,color:GD,textDecoration:"none",background:GL,padding:"1px 6px",borderRadius:4,fontWeight:600}}>⬇ Download</a>}
               </div>
             ))}
           </div>
@@ -2750,7 +3062,15 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
             <Btn v="outline" onClick={()=>setMdl(null)}>Cancel</Btn>
           </div>
         </div>}
-        {type==="detail"&&<div style={{marginTop:11,display:"flex",justifyContent:"space-between",alignItems:"center"}}><Badge s={c.autoApproved&&c.status==="Approved"?"Auto-Approved":c.status}/><Btn v="outline" onClick={()=>setMdl(null)} style={{fontSize:11}}>Close</Btn></div>}
+        {type==="detail"&&<div style={{marginTop:11,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <Badge s={c.autoApproved&&c.status==="Approved"?"Auto-Approved":c.status}/>
+          <div style={{display:"flex",gap:7}}>
+            {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&onEditRequest&&(
+              <Btn v="warning" onClick={()=>setMdl({type:"editRequest",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Request Edit</Btn>
+            )}
+            <Btn v="outline" onClick={()=>setMdl(null)} style={{fontSize:11}}>Close</Btn>
+          </div>
+        </div>}
       </div>
     </div>
   );
