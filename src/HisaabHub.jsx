@@ -296,19 +296,38 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
   const[gBusy,  setGB]    =useState(false);
   const[view,   setView]  =useState(isPasswordRecovery?"reset":"login");
 
-  // ── Main sign-in ──────────────────────────────────────────────────────────
   const attempt=async(loginVal,pw)=>{
     setErr("");setBusy(true);
     try{
       const trimmed=loginVal.trim();
+      if(!trimmed||!pw){setErr("Please enter your username and password.");setBusy(false);return;}
 
       if(SB_ENABLED){
-        // Step 1: Try custom auth RPC (username/mobile/email for employees)
-        const{data:customResult}=await supabase.rpc("authenticate_user",{
-          p_login:trimmed, p_password:pw
-        });
+        // Try custom auth RPC with explicit error handling
+        let customResult=null;
+        let rpcError=null;
+        try{
+          const res=await supabase.rpc("authenticate_user",{p_login:trimmed,p_password:pw});
+          customResult=res.data;
+          rpcError=res.error;
+        }catch(e){
+          rpcError={message:e.message};
+        }
+
+        // Show any RPC-level errors (network, missing function, etc.)
+        if(rpcError){
+          // If it's a network or function error, try Supabase Auth for emails
+          if(trimmed.includes("@")){
+            const{error:authErr}=await supabase.auth.signInWithPassword({email:trimmed.toLowerCase(),password:pw});
+            if(!authErr)return; // Supabase Auth success → onAuthStateChange handles it
+            throw new Error("Login service unavailable. Please try again.");
+          }
+          throw new Error(`Connection error: ${rpcError.message}`);
+        }
+
+        // Custom auth returned a result
         if(customResult&&!customResult.error){
-          // Custom auth success — build session without Supabase Auth JWT
+          // Success — build session
           onLogin({
             id:customResult.id, name:customResult.name, email:customResult.email||"",
             username:customResult.username||"", mobile:customResult.mobile||"",
@@ -316,55 +335,48 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
             balance:customResult.balance, reimbursable:customResult.reimbursable,
             delegateTo:customResult.delegate_to, isSuspended:false,
             authType:"custom", cid:customResult.company_id, companyId:customResult.company_id
-          }, {id:customResult.company_id});
+          },{id:customResult.company_id});
           return;
         }
-        // If custom auth says user not found, try Supabase Auth (for SA / company admins)
-        const isEmail=trimmed.includes("@");
-        if(isEmail){
-          const{error}=await supabase.auth.signInWithPassword({
+
+        // Custom auth returned an error message
+        const customErr=customResult?.error||"";
+
+        // If user not found and it's an email, try Supabase Auth (SA / Google-created managers)
+        if(trimmed.includes("@")){
+          const{error:authErr}=await supabase.auth.signInWithPassword({
             email:trimmed.toLowerCase(), password:pw
           });
-          if(error){
-            // Show the custom auth error if it was a password issue, otherwise show email error
-            const customErr=customResult?.error;
-            if(customErr&&customErr!=="User not found") throw new Error(customErr);
-            throw new Error(
-              error.message==="Invalid login credentials"?"Incorrect password or account not found.":
-              error.message==="Email not confirmed"?"Please verify your email first — check your inbox.":
-              error.message
-            );
-          }
-          // Supabase Auth success — onAuthStateChange in Root handles redirect
-          return;
+          if(!authErr)return; // success → onAuthStateChange handles it
+          // Both failed — show the more specific error
+          if(customErr&&customErr!=="User not found")throw new Error(customErr);
+          throw new Error(
+            authErr.message==="Invalid login credentials"?"Incorrect username/email or password.":
+            authErr.message==="Email not confirmed"?"Please verify your email — check your inbox.":
+            authErr.message
+          );
         }
-        // Non-email login that custom auth didn't find
-        throw new Error(customResult?.error||"No account found with those credentials.");
+
+        // Non-email — show the custom auth error
+        throw new Error(customErr||"No account found. Check your username and try again.");
 
       } else {
-        // ── Demo / localStorage mode ──────────────────────────────────────
         await new Promise(r=>setTimeout(r,400));
         const e=trimmed.toLowerCase();
-        // Check SA
         if((e===SA.email||e==="admin")&&pw===SA.password){onLogin(SA,null);return;}
-        // Check all companies
         for(const cid of Object.keys(DB)){
           const co=DB[cid];
           if(co.meta.status==="Suspended")continue;
-          const u=co.users.find(u=>
-            u.email?.toLowerCase()===e ||
-            u.username?.toLowerCase()===e ||
-            u.mobile===trimmed
-          );
+          const u=co.users.find(u=>u.email?.toLowerCase()===e||u.username?.toLowerCase()===e||u.mobile===trimmed);
           if(u){
-            if(u.isSuspended) throw new Error("Account suspended. Contact your manager.");
-            if(u.password!==pw&&u.password_hash!==pw) throw new Error("Incorrect password.");
+            if(u.isSuspended)throw new Error("Account suspended. Contact your manager.");
+            if(u.password!==pw&&u.password_hash!==pw)throw new Error("Incorrect password.");
             onLogin(u,co.meta);return;
           }
         }
         throw new Error("No account found. Check your username/email and try again.");
       }
-    }catch(e){setErr(e.message||"Login failed.");}
+    }catch(e){setErr(e.message||"Login failed. Please try again.");}
     finally{setBusy(false);}
   };
 
