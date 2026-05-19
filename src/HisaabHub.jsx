@@ -303,64 +303,66 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
       if(!trimmed||!pw){setErr("Please enter your username and password.");setBusy(false);return;}
 
       if(SB_ENABLED){
-        // Try custom auth RPC with explicit error handling
-        let customResult=null;
-        let rpcError=null;
+        // Wrap RPC in a 10-second timeout
+        const rpcWithTimeout=()=>new Promise((resolve,reject)=>{
+          const t=setTimeout(()=>reject(new Error("Login timed out. Check your connection.")),10000);
+          supabase.rpc("authenticate_user",{p_login:trimmed,p_password:pw})
+            .then(r=>{clearTimeout(t);resolve(r);})
+            .catch(e=>{clearTimeout(t);reject(e);});
+        });
+
+        let customResult=null,rpcError=null;
         try{
-          const res=await supabase.rpc("authenticate_user",{p_login:trimmed,p_password:pw});
+          const res=await rpcWithTimeout();
           customResult=res.data;
           rpcError=res.error;
         }catch(e){
-          rpcError={message:e.message};
+          // Timeout or network error — if email, try Supabase Auth directly
+          if(trimmed.includes("@")){
+            const{error:authErr}=await supabase.auth.signInWithPassword({
+              email:trimmed.toLowerCase(),password:pw
+            });
+            if(!authErr)return;
+          }
+          throw new Error(e.message||"Connection failed. Please try again.");
         }
 
-        // Show any RPC-level errors (network, missing function, etc.)
         if(rpcError){
-          // If it's a network or function error, try Supabase Auth for emails
           if(trimmed.includes("@")){
             const{error:authErr}=await supabase.auth.signInWithPassword({email:trimmed.toLowerCase(),password:pw});
-            if(!authErr)return; // Supabase Auth success → onAuthStateChange handles it
-            throw new Error("Login service unavailable. Please try again.");
+            if(!authErr)return;
           }
-          throw new Error(`Connection error: ${rpcError.message}`);
+          throw new Error("Service error: "+rpcError.message);
         }
 
-        // Custom auth returned a result
         if(customResult&&!customResult.error){
-          // Success — build session
           onLogin({
-            id:customResult.id, name:customResult.name, email:customResult.email||"",
-            username:customResult.username||"", mobile:customResult.mobile||"",
-            role:customResult.role, avatar:customResult.avatar, dept:customResult.dept,
-            balance:customResult.balance, reimbursable:customResult.reimbursable,
-            delegateTo:customResult.delegate_to, isSuspended:false,
-            authType:"custom", cid:customResult.company_id, companyId:customResult.company_id
+            id:customResult.id,name:customResult.name,email:customResult.email||"",
+            username:customResult.username||"",mobile:customResult.mobile||"",
+            role:customResult.role,avatar:customResult.avatar,dept:customResult.dept,
+            balance:customResult.balance,reimbursable:customResult.reimbursable,
+            delegateTo:customResult.delegate_to,isSuspended:false,
+            authType:"custom",cid:customResult.company_id,companyId:customResult.company_id
           },{id:customResult.company_id});
           return;
         }
 
-        // Custom auth returned an error message
         const customErr=customResult?.error||"";
-
-        // If user not found and it's an email, try Supabase Auth (SA / Google-created managers)
         if(trimmed.includes("@")){
           const{error:authErr}=await supabase.auth.signInWithPassword({
-            email:trimmed.toLowerCase(), password:pw
+            email:trimmed.toLowerCase(),password:pw
           });
-          if(!authErr)return; // success → onAuthStateChange handles it
-          // Both failed — show the more specific error
+          if(!authErr)return;
           if(customErr&&customErr!=="User not found")throw new Error(customErr);
           throw new Error(
-            authErr.message==="Invalid login credentials"?"Incorrect username/email or password.":
-            authErr.message==="Email not confirmed"?"Please verify your email — check your inbox.":
+            authErr.message==="Invalid login credentials"?"Incorrect email or password.":
+            authErr.message==="Email not confirmed"?"Please verify your email first.":
             authErr.message
           );
         }
+        throw new Error(customErr||"No account found with those credentials.");
 
-        // Non-email — show the custom auth error
-        throw new Error(customErr||"No account found. Check your username and try again.");
-
-      } else {
+      }else{
         await new Promise(r=>setTimeout(r,400));
         const e=trimmed.toLowerCase();
         if((e===SA.email||e==="admin")&&pw===SA.password){onLogin(SA,null);return;}
