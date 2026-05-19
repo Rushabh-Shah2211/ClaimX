@@ -14,7 +14,7 @@ const SB_ENABLED = !!supabase; // false → falls back to localStorage demo mode
 const G="#7ED957",GD="#5CB83A",GL="#f0fde9",GM="#d1fae5";
 const DARK="#0f1c09",INK="#1a2e12",MUTED="#6b7280",BDR="#e8f0e5";
 const FD="'Playfair Display',serif",FB="'DM Sans',sans-serif";
-const GLSTYLE=`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&family=Sora:wght@300;400&display=swap');*{box-sizing:border-box;margin:0;padding:0}@keyframes spin{to{transform:rotate(360deg)}}@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}.fin{animation:fadeIn .2s ease}input::placeholder{color:rgba(255,255,255,0.25)}th{text-align:left;padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #e8f0e5}td{padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f8faf6}.rh:hover{background:#fafff8!important;cursor:pointer}input,select,textarea{font-family:'DM Sans',sans-serif;outline:none}input:focus,select:focus,textarea:focus{border-color:#7ED957!important}select{appearance:none}@media(max-width:768px){.mob-hide{display:none!important}.mob-bottom-nav{display:flex!important}.mob-stack{flex-direction:column!important}.mob-full{width:100%!important}.mob-p-sm{padding:12px!important}.mob-grid-1{grid-template-columns:1fr!important}.mob-grid-2{grid-template-columns:1fr 1fr!important}.mob-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}th{padding:7px 8px;font-size:10px}td{padding:7px 8px;font-size:11px}}@media(max-width:480px){.mob-grid-2{grid-template-columns:1fr!important}.mob-hide-xs{display:none!important}}`;
+const GLSTYLE=`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&family=Sora:wght@300;400&display=swap');*{box-sizing:border-box;margin:0;padding:0}@keyframes spin{to{transform:rotate(360deg)}}@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}.fin{animation:fadeIn .2s ease}input::placeholder{color:rgba(255,255,255,0.25)}th{text-align:left;padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #e8f0e5}td{padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f8faf6}.rh:hover{background:#fafff8!important;cursor:pointer}input,select,textarea{font-family:'DM Sans',sans-serif;outline:none}input:focus,select:focus,textarea:focus{border-color:#7ED957!important}select{appearance:none}@media(max-width:768px){.mob-hide{display:none!important}.mob-bottom-nav{display:flex!important}.mob-stack{flex-direction:column!important}.mob-full{width:100%!important}.mob-p-sm{padding:12px!important}.mob-grid-1{grid-template-columns:1fr!important}.mob-grid-2{grid-template-columns:1fr 1fr!important}.mob-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}.mob-login-panel{width:100%!important;padding:24px!important}th{padding:7px 8px;font-size:10px}td{padding:7px 8px;font-size:11px}}@media(max-width:480px){.mob-grid-2{grid-template-columns:1fr!important}.mob-hide-xs{display:none!important}}`;
 
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -41,11 +41,14 @@ const CI={Travel:"✈️",Meals:"🍽️",Accommodation:"🏨","Office Supplies"
 const DEPTS=DEFAULT_DEPTS; // backward compat alias
 const CURRENCIES=["INR","USD","EUR","GBP","AED","SGD"];
 const ROLES=[
-  {id:"manager", label:"Manager", color:"#7ED957", perms:["approve","view_all","manage_trips","manage_employees","export","submit"]},
-  {id:"employee",label:"Employee",color:"#60a5fa", perms:["submit","view_own"]},
-  {id:"auditor", label:"Auditor", color:"#f59e0b", perms:["view_all","export"]},
-  {id:"approver",label:"Approver",color:"#a78bfa", perms:["approve","view_all","submit"]},
-  {id:"finance", label:"Finance", color:"#f472b6", perms:["view_all","export","manage_trips","submit"]},
+  // admin = company admin (full access, override, dual-approve, no data hidden)
+  {id:"admin",   label:"Admin",   color:"#7c3aed", perms:["approve","view_all","manage_trips","manage_employees","export","submit","override","dual_approve","admin_close","view_finance","set_balance"]},
+  // manager = dept head (approve dept claims, approve employee trips, set trip balance)
+  {id:"manager", label:"Manager", color:"#7ED957", perms:["approve","view_dept","manage_trips","export","submit","set_balance"]},
+  // finance = read-only accounting + exports (never sees unapproved claims)
+  {id:"finance", label:"Finance", color:"#f472b6", perms:["view_all","export","view_finance"]},
+  // employee = submit only, can create trips (pending manager approval)
+  {id:"employee",label:"Employee",color:"#60a5fa", perms:["submit","view_own","create_trip"]},
 ];
 const TIERED=[{min:1,max:5,ppu:299},{min:6,max:20,ppu:249},{min:21,max:50,ppu:199},{min:51,max:999,ppu:149}];
 
@@ -136,6 +139,7 @@ const mkPolicy=()=>({
   scheduledReports:{enabled:false,frequency:"weekly",email:""},
   departments:[...DEFAULT_DEPTS],
   primaryColor:"#7ED957",
+  dualApproveAbove:50000,  // claims above this need both manager + admin approval
 });
 
 // ─── DEMO DATA (localStorage fallback when Supabase not configured) ───────────
@@ -433,8 +437,8 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
       <style>{GLSTYLE}</style>
       <div style={{position:"absolute",inset:0,backgroundImage:"linear-gradient(rgba(126,217,87,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(126,217,87,.025) 1px,transparent 1px)",backgroundSize:"44px 44px"}}/>
 
-      {/* Left branding */}
-      <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",padding:"60px 64px",position:"relative",zIndex:1}}>
+      {/* Left branding — hidden on mobile */}
+      <div className="mob-hide" style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",padding:"60px 64px",position:"relative",zIndex:1}}>
         <div style={{marginBottom:40}}><Logo width={240} dark/></div>
         <h2 style={{fontFamily:FD,fontSize:28,fontWeight:700,color:"#fff",lineHeight:1.3,marginBottom:12}}>Smarter expense<br/>management for<br/>growing Indian teams.</h2>
         <p style={{color:"rgba(255,255,255,0.4)",fontSize:13,lineHeight:1.8,maxWidth:320,marginBottom:24}}>AI-powered invoice scanning, real-time approvals, trip-wise tracking, and one-click accounting exports.</p>
@@ -447,8 +451,8 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
         }
       </div>
 
-      {/* Right form */}
-      <div style={{width:460,display:"flex",flexDirection:"column",justifyContent:"center",padding:40,position:"relative",zIndex:1}}>
+      {/* Right form — full width on mobile */}
+      <div style={{width:460,display:"flex",flexDirection:"column",justifyContent:"center",padding:40,position:"relative",zIndex:1,flexShrink:0}} className="mob-login-panel">
         <div style={{background:"rgba(255,255,255,0.04)",backdropFilter:"blur(24px)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:18,padding:"36px 32px",animation:"fadeUp .4s ease"}}>
 
           {/* ── RESET VIEW ── */}
@@ -657,7 +661,11 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
         <div style={{marginBottom:18}}><Logo width={140} dark/></div>
         <div style={{background:"#dc2626",borderRadius:8,padding:"4px 10px",marginBottom:14,fontSize:10,fontWeight:700,color:"#fff",letterSpacing:1,textTransform:"uppercase",textAlign:"center"}}>SUPER ADMIN</div>
         
-        {[{id:"companies",i:"🏢",l:"Companies"},{id:"users",i:"👥",l:"All Users"},{id:"billing",i:"💳",l:"Billing"},{id:"audit",i:"📋",l:"Audit Log"},{id:"help",i:"❓",l:"Help"}].map(x=>(
+        {[
+          {id:"companies",i:"🏢",l:"Companies"},
+          {id:"users",i:"👥",l:"Users & Passwords"},
+          {id:"help",i:"❓",l:"Help"}
+        ].map(x=>(
           <button key={x.id} onClick={()=>setTab(x.id)} style={{display:"flex",alignItems:"center",gap:9,padding:"10px 12px",borderRadius:9,cursor:"pointer",border:"none",fontFamily:FB,fontSize:13,fontWeight:tab===x.id?600:400,background:tab===x.id?"#dc2626":"transparent",color:tab===x.id?"#fff":"rgba(255,255,255,0.5)",marginBottom:3,textAlign:"left",width:"100%"}}>
             <span>{x.i}</span><span>{x.l}</span>
           </button>
@@ -671,7 +679,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
       {/* Content */}
       <div style={{flex:1,padding:"28px 32px",overflow:"auto"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
-          <div><h1 style={{fontFamily:FD,fontSize:24,fontWeight:700,color:"#1e2736"}}>ClaimX Control Centre</h1><p style={{color:MUTED,fontSize:13,marginTop:3}}>Manage all companies, users and billing</p></div>
+          <div><h1 style={{fontFamily:FD,fontSize:24,fontWeight:700,color:"#1e2736"}}>ClaimX Control Centre</h1><p style={{color:MUTED,fontSize:13,marginTop:3}}>Manage companies and users · Company data is private</p></div>
           {tab==="companies"&&<Btn onClick={()=>setMdl({type:"newCo"})}>＋ New Company</Btn>}
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:22}}>
@@ -709,8 +717,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
           ))}</tbody>
         </table></Card>}
         {tab==="users"&&<SaUsers DB={DB} userCounts={userCounts}/>}
-        {tab==="billing"&&<SaBilling allCo={allCo} DB={DB} userCounts={userCounts}/>}
-        {tab==="audit"&&<SaAudit DB={DB}/>}
+        {tab==="help"&&<HelpManual userRole="superadmin" onClose={()=>setTab("companies")} inline={true}/>}
         {tab==="help"&&<HelpManual userRole="superadmin" onClose={()=>setTab("companies")} inline={true}/>}
       </div>
       {/* Create Company Modal */}
@@ -1118,15 +1125,19 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   );
 
   const getUser=id=>co.users.find(u=>u.id===id);
-  // Use co.meta (loaded from Supabase) as the authoritative source — it has correct maxUsers etc.
   const activeMeta=SB_ENABLED&&co.meta?co.meta:meta;
-  const myRole=ROLES.find(r=>r.id===user.role)||ROLES[1];
+  const myRole=ROLES.find(r=>r.id===user.role)||ROLES[3];
   const hasPerm=p=>myRole.perms.includes(p);
-  const isManager=["manager","approver","finance"].includes(user.role);
-  const canApprove=["manager","approver"].includes(user.role);
+  const isAdmin=user.role==="admin";
+  const isManager=["admin","manager"].includes(user.role);
+  const canApprove=["admin","manager"].includes(user.role);
+  const isFinance=user.role==="finance";
+  const isEmployee=user.role==="employee";
+  const needsDualApproval=(amount)=>co.policy.dualApproveAbove>0&&amount>=co.policy.dualApproveAbove;
   const myUser=co.users.find(u=>u.id===user.id);
   const myNotifs=(co.notifications||[]).filter(n=>n.userId===user.id&&!n.read);
-  const pendingClaims=co.claims.filter(c=>c.status==="Pending");
+  // Admin + manager see pending; finance sees approved only
+  const pendingClaims=co.claims.filter(c=>c.status==="Pending"||(c.status==="Manager Approved"&&isAdmin));
   const pendingTopups=co.topups.filter(t=>t.status==="Pending");
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -1234,6 +1245,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     }
     const weekend=co.policy.weekendRequiresApproval&&isWknd(claimDate);
     const noRcpt=co.policy.receiptMandatoryAbove>0&&amount>co.policy.receiptMandatoryAbove&&(!form.receipts||!form.receipts.length);
+    if(noRcpt){toast(`Receipt required for expenses above ${fmt(co.policy.receiptMandatoryAbove)}. Please upload your invoice.`,"error");return;}
     const vLow=(form.vendor||"").toLowerCase();
     if(co.policy.vendorBlacklist?.some(v=>vLow.includes(v.toLowerCase()))){toast(`Vendor "${form.vendor}" is blacklisted`,"error");return;}
     const catEx=(()=>{
@@ -1300,7 +1312,15 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       if(co.policy.reimbursementMode&&auto)setUsers(p=>p.map(u=>u.id===user.id?{...u,reimbursable:(u.reimbursable||0)+amount}:u));
       setTrips(p=>p.map(t=>t.id===tripId?{...t,spent:t.spent+(auto?amount:0)}:t));
       if(auto){setAudit(p=>[{id:"AL-"+uid(),action:"Auto-Approved",claimId,by:user.id,byName:user.name,at:new Date().toLocaleString(),remarks:"Under limit"},...(p||[])]);toast("⚡ Auto-approved instantly!");}
-      else{const approverId=user.delegateTo||co.users.find(u=>["manager","approver"].includes(u.role)&&u.id!==user.id)?.id;if(approverId)sbPushNotif(approverId,`New claim ${claimId} from ${user.name} awaiting approval`,"info");toast(weekend?"⚠️ Weekend → manager":noRcpt?"⚠️ Receipt required":isAnomaly?"🔍 Anomaly flagged":catEx?"⚠️ Category % exceeded":"Claim submitted");}
+      else{
+        // Notify manager of employee's dept + all admins
+        const deptMgr=co.users.find(u=>u.role==="manager"&&u.dept===myUser?.dept);
+        const approverId=user.delegateTo||deptMgr?.id||co.users.find(u=>["manager","admin"].includes(u.role)&&u.id!==user.id)?.id;
+        if(approverId)sbPushNotif(approverId,`New claim ${claimId} from ${user.name} — ${fmt(amount)} awaiting approval`,"info");
+        // Notify all admins
+        for(const a of co.users.filter(u=>u.role==="admin"&&u.id!==approverId))sbPushNotif(a.id,`${user.name} submitted ${fmt(amount)} expense — ${claimId}`,"info");
+        toast(isAnomaly?"🔍 Submitted — anomaly flagged":catEx?"⚠️ Submitted — category % exceeded":"✓ Claim submitted");
+      }
     }
     setMdl(null);
   };
@@ -1308,31 +1328,53 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const handleDecision=async(claimId,decision,remarks="")=>{
     const claim=co.claims.find(c=>c.id===claimId);
     if(!claim)return;
+
+    // Dual approval logic:
+    // - Manager approves first → status becomes "Manager Approved"
+    // - Admin then approves → becomes "Approved"
+    // - Admin can approve directly (bypassing manager step)
+    // - Admin can reject at any stage
+    const isDualNeeded=needsDualApproval(claim.amount);
+    let finalStatus=decision;
+    if(decision==="Approved"&&isDualNeeded&&!isAdmin&&user.role==="manager"){
+      finalStatus="Manager Approved"; // first leg of dual approval
+    }
+    const isFullyApproved=finalStatus==="Approved";
+
     if(SB_ENABLED){
-      await supabase.from("claims").update({status:decision,remarks:remarks||decision}).eq("id",claimId);
-      if(decision==="Approved"){
+      await supabase.from("claims").update({status:finalStatus,remarks:remarks||finalStatus}).eq("id",claimId);
+      if(isFullyApproved){
         if(!co.policy.reimbursementMode)await supabase.from("users").update({balance:Math.max(0,(co.users.find(u=>u.id===claim.empId)?.balance||0)-claim.amount)}).eq("id",claim.empId);
         else await supabase.from("users").update({reimbursable:(co.users.find(u=>u.id===claim.empId)?.reimbursable||0)+claim.amount}).eq("id",claim.empId);
         await supabase.from("trips").update({spent:(co.trips.find(t=>t.id===claim.tripId)?.spent||0)+claim.amount}).eq("id",claim.tripId);
+        // Notify finance dept on full approval
+        const finTeam=co.users.filter(u=>u.role==="finance");
+        for(const f of finTeam)await sbPushNotif(f.id,`Claim ${claimId} approved — ${fmt(claim.amount)} — ready for accounting`,"info");
       }
-      await sbAddAudit(decision,claimId,remarks);
-      await sbPushNotif(claim.empId,`Your claim ${claimId} was ${decision.toLowerCase()}${remarks?": "+remarks:""}`,decision==="Approved"?"success":"error");
-      sendPush(decision==="Approved"?"✓ Claim Approved":"✗ Claim Rejected",`${fmt(claim.amount)} — ${claim.desc}`);
-      emailAlert(getUser(claim.empId)?.email||"",`Claim ${decision} — ClaimX`,`${claimId} for ${fmt(claim.amount)} has been ${decision.toLowerCase()}.${remarks?" Remarks: "+remarks:""}`);
+      await sbAddAudit(finalStatus,claimId,remarks);
+      await sbPushNotif(claim.empId,`Your claim ${claimId} — ${finalStatus.toLowerCase()}${remarks?": "+remarks:""}`,isFullyApproved?"success":finalStatus==="Manager Approved"?"info":"error");
+      // Notify admin if manager-approved and dual needed
+      if(finalStatus==="Manager Approved"){
+        const admins=co.users.filter(u=>u.role==="admin");
+        for(const a of admins)await sbPushNotif(a.id,`Claim ${claimId} (${fmt(claim.amount)}) awaits your final approval`,"warn");
+      }
+      // Notify admin of all decisions
+      if(isAdmin===false){
+        const admins=co.users.filter(u=>u.role==="admin");
+        for(const a of admins)await sbPushNotif(a.id,`${user.name} ${finalStatus.toLowerCase()} claim ${claimId} — ${fmt(claim.amount)}`,"info");
+      }
+      sendPush(isFullyApproved?"✓ Claim Approved":finalStatus==="Manager Approved"?"⏳ Awaiting Admin":"✗ Rejected",`${fmt(claim.amount)} — ${claim.desc}`);
       await loadFromSB();
     } else {
-      setClaims(p=>p.map(c=>c.id===claimId?{...c,status:decision,remarks:remarks||decision}:c));
-      if(decision==="Approved"){
+      setClaims(p=>p.map(c=>c.id===claimId?{...c,status:finalStatus,remarks:remarks||finalStatus}:c));
+      if(isFullyApproved){
         if(!co.policy.reimbursementMode)setUsers(p=>p.map(u=>u.id===claim.empId?{...u,balance:Math.max(0,(u.balance||0)-claim.amount)}:u));
         else setUsers(p=>p.map(u=>u.id===claim.empId?{...u,reimbursable:(u.reimbursable||0)+claim.amount}:u));
         setTrips(p=>p.map(t=>t.id===claim.tripId?{...t,spent:t.spent+claim.amount}:t));
       }
-      sbPushNotif(claim.empId,`Your claim ${claimId} was ${decision.toLowerCase()}${remarks?": "+remarks:""}`,decision==="Approved"?"success":"error");
-      setAudit(p=>[{id:"AL-"+uid(),action:decision,claimId,by:user.id,byName:user.name,at:new Date().toLocaleString(),remarks},...(p||[])]);
-      sendPush(decision==="Approved"?"✓ Claim Approved":"✗ Rejected",`${fmt(claim.amount)} — ${claim.desc}`);
-      emailAlert(getUser(claim.empId)?.email||"",`Claim ${decision}`,`${claimId} ${decision.toLowerCase()}.`);
+      setAudit(p=>[{id:"AL-"+uid(),action:finalStatus,claimId,by:user.id,byName:user.name,at:new Date().toLocaleString(),remarks},...(p||[])]);
     }
-    toast(decision==="Approved"?"✓ Approved":"Rejected",decision==="Approved"?"success":"error");
+    toast(isFullyApproved?"✓ Fully Approved":finalStatus==="Manager Approved"?"✓ Manager approved — awaiting admin":finalStatus==="Rejected"?"Rejected":"Done",isFullyApproved?"success":finalStatus==="Manager Approved"?"warn":"error");
     setMdl(null);
   };
 
@@ -1352,9 +1394,29 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   };
 
   const closeTrip=async(tripId)=>{
+    const trip=co.trips.find(t=>t.id===tripId);
+    if(!trip)return;
+    if(!isAdmin&&!isManager){toast("Only admin or manager can close trips","error");return;}
+
     if(SB_ENABLED){await supabase.from("trips").update({status:"closed"}).eq("id",tripId);await loadFromSB();}
     else setTrips(p=>p.map(t=>t.id===tripId?{...t,status:"closed"}:t));
-    toast("Trip closed");
+
+    // Send summary notifications to all stakeholders
+    const tripClaims=co.claims.filter(c=>c.tripId===tripId&&c.status==="Approved");
+    const total=tripClaims.reduce((s,c)=>s+c.amount,0);
+    const summaryMsg=`Trip "${trip.name}" closed. ${tripClaims.length} approved expenses, total ${fmt(total)} of ${fmt(trip.budget)} budget.`;
+
+    // Notify all assigned employees
+    const assignedUsers=trip.assignedTo||[];
+    for(const uid of assignedUsers)await sbPushNotif(uid,summaryMsg,"info");
+    // Notify all admins
+    for(const u of co.users.filter(u=>u.role==="admin"))await sbPushNotif(u.id,summaryMsg,"info");
+    // Notify manager of creator's dept
+    for(const u of co.users.filter(u=>u.role==="manager"))await sbPushNotif(u.id,summaryMsg,"info");
+    // Notify finance
+    for(const u of co.users.filter(u=>u.role==="finance"))await sbPushNotif(u.id,`Finance: ${summaryMsg}`,"info");
+
+    toast(`✓ Trip closed — summary sent to all stakeholders`);
   };
 
   const savePolicyToSB=async(newPolicy)=>{
@@ -1543,17 +1605,19 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   };
 
   const navItems=[
-    {id:"dashboard",icon:"▦",  label:"Dashboard"},
-    {id:"claims",   icon:"📋", label:isManager?"All Claims":"My Claims"},
+    {id:"dashboard", icon:"▦",  label:"Dashboard"},
+    {id:"claims",    icon:"📋", label:isAdmin?"All Claims":isManager?"Dept Claims":"My Claims"},
     ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
-    {id:"trips",    icon:"🗂️", label:"Trips / Periods"},
+    {id:"trips",     icon:"🗂️", label:"Trips / Periods"},
     ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:pendingClaims.length+pendingTopups.length}]:[{id:"topup",icon:"💰",label:"Top-up"}]),
     ...(canApprove&&editRequests.filter(r=>r.status==="Pending").length>0?[{id:"editreqs",icon:"✏️",label:"Edit Requests",badge:editRequests.filter(r=>r.status==="Pending").length}]:[]),
-    {id:"analytics",icon:"📊", label:"Analytics"},
-    {id:"inbox",    icon:"🔔", label:"Inbox",badge:myNotifs.length},
-    {id:"audit",    icon:"🗒️", label:"Audit Log"},
-    ...(hasPerm("manage_employees")?[{id:"employees",icon:"👥",label:"Employees"},{id:"policy",icon:"⚙️",label:"Policy"}]:[]),
-    {id:"help",     icon:"❓", label:"Help"},
+    {id:"analytics", icon:"📊", label:"Analytics"},
+    {id:"inbox",     icon:"🔔", label:"Inbox",badge:myNotifs.length},
+    {id:"audit",     icon:"🗒️", label:"Audit Log"},
+    ...(isAdmin||isFinance?[{id:"finance_view",icon:"💼",label:"Finance"}]:[]),
+    ...(isAdmin||isManager?[{id:"employees",icon:"👥",label:"Employees"}]:[]),
+    ...(isAdmin?[{id:"policy",icon:"⚙️",label:"Policy"}]:[]),
+    {id:"help",      icon:"❓", label:"Help"},
   ];
 
   return(
@@ -1634,26 +1698,48 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         </div>
 
         {/* TABS */}
-        {tab==="dashboard" &&!isManager&&<EmpDash  user={user} myUser={myUser} co={co} setTab={setTab}/>}
-        {tab==="dashboard" && isManager&&<MgrDash  co={co} meta={activeMeta} setTab={setTab} getUser={getUser}/>}
-        {tab==="claims"              &&<ClaimsTab claims={isManager?co.claims:co.claims.filter(c=>c.empId===user.id)} trips={co.trips} isManager={isManager} getUser={getUser} setMdl={setMdl} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id}/>}
-        {tab==="submit" &&hasPerm("submit")&&<SubmitTab user={user} co={co} submitClaim={submitClaim} camFile={camFile} clearCamFile={()=>setCamF(null)} onCam={()=>setSCam(true)}/>}
-        {tab==="trips"               &&<TripsTab trips={co.trips} setTrips={fn=>{if(!SB_ENABLED)setTrips(fn);}} claims={co.claims} isManager={isManager} getUser={getUser} users={co.users} closeTrip={closeTrip} toast={toast} uid={user.id} sbCreateTrip={async(trip,assigned)=>{if(SB_ENABLED){await supabase.from("trips").insert({id:trip.id,company_id:cid,name:trip.name,type:trip.type,start_date:trip.startDate,end_date:trip.endDate,status:"active",budget:trip.budget,spent:0});if(assigned?.length)await supabase.from("trip_assignments").insert(assigned.map(uid=>({trip_id:trip.id,user_id:uid})));await loadFromSB();}}}/>}
+        {tab==="dashboard"&&!isManager&&!isFinance&&<EmpDash user={user} myUser={myUser} co={co} setTab={setTab}/>}
+        {tab==="dashboard"&&isManager&&<MgrDash co={co} meta={activeMeta} setTab={setTab} getUser={getUser} isAdmin={isAdmin}/>}
+        {tab==="dashboard"&&isFinance&&!isManager&&<EmpDash user={user} myUser={myUser} co={co} setTab={setTab}/>}
+        {tab==="claims"&&<ClaimsTab
+          claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept||c.empId===user.id;}):isFinance?co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved"):co.claims.filter(c=>c.empId===user.id)}
+          trips={co.trips} isManager={isManager} isAdmin={isAdmin} isFinance={isFinance}
+          getUser={getUser} setMdl={setMdl} submitEditRequest={submitEditRequest}
+          hasEditWindow={hasEditWindow} userId={user.id}/>}
+        {tab==="submit"&&hasPerm("submit")&&<SubmitTab user={user} co={co} submitClaim={submitClaim} camFile={camFile} clearCamFile={()=>setCamF(null)} onCam={()=>setSCam(true)}/>}
+        {tab==="trips"&&<TripsTab trips={co.trips} setTrips={fn=>{if(!SB_ENABLED)setTrips(fn);}} claims={co.claims}
+          isManager={isManager} isAdmin={isAdmin} getUser={getUser} users={co.users}
+          closeTrip={closeTrip} toast={toast} uid={user.id} userRole={user.role}
+          sbPushNotif={sbPushNotif} companyUsers={co.users}
+          sbCreateTrip={async(trip,assigned)=>{
+            if(SB_ENABLED){
+              const tripStatus=isManager?"active":"pending_approval";
+              await supabase.from("trips").insert({id:trip.id,company_id:cid,name:trip.name,type:trip.type,start_date:trip.startDate,end_date:trip.endDate,status:tripStatus,budget:trip.budget,spent:0,created_by:user.id});
+              if(assigned?.length)await supabase.from("trip_assignments").insert(assigned.map(uid=>({trip_id:trip.id,user_id:uid})));
+              // Notify managers if created by employee
+              if(!isManager){
+                const mgrs=co.users.filter(u=>u.role==="manager"||u.role==="admin");
+                for(const m of mgrs)await sbPushNotif(m.id,`New trip "${trip.name}" by ${user.name} awaits your approval`,"info");
+              }
+              await loadFromSB();
+            }
+          }}/>}
         {tab==="approvals"&&canApprove&&<>
-          <ApprovalsTab pendingClaims={pendingClaims} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl}/>
+          <ApprovalsTab pendingClaims={pendingClaims} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval}/>
           {editRequests.length>0&&<Card style={{padding:16,marginTop:16}}>
             <div style={{fontFamily:FD,fontSize:14,fontWeight:700,color:INK,marginBottom:12}}>✏ Edit Requests {editRequests.filter(r=>r.status==="Pending").length>0&&<span style={{background:"#fef3c7",color:"#92400e",fontSize:11,padding:"1px 7px",borderRadius:10,marginLeft:7,fontFamily:FB}}>{editRequests.filter(r=>r.status==="Pending").length} pending</span>}</div>
             <EditRequestsPanel editRequests={editRequests} claims={co.claims} getUser={getUser} cid={cid} toast={toast} sbEnabled={SB_ENABLED} onApprove={approveEditRequest} onReject={rejectEditRequest}/>
           </Card>}
         </>}
-        {tab==="topup"   &&!canApprove&&<TopupTab user={user} topups={co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} sbCreateTopup={async(req)=>{if(SB_ENABLED){await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending"});await loadFromSB();}}}/>}
-        {tab==="analytics"           &&<Analytics claims={isManager?co.claims:co.claims.filter(c=>c.empId===user.id)} trips={co.trips} users={co.users} isManager={isManager} getUser={getUser} policy={co.policy} printSummary={printSummary} user={user}/>}
-        {tab==="inbox"               &&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
-        {tab==="audit"               &&<Audit auditLog={co.auditLog||[]} claims={co.claims} getUser={getUser}/>}
-        {tab==="editreqs"            &&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id}/>}
-        {tab==="employees"&&hasPerm("manage_employees")&&<Employees companyMeta={activeMeta} users={co.users} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts}/>}
-        {tab==="policy"  &&hasPerm("manage_employees")&&<Policy policy={co.policy} setPolicy={setCoPolicy} savePolicy={savePolicyToSB} toast={toast} users={co.users} sbEnabled={SB_ENABLED}/>}
-        {tab==="help"                &&<HelpManual userRole={user.role} onClose={()=>setTab("dashboard")} inline={true}/>}
+        {tab==="topup"&&!canApprove&&<TopupTab user={user} topups={co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} sbCreateTopup={async(req)=>{if(SB_ENABLED){await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending"});await loadFromSB();}}}/>}
+        {tab==="analytics"&&<Analytics claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept||c.empId===user.id;}):co.claims.filter(c=>c.empId===user.id)} trips={co.trips} users={co.users} isManager={isManager} getUser={getUser} policy={co.policy} printSummary={printSummary} user={user}/>}
+        {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
+        {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={co.auditLog||[]} claims={co.claims} getUser={getUser}/>}
+        {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy}/>}
+        {tab==="editreqs"&&canApprove&&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id}/>}
+        {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={co.users} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin}/>}
+        {tab==="policy"&&isAdmin&&<Policy policy={co.policy} setPolicy={setCoPolicy} savePolicy={savePolicyToSB} toast={toast} users={co.users} sbEnabled={SB_ENABLED}/>}
+        {tab==="help"&&<HelpManual userRole={user.role} onClose={()=>setTab("dashboard")} inline={true}/>}
       </div>
 
       {modal?.type==="editRequest"&&<EditRequestModal claim={modal.data} userId={user.id} userName={user.name} cid={cid} onClose={()=>setMdl(null)} onSubmit={submitEditRequest} sbEnabled={SB_ENABLED}/>}
@@ -2090,22 +2176,54 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam}){
 }
 
 // ─── TRIPS TAB ────────────────────────────────────────────────────────────────
-function TripsTab({trips,setTrips,claims,isManager,getUser,users,closeTrip,toast,uid:userId,sbCreateTrip}){
+function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTrip,toast,uid:userId,userRole,sbCreateTrip,sbPushNotif,companyUsers}){
   const [showNew,setShowNew]=useState(false);
   const [form,setForm]=useState({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[]});
   const [expandedId,setExpId]=useState(null);
   const emps=users?.filter(u=>u.role==="employee")||[];
   const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",width:"100%"};
   const toggle=id=>setForm(f=>({...f,assignedTo:f.assignedTo.includes(id)?f.assignedTo.filter(x=>x!==id):[...f.assignedTo,id]}));
+
+  // Can only set budget if manager/admin
+  const canSetBudget=isManager||isAdmin;
+
   const create=async()=>{
-    if(!form.name||!form.endDate||!form.budget){toast("Fill name, end date and budget","error");return;}
+    if(!form.name||!form.endDate){toast("Fill name and end date","error");return;}
+    if(!form.startDate){toast("Fill start date","error");return;}
+    if(canSetBudget&&!form.budget){toast("Fill budget","error");return;}
     const assigned=isManager?(form.assignedTo.length>0?form.assignedTo:emps.map(e=>e.id)):[userId];
-    const newTrip={id:"TRP-"+uid(),name:form.name,type:form.type,startDate:form.startDate,endDate:form.endDate,status:"active",budget:parseFloat(form.budget),spent:0,assignedTo:assigned};
+    // Employee-created trips start as pending_approval; manager-created are active
+    const status=isManager||isAdmin?"active":"pending_approval";
+    const newTrip={
+      id:"TRP-"+uid(),name:form.name,type:form.type,
+      startDate:form.startDate,endDate:form.endDate,
+      status,budget:parseFloat(form.budget)||0,
+      spent:0,assignedTo:assigned,createdBy:userId
+    };
     if(sbCreateTrip){await sbCreateTrip(newTrip,assigned);}
     else{setTrips(p=>[newTrip,...p]);}
-    setShowNew(false);setForm({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[]});toast("✓ Trip created");
+    setShowNew(false);
+    setForm({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[]});
+    toast(status==="active"?"✓ Trip created":"✓ Trip created — awaiting manager approval");
   };
-  const visible=isManager?trips:trips.filter(t=>!t.assignedTo||t.assignedTo.includes(userId));
+
+  const approveTrip=async(trip)=>{
+    if(SB_ENABLED){await supabase.from("trips").update({status:"active"}).eq("id",trip.id);}
+    else setTrips(p=>p.map(t=>t.id===trip.id?{...t,status:"active"}:t));
+    // Notify creator
+    if(sbPushNotif&&trip.createdBy)await sbPushNotif(trip.createdBy,`Your trip "${trip.name}" has been approved and is now active`,"success");
+    toast(`✓ Trip "${trip.name}" approved`);
+  };
+
+  const rejectTrip=async(trip)=>{
+    if(SB_ENABLED){await supabase.from("trips").update({status:"rejected"}).eq("id",trip.id);}
+    else setTrips(p=>p.map(t=>t.id===trip.id?{...t,status:"rejected"}:t));
+    if(sbPushNotif&&trip.createdBy)await sbPushNotif(trip.createdBy,`Your trip "${trip.name}" was not approved`,"error");
+    toast(`Trip "${trip.name}" rejected`,"warn");
+  };
+
+  // Employee sees own + assigned; manager/admin sees all
+  const visible=isManager||isAdmin?trips:trips.filter(t=>!t.assignedTo||t.assignedTo.includes(userId)||t.createdBy===userId);
   return(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
@@ -2114,18 +2232,19 @@ function TripsTab({trips,setTrips,claims,isManager,getUser,users,closeTrip,toast
       </div>
       {showNew&&<Card style={{padding:20,marginBottom:12,borderColor:G,background:GL}}>
         <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>New Trip / Period</div>
-        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr",gap:10,marginBottom:10}}>
+        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr",gap:10,marginBottom:10}} className="mob-grid-1">
           <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Name *</label><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Delhi Trip Apr 2026" style={inpS}/></div>
           <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Type</label><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})} style={{...inpS,appearance:"none"}}><option value="trip">Trip</option><option value="period">Period</option></select></div>
           <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Start Date *</label><input type="date" value={form.startDate} onChange={e=>setForm({...form,startDate:e.target.value})} style={inpS}/></div>
           <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>End Date *</label><input type="date" value={form.endDate} min={form.startDate} onChange={e=>setForm({...form,endDate:e.target.value})} style={inpS}/></div>
-          <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Budget ₹ *</label><input type="number" value={form.budget} onChange={e=>setForm({...form,budget:e.target.value})} style={inpS}/></div>
+          {canSetBudget&&<div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Budget ₹ *</label><input type="number" value={form.budget} onChange={e=>setForm({...form,budget:e.target.value})} style={inpS}/></div>}
         </div>
+        {!canSetBudget&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"8px 12px",marginBottom:10,fontSize:11,color:"#92400e"}}>💡 Budget is set by your manager after approval. Your trip will start as <strong>Pending Approval</strong>.</div>}
         {isManager&&emps.length>0&&<div style={{marginBottom:12}}>
           <label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:7,textTransform:"uppercase"}}>Assign Employees (empty = all)</label>
           <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
             {emps.map(e=>{const sel=form.assignedTo.includes(e.id);return(
-              <div key={e.id} onClick={()=>toggle(e.id)} style={{display:"flex",alignItems:"center",gap:5,padding:"5px 11px",borderRadius:20,border:`1.5px solid ${sel?G:BDR}`,background:sel?G:"#fff",cursor:"pointer",transition:"all .15s"}}>
+              <div key={e.id} onClick={()=>toggle(e.id)} style={{display:"flex",alignItems:"center",gap:5,padding:"5px 11px",borderRadius:20,border:`1.5px solid ${sel?G:BDR}`,background:sel?G:"#fff",cursor:"pointer"}}>
                 <div style={{width:20,height:20,borderRadius:"50%",background:sel?"rgba(255,255,255,.3)":GL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,fontWeight:700,color:sel?"#fff":GD}}>{e.avatar}</div>
                 <span style={{fontSize:11,fontWeight:600,color:sel?"#fff":INK}}>{e.name.split(" ")[0]}</span>
               </div>
@@ -2143,10 +2262,24 @@ function TripsTab({trips,setTrips,claims,isManager,getUser,users,closeTrip,toast
           return(<Card key={t.id} style={{padding:16}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
               <div style={{flex:1,cursor:"pointer"}} onClick={()=>setExpId(exp?null:t.id)}>
-                <div style={{display:"flex",alignItems:"center",gap:7}}><span style={{fontFamily:FD,fontSize:14,fontWeight:700,color:INK}}>{t.name}</span><Badge s={t.status==="active"?"Active":"Closed"} sm/><span style={{fontSize:9,background:"#f3f4f6",padding:"1px 5px",borderRadius:3,color:MUTED,textTransform:"capitalize"}}>{t.type}</span><span style={{fontSize:10,color:MUTED}}>{exp?"▲":"▼"}</span></div>
+                <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+                  <span style={{fontFamily:FD,fontSize:14,fontWeight:700,color:INK}}>{t.name}</span>
+                  {t.status==="active"&&<Badge s="Active" sm/>}
+                  {t.status==="pending_approval"&&<span style={{background:"#fef3c7",color:"#92400e",padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700}}>⏳ Pending Approval</span>}
+                  {t.status==="closed"&&<Badge s="Closed" sm/>}
+                  {t.status==="rejected"&&<span style={{background:"#fee2e2",color:"#dc2626",padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700}}>✗ Rejected</span>}
+                  <span style={{fontSize:9,background:"#f3f4f6",padding:"1px 5px",borderRadius:3,color:MUTED,textTransform:"capitalize"}}>{t.type}</span>
+                  <span style={{fontSize:10,color:MUTED}}>{exp?"▲":"▼"}</span>
+                </div>
                 <div style={{fontSize:10,color:MUTED,marginTop:1}}>{t.startDate} → {t.endDate}</div>
               </div>
-              {isManager&&t.status==="active"&&<Btn v="warning" onClick={()=>closeTrip(t.id)} style={{fontSize:10,padding:"5px 10px"}}>🔒 Close</Btn>}
+              <div style={{display:"flex",gap:6,flexShrink:0}}>
+                {(isManager||isAdmin)&&t.status==="pending_approval"&&<>
+                  <Btn onClick={()=>approveTrip(t)} style={{fontSize:10,padding:"5px 10px"}}>✓ Approve</Btn>
+                  <Btn v="danger" onClick={()=>rejectTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>✗</Btn>
+                </>}
+                {(isAdmin||isManager)&&t.status==="active"&&<Btn v="warning" onClick={()=>closeTrip(t.id)} style={{fontSize:10,padding:"5px 10px"}}>🔒 Close</Btn>}
+              </div>
             </div>
             <div style={{display:"flex",gap:16,marginBottom:6,flexWrap:"wrap"}}>
               {[["Budget",fmt(t.budget)],["Spent",fmt(spent)],["Left",fmt(Math.max(0,t.budget-spent))],["Claims",claims.filter(c=>c.tripId===t.id).length]].map(([k,v])=>(
@@ -2428,8 +2561,10 @@ function Audit({auditLog,claims,getUser}){
 }
 
 // ─── EMPLOYEES TAB ────────────────────────────────────────────────────────────
-function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,updateUserInSB,sbEnabled,companyDepts}){
+function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,updateUserInSB,sbEnabled,companyDepts,isAdmin}){
   const depts=companyDepts||policy?.departments||DEFAULT_DEPTS;
+  // Admin can create any role; manager can only create employee/finance
+  const creatableRoles=isAdmin?ROLES:ROLES.filter(r=>["employee","finance"].includes(r.id));
   const emps=users.filter(u=>u.role!=="manager");
   const activeEmps=emps.filter(u=>!u.isSuspended);
   const maxUsers=companyMeta.maxUsers||0;
@@ -2554,7 +2689,7 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
           <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Department</label>
             <select value={form.dept} onChange={e=>setForm({...form,dept:e.target.value})} style={{...inpS,appearance:"none"}}>{depts.map(d=><option key={d}>{d}</option>)}</select></div>
           <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Role</label>
-            <select value={form.role} onChange={e=>setForm({...form,role:e.target.value})} style={{...inpS,appearance:"none"}}>{ROLES.filter(r=>r.id!=="manager").map(r=><option key={r.id} value={r.id}>{r.label}</option>)}</select></div>
+            <select value={form.role} onChange={e=>setForm({...form,role:e.target.value})} style={{...inpS,appearance:"none"}}>{creatableRoles.map(r=><option key={r.id} value={r.id}>{r.label}</option>)}</select></div>
           <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Wallet ₹</label>
             <input type="number" value={form.balance} onChange={e=>setForm({...form,balance:e.target.value})} placeholder="0" style={inpS}/></div>
         </div>
@@ -2582,7 +2717,7 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
               <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Department</label>
                 <select value={editForm.dept} onChange={e=>setEF({...editForm,dept:e.target.value})} style={{...inpS,appearance:"none"}}>{depts.map(d=><option key={d}>{d}</option>)}</select></div>
               <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Role</label>
-                <select value={editForm.role} onChange={e=>setEF({...editForm,role:e.target.value})} style={{...inpS,appearance:"none"}}>{ROLES.filter(r=>r.id!=="manager").map(r=><option key={r.id} value={r.id}>{r.label}</option>)}</select></div>
+                <select value={editForm.role} onChange={e=>setEF({...editForm,role:e.target.value})} style={{...inpS,appearance:"none"}}>{creatableRoles.map(r=><option key={r.id} value={r.id}>{r.label}</option>)}</select></div>
             </div>
             <div style={{display:"flex",gap:9}}><Btn onClick={saveEdit} disabled={busy} style={{flex:1,padding:11}}>{busy?"Saving…":"Save Changes"}</Btn><Btn v="outline" onClick={()=>setEditEmp(null)}>Cancel</Btn></div>
           </div>
@@ -2750,8 +2885,10 @@ function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
         {/* Core */}
         <Card style={{padding:18}}>
           <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Core Policy</div>
-          {[["Auto-Approve Limit (₹)","autoApproveLimit"],["Receipt Mandatory Above (₹)","receiptMandatoryAbove"]].map(([l,k])=>(
-            <div key={k} style={{marginBottom:12}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>{l}</label><input type="number" value={policy[k]||0} onChange={e=>setPolicy({...policy,[k]:parseFloat(e.target.value)||0})} style={inpS}/></div>
+          {[["Auto-Approve Limit (₹)","autoApproveLimit"],["Receipt Mandatory Above (₹)","receiptMandatoryAbove"],["Dual Approval Required Above (₹)","dualApproveAbove"]].map(([l,k])=>(
+            <div key={k} style={{marginBottom:12}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>{l}</label><input type="number" value={policy[k]||0} onChange={e=>setPolicy({...policy,[k]:parseFloat(e.target.value)||0})} style={inpS}/>
+              {k==="dualApproveAbove"&&<div style={{fontSize:10,color:MUTED,marginTop:2}}>Manager + Admin both must approve</div>}
+            </div>
           ))}
           <Toggle on={policy.reimbursementMode}         onClick={()=>setPolicy({...policy,reimbursementMode:!policy.reimbursementMode})}         label="Reimbursement Mode"        sub="No wallet — employees claim back invoices"/>
           <Toggle on={policy.weekendRequiresApproval}   onClick={()=>setPolicy({...policy,weekendRequiresApproval:!policy.weekendRequiresApproval})} label="Weekend → Approval"        sub="Sat/Sun expenses go to manager"/>
@@ -2872,6 +3009,62 @@ function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
       </Card>
 
       <div style={{marginTop:12}}><Btn onClick={async()=>{if(sbEnabled&&savePolicy){try{await savePolicy(policy);toast("✓ Settings saved to database");}catch(e){toast(e.message,"error");}}else{toast("✓ Settings saved");}}} style={{background:policy.primaryColor||G}}>Save All Settings</Btn></div>
+    </div>
+  );
+}
+
+// ─── FINANCE TAB ─────────────────────────────────────────────────────────────
+function FinanceTab({claims,trips,getUser,users,isAdmin,policy}){
+  const[filter,setFilter]=useState("All");
+  const[search,setSearch]=useState("");
+  const shown=claims.filter(c=>
+    (filter==="All"||c.status===filter)&&
+    (c.desc?.toLowerCase().includes(search.toLowerCase())||
+     c.vendor?.toLowerCase().includes(search.toLowerCase())||
+     c.category?.toLowerCase().includes(search.toLowerCase()))
+  );
+  const total=shown.reduce((s,c)=>s+c.amount,0);
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <div>
+          <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Finance View</h1>
+          <p style={{color:MUTED,fontSize:11,marginTop:2}}>Approved expenses ready for accounting · {shown.length} records · {fmt(total)} total</p>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+        {["All","Manager Approved","Approved"].map(s=>(
+          <button key={s} onClick={()=>setFilter(s)} style={{padding:"5px 13px",borderRadius:20,border:`1.5px solid ${filter===s?G:BDR}`,background:filter===s?G:"#fff",color:filter===s?"#fff":MUTED,fontFamily:FB,fontSize:11,fontWeight:600,cursor:"pointer"}}>{s}</button>
+        ))}
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search…" style={{padding:"6px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,background:"#fafff8",marginLeft:"auto"}}/>
+      </div>
+      <Card>
+        <div className="mob-scroll">
+        <table style={{width:"100%",minWidth:700}}>
+          <thead><tr><th>Claim ID</th><th>Date</th><th>Employee</th><th>Dept</th><th>Trip</th><th>Category</th><th>Vendor</th><th>Amount</th><th>Status</th></tr></thead>
+          <tbody>{shown.map(c=>{
+            const e=getUser(c.empId);
+            const trip=trips.find(t=>t.id===c.tripId);
+            return(<tr key={c.id} className="rh">
+              <td style={{fontFamily:"monospace",color:GD,fontSize:10,fontWeight:600}}>{c.id}</td>
+              <td style={{color:MUTED,fontSize:11}}>{c.date}</td>
+              <td style={{fontSize:12}}>{e?.name||"—"}</td>
+              <td><span style={{background:GL,color:GD,padding:"1px 6px",borderRadius:4,fontSize:10}}>{e?.dept||"—"}</span></td>
+              <td style={{fontSize:10,color:MUTED}}>{trip?.name?.slice(0,16)||"—"}</td>
+              <td><span style={{background:GL,color:GD,padding:"1px 6px",borderRadius:4,fontSize:10}}>{c.category}</span></td>
+              <td style={{fontSize:11}}>{c.vendor||"—"}</td>
+              <td style={{fontWeight:700,fontSize:12,color:INK}}>{fmt(c.amount)}</td>
+              <td><Badge s={c.status} sm/></td>
+            </tr>);
+          })}</tbody>
+        </table>
+        </div>
+        {shown.length===0&&<div style={{padding:24,textAlign:"center",color:MUTED}}>No approved expenses found</div>}
+      </Card>
+      <div style={{marginTop:10,padding:"10px 14px",background:GL,borderRadius:9,fontSize:12,color:GD,fontWeight:600}}>
+        Total approved: <span style={{fontSize:16,color:GD}}>{fmt(total)}</span>
+        {" · "}{shown.length} transactions
+      </div>
     </div>
   );
 }
@@ -3142,7 +3335,7 @@ export default function Root(){
     }
 
     // 2. Hard timeout — always fires, no matter what
-    const hardTimer=setTimeout(()=>setLoading(false), 6000);
+    const hardTimer=setTimeout(()=>setLoading(false), 2000);
 
     // 3. Check existing session directly (fast path)
     supabase.auth.getSession().then(async({data:{session:sess},error})=>{
