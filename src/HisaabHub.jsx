@@ -356,6 +356,61 @@ const generateSettlementPDF=async(trip,claims,getUser,companyName)=>{
 };
 
 
+// ─── USER PREFERENCES (dark mode, font size) ─────────────────────────────────
+const PREFS_KEY="claimx_prefs_v1";
+const loadPrefs=()=>{try{const p=localStorage.getItem(PREFS_KEY);return p?JSON.parse(p):{darkMode:false,fontSize:13};}catch{return{darkMode:false,fontSize:13};}};
+const savePrefs=p=>{try{localStorage.setItem(PREFS_KEY,JSON.stringify(p));}catch{}};
+
+function usePrefs(){
+  const[prefs,setPrefsState]=useState(loadPrefs);
+  const setPrefs=p=>{const next={...prefs,...p};setPrefsState(next);savePrefs(next);};
+  return[prefs,setPrefs];
+}
+
+function PrefsModal({onClose}){
+  const[prefs,setPrefs]=usePrefs();
+  const inpS={padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",fontFamily:FB,width:"100%"};
+  return(
+    <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div onMouseDown={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:28,width:"min(420px,94vw)",boxShadow:"0 24px 60px #0003"}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:18}}>
+          <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>Display Preferences</div>
+          <button onClick={onClose} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:MUTED}}>✕</button>
+        </div>
+        {/* Dark Mode */}
+        <div style={{marginBottom:20}}>
+          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:8,textTransform:"uppercase"}}>Theme</label>
+          <div style={{display:"flex",gap:9}}>
+            {[{v:false,label:"☀ Light",desc:"Default"},
+              {v:true, label:"🌙 Dark", desc:"Easy on eyes"}].map(({v,label,desc})=>(
+              <div key={String(v)} onClick={()=>setPrefs({darkMode:v})} style={{flex:1,padding:"12px",border:`2px solid ${prefs.darkMode===v?"#7ED957":BDR}`,borderRadius:10,cursor:"pointer",textAlign:"center",background:prefs.darkMode===v?"#f0fde9":"#fff"}}>
+                <div style={{fontSize:18,marginBottom:3}}>{label.split(" ")[0]}</div>
+                <div style={{fontSize:12,fontWeight:600,color:INK}}>{label.split(" ").slice(1).join(" ")}</div>
+                <div style={{fontSize:10,color:MUTED}}>{desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Font Size */}
+        <div style={{marginBottom:20}}>
+          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:6,textTransform:"uppercase"}}>Font Size — {prefs.fontSize||13}px</label>
+          <input type="range" min="10" max="20" step="1" value={prefs.fontSize||13} onChange={e=>setPrefs({fontSize:parseInt(e.target.value)})} style={{width:"100%",accentColor:"#7ED957"}}/>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:MUTED,marginTop:3}}>
+            <span>10px Small</span><span>13px Default</span><span>20px Large</span>
+          </div>
+          <div style={{marginTop:10,padding:"8px 12px",background:"#f9fafb",borderRadius:7,fontSize:prefs.fontSize||13,color:INK}}>
+            Preview: This is how your text will look across the app.
+          </div>
+        </div>
+        <div style={{display:"flex",gap:9}}>
+          <Btn onClick={()=>{setPrefs({darkMode:false,fontSize:13});}} v="outline" style={{flex:1}}>Reset Defaults</Btn>
+          <Btn onClick={onClose} style={{flex:1}}>Apply & Close</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function usePush(){
   const[perm,setPerm]=useState(typeof Notification!=="undefined"?Notification.permission:"denied");
   const ask=async()=>{if(typeof Notification==="undefined")return;const p=await Notification.requestPermission();setPerm(p);};
@@ -996,7 +1051,7 @@ function SaBilling({allCo,DB,userCounts}){
       <Card key={co.meta.id} style={{padding:20}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}><div><div style={{fontWeight:700,color:INK}}>{co.meta.name}</div><div style={{fontSize:11,color:MUTED}}>{emps} employees</div></div><span style={{fontFamily:FD,fontSize:18,fontWeight:700,color:G}}>{fmt(emps*tier.ppu)}/mo</span></div></Card>
     );})}
     <Card style={{padding:20}}><div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Pricing Tiers</div>
-      <table style={{width:"100%"}}><thead><tr><th>Users</th><th>₹/user/mo</th></tr></thead><tbody>{TIERED.map(t=><tr key={t.min}><td style={{fontWeight:600,fontSize:12}}>{t.min}–{t.max===999?"50+":t.max}</td><td style={{color:GD,fontWeight:700,fontSize:12}}>{fmt(t.ppu)}</td></tr>)}</tbody></table>
+      <table style={{width:"100%"}}><thead><tr><th>Users</th><th>₹/user/mo</th></tr></thead><tbody>{TIERED.map(t=><tr key={t.min}><td style={{fontWeight:600,fontSize:12}}>{t.min}–{t.max===999?"50+":t.max}</td><td style={{color:INK,fontWeight:700,fontSize:12}}>{fmt(t.ppu)}</td></tr>)}</tbody></table>
     </Card>
   </div>);
 }
@@ -1332,6 +1387,11 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const[editRequests,setEditRequests]=useState([]);
   const{queue,online,enqueue,flush}=useOffline();
   const{perm:pushPerm,ask:askPush,send:sendPush}=usePush();
+  const[prefs,setPrefs]=usePrefs();
+  const[showPrefs,setSPrefs]=useState(false);
+  const isDark=prefs.darkMode;
+  const appFontSize=prefs.fontSize||13;
+
   const[showFundReq,setSFR]=useState(false);
   const[showShortcuts,setSSC]=useState(false);
 
@@ -1440,6 +1500,20 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   // Admin + manager see pending; finance sees approved only
   const pendingClaims=co.claims.filter(c=>c.status==="Pending"||(c.status==="Manager Approved"&&isAdmin));
   const pendingTopups=co.topups.filter(t=>t.status==="Pending");
+
+  const approveTrip=async(trip)=>{
+    if(SB_ENABLED){await supabase.from("trips").update({status:"active"}).eq("id",trip.id);await loadFromSB();}
+    else setTrips(p=>p.map(t=>t.id===trip.id?{...t,status:"active"}:t));
+    await sbPushNotif(trip.createdBy,`Your trip "${trip.name}" has been approved and is now active`,"success");
+    toast(`✓ Trip "${trip.name}" approved`);
+  };
+
+  const rejectTrip=async(trip)=>{
+    if(SB_ENABLED){await supabase.from("trips").update({status:"rejected"}).eq("id",trip.id);await loadFromSB();}
+    else setTrips(p=>p.map(t=>t.id===trip.id?{...t,status:"rejected"}:t));
+    await sbPushNotif(trip.createdBy,`Your trip "${trip.name}" was not approved`,"error");
+    toast(`Trip "${trip.name}" rejected`,"warn");
+  };
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const sbPushNotif=async(toUserId,text,type="info")=>{
@@ -1588,9 +1662,9 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       // Never reveal auto-approval to employee — show as plain "Pending" initially
       status:auto?"Approved":"Pending",autoApproved:auto,
       receipts:form.receipts||[],
-      // Never store "Auto-approved" in remarks visible to employee — store neutral text
       remarks:auto?"Approved":"",
-      flagged:catEx,anomaly:isAnomaly,anomalyReasons:reasons,comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||"",projectCode:form.projectCode||trip?.projectCode||""};
+      flagged:catEx,anomaly:isAnomaly,anomalyReasons:reasons,comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||"",projectCode:form.projectCode||trip?.projectCode||"",
+      gstAmount:parseFloat(form.gstAmount)||0,gstItc:null};
 
     if(!online){
       if(SB_ENABLED){
@@ -2031,6 +2105,10 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
     {id:"trips",     icon:"🗂️", label:"Trips / Periods"},
     ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:pendingClaims.length+pendingTopups.length}]:[{id:"topup",icon:"💰",label:"Top-up"}]),
+    // Separate Trip Approvals tab for managers
+    ...(canApprove&&co.trips.filter(t=>t.status==="pending_approval").length>0
+      ?[{id:"trip_approvals",icon:"🗺️",label:"Trip Approvals",badge:co.trips.filter(t=>t.status==="pending_approval").length}]
+      :[]),
     ...(canApprove&&editRequests.filter(r=>r.status==="Pending").length>0?[{id:"editreqs",icon:"✏️",label:"Edit Requests",badge:editRequests.filter(r=>r.status==="Pending").length}]:[]),
     {id:"analytics", icon:"📊", label:"Analytics"},
     {id:"inbox",     icon:"🔔", label:"Inbox",badge:myNotifs.length},
@@ -2042,13 +2120,14 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   ];
 
   return(
-    <div style={{display:"flex",minHeight:"100vh",fontFamily:FB,background:"#f5faf3"}}>
+    <div style={{display:"flex",minHeight:"100vh",fontFamily:FB,fontSize:appFontSize,background:isDark?"#111827":"#f5faf3",color:isDark?"#f0fdf4":"#1a2e12",transition:"background .2s,color .2s"}}>
       <style>{GLSTYLE}</style>
       {notif&&<div style={{position:"fixed",top:20,right:20,zIndex:1000,padding:"12px 18px",borderRadius:12,fontWeight:600,fontSize:13,background:notif.t==="error"?"#fee2e2":notif.t==="warn"?"#fef3c7":"#dcfce7",color:notif.t==="error"?"#dc2626":notif.t==="warn"?"#92400e":"#15803d",boxShadow:"0 4px 20px #0002",maxWidth:320}}>{notif.msg}</div>}
       {!online&&<div style={{position:"fixed",bottom:0,left:0,right:0,background:"#92400e",color:"#fef3c7",textAlign:"center",padding:"7px",fontSize:12,fontWeight:600,zIndex:999}}>📴 Offline — claims queued ({queue.length}) · will sync when connected</div>}
       {showHelp&&<HelpManual userRole={user.role} onClose={()=>setSHelp(false)}/>}
       {showCam&&<CameraModal onCapture={f=>{setCamF(f);setSCam(false);setTab("submit");}} onClose={()=>setSCam(false)}/>}
       {showShortcuts&&<ShortcutHelp onClose={()=>setSSC(false)}/>}
+      {showPrefs&&<PrefsModal onClose={()=>setSPrefs(false)}/>}
       {showFundReq&&hasPerm("submit")&&<FundRequestModal trips={co.trips} user={user} cid={cid} onClose={()=>setSFR(false)} onSubmit={handleFundRequest} sbEnabled={SB_ENABLED}/>}
       {showProf&&(
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:800,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setSPro(false)}>
@@ -2118,6 +2197,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             {isEmployee&&<button onClick={()=>setSFR(true)} title="Request Funds" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>💰</button>}
             <button onClick={()=>setSCam(true)} title="Camera" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>📷</button>
             <button onClick={()=>{setTab("inbox");markRead();}} style={{position:"relative",background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>🔔{myNotifs.length>0&&<span style={{position:"absolute",top:-4,right:-4,width:16,height:16,background:"#ef4444",borderRadius:"50%",color:"#fff",fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{myNotifs.length}</span>}</button>
+            <button onClick={()=>setSPrefs(true)} title="Display Settings (font size, dark mode)" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>{isDark?"☀":"🌙"}</button>
             <button onClick={()=>setSSC(true)} title="Keyboard Shortcuts (?)" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>⌨</button>
             <button onClick={()=>setSHelp(true)} style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>❓</button>
             {SB_ENABLED&&<button onClick={loadFromSB} style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>🔄</button>}
@@ -2163,6 +2243,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
         {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={co.auditLog||[]} claims={co.claims} getUser={getUser}/>}
         {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}/>}
+        {tab==="trip_approvals"&&canApprove&&<TripApprovalsTab trips={co.trips} getUser={getUser} approveTrip={approveTrip} rejectTrip={rejectTrip} isAdmin={isAdmin}/>}
         {tab==="editreqs"&&canApprove&&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id}/>}
         {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={co.users} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin}/>}
         {tab==="policy"&&isAdmin&&<Policy policy={co.policy} setPolicy={setCoPolicy} savePolicy={savePolicyToSB} toast={toast} users={co.users} sbEnabled={SB_ENABLED}/>}
@@ -2370,7 +2451,7 @@ function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,subm
 // ─── SUBMIT TAB (OCR fixed — no stale closures) ───────────────────────────────
 function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCategories}){
   const cats=companyCategories||DEFAULT_CATS;
-  const blankForm=()=>({id:uid(),date:today(),category:"",desc:"",amount:"",origAmount:"",currency:"INR",tripId:"",notes:"",vendor:"",receipts:[],ocrState:"idle",ocrData:null,scanning:false});
+  const blankForm=()=>({id:uid(),date:today(),category:"",desc:"",amount:"",origAmount:"",currency:"INR",tripId:"",notes:"",vendor:"",receipts:[],ocrState:"idle",ocrData:null,scanning:false,gstAmount:"",projectCode:""});
   const [forms,setForms]=useState([blankForm()]);
   const [idx,setIdx]=useState(0);
   const fileRefs=useRef({});
@@ -2591,7 +2672,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
             <input type="number" value={fm.origAmount} onChange={e=>{const oa=e.target.value;const rate=FX[fm.currency]||1;upd(idx,{origAmount:oa,amount:oa?String(Math.round(parseFloat(oa)*rate)):""});}} placeholder="0.00" style={inpS}/>
           </div>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:10}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:11,marginBottom:10}} className="mob-grid-1">
           <div><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Category *</label>
             <select value={fm.category} onChange={e=>upd(idx,{category:e.target.value})} style={{...inpS,appearance:"none",paddingRight:28,borderColor:fm.ocrState==="done"&&fm.category?G:BDR}}>
               <option value="">Select…</option>{cats.map(c=><option key={c}>{c}</option>)}
@@ -2600,6 +2681,10 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
           <div><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Amount (₹) *</label>
             <input type="number" value={fm.amount} onChange={e=>upd(idx,{amount:e.target.value})} placeholder="0.00" style={{...inpS,borderColor:fm.ocrState==="done"&&fm.amount?G:BDR}}/>
             {fm.currency!=="INR"&&fm.amount&&<div style={{fontSize:9,color:MUTED,marginTop:2}}>≈ {fmt(parseFloat(fm.amount))} (converted from {fm.currency})</div>}
+          </div>
+          <div><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>GST Amount (₹)</label>
+            <input type="number" value={fm.gstAmount||""} onChange={e=>upd(idx,{gstAmount:e.target.value})} placeholder="If applicable" style={inpS}/>
+            {fm.gstAmount&&fm.amount&&<div style={{fontSize:9,color:MUTED,marginTop:2}}>Base: {fmt(parseFloat(fm.amount)-parseFloat(fm.gstAmount||0))} + GST: {fmt(parseFloat(fm.gstAmount||0))}</div>}
           </div>
         </div>
         <div style={{marginBottom:10}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Description *</label><input value={fm.desc} onChange={e=>upd(idx,{desc:e.target.value})} placeholder="Brief description" style={{...inpS,borderColor:fm.ocrState==="done"&&fm.desc?G:BDR}}/></div>
@@ -2651,21 +2736,6 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
     setShowNew(false);
     setForm({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[]});
     toast(status==="active"?"✓ Trip created":"✓ Trip created — awaiting manager approval");
-  };
-
-  const approveTrip=async(trip)=>{
-    if(SB_ENABLED){await supabase.from("trips").update({status:"active"}).eq("id",trip.id);}
-    else setTrips(p=>p.map(t=>t.id===trip.id?{...t,status:"active"}:t));
-    // Notify creator
-    if(sbPushNotif&&trip.createdBy)await sbPushNotif(trip.createdBy,`Your trip "${trip.name}" has been approved and is now active`,"success");
-    toast(`✓ Trip "${trip.name}" approved`);
-  };
-
-  const rejectTrip=async(trip)=>{
-    if(SB_ENABLED){await supabase.from("trips").update({status:"rejected"}).eq("id",trip.id);}
-    else setTrips(p=>p.map(t=>t.id===trip.id?{...t,status:"rejected"}:t));
-    if(sbPushNotif&&trip.createdBy)await sbPushNotif(trip.createdBy,`Your trip "${trip.name}" was not approved`,"error");
-    toast(`Trip "${trip.name}" rejected`,"warn");
   };
 
   // Employee sees own + assigned; manager/admin sees all
@@ -3450,7 +3520,7 @@ function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
             <div style={{fontSize:10,color:MUTED,marginTop:1}}>{emps} employees × {fmt(tier.ppu)}/user</div>
           </div>
           <table style={{width:"100%"}}><thead><tr><th>Users</th><th>₹/user/mo</th></tr></thead>
-            <tbody>{TIERED.map(t=><tr key={t.min} style={{background:tier.min===t.min?GL:"transparent"}}><td style={{fontWeight:600,fontSize:12}}>{t.min}–{t.max===999?"50+":t.max}</td><td style={{color:GD,fontWeight:700,fontSize:12}}>{fmt(t.ppu)}</td></tr>)}</tbody>
+            <tbody>{TIERED.map(t=><tr key={t.min} style={{background:tier.min===t.min?GL:"transparent"}}><td style={{fontWeight:600,fontSize:12}}>{t.min}–{t.max===999?"50+":t.max}</td><td style={{color:INK,fontWeight:700,fontSize:12}}>{fmt(t.ppu)}</td></tr>)}</tbody>
           </table>
         </Card>
       </div>
@@ -3543,6 +3613,67 @@ function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
       </Card>
 
       <div style={{marginTop:12}}><Btn onClick={async()=>{if(sbEnabled&&savePolicy){try{await savePolicy(policy);toast("✓ Settings saved to database");}catch(e){toast(e.message,"error");}}else{toast("✓ Settings saved");}}} style={{background:policy.primaryColor||G}}>Save All Settings</Btn></div>
+    </div>
+  );
+}
+
+// ─── TRIP APPROVALS TAB ──────────────────────────────────────────────────────
+function TripApprovalsTab({trips,getUser,approveTrip,rejectTrip,isAdmin}){
+  const pending=trips.filter(t=>t.status==="pending_approval");
+  const recent=trips.filter(t=>t.status==="rejected"||t.status==="active").slice(0,10);
+  return(
+    <div>
+      <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:4}}>Trip Approvals</h1>
+      <p style={{color:MUTED,fontSize:12,marginBottom:16}}>{pending.length} trip{pending.length!==1?"s":""} awaiting approval</p>
+
+      {pending.length===0&&(
+        <Card style={{padding:32,textAlign:"center"}}>
+          <div style={{fontSize:40,marginBottom:8}}>✅</div>
+          <div style={{fontFamily:FD,fontSize:16,fontWeight:700,color:INK,marginBottom:4}}>All caught up!</div>
+          <div style={{color:MUTED,fontSize:13}}>No trips awaiting approval</div>
+        </Card>
+      )}
+
+      {pending.map(t=>{
+        const creator=getUser(t.createdBy);
+        return(
+          <Card key={t.id} style={{padding:18,marginBottom:12,borderLeft:`4px solid #f59e0b`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
+              <div style={{flex:1}}>
+                <div style={{fontFamily:FD,fontSize:15,fontWeight:700,color:INK,marginBottom:4}}>{t.name}</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:8}}>
+                  <span style={{fontSize:11,color:MUTED}}>📅 {t.startDate} → {t.endDate}</span>
+                  <span style={{fontSize:11,color:MUTED}}>📁 {t.type}</span>
+                  {t.currency&&t.currency!=="INR"&&<span style={{background:"#eff6ff",color:"#1d4ed8",padding:"1px 7px",borderRadius:4,fontSize:10,fontWeight:600}}>{t.currency}</span>}
+                  {t.projectCode&&<span style={{background:GL,color:GD,padding:"1px 7px",borderRadius:4,fontSize:10,fontWeight:600}}>{t.projectCode}</span>}
+                  {t.tripMode&&<span style={{background:t.tripMode==="balance"?"#f0fde9":"#eff6ff",color:t.tripMode==="balance"?GD:"#1d4ed8",padding:"1px 7px",borderRadius:4,fontSize:10,fontWeight:600}}>{t.tripMode==="balance"?"Balance":"Reimbursement"}</span>}
+                </div>
+                {creator&&<div style={{display:"flex",alignItems:"center",gap:7}}>
+                  <div style={{width:24,height:24,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:GD,fontSize:9}}>{creator.avatar||inits(creator.name)}</div>
+                  <span style={{fontSize:12,color:MUTED}}>Requested by <strong style={{color:INK}}>{creator.name}</strong> ({creator.dept||creator.role})</span>
+                </div>}
+              </div>
+              <div style={{display:"flex",gap:9,flexShrink:0}}>
+                <Btn onClick={()=>approveTrip(t)} style={{padding:"9px 18px",fontSize:12}}>✓ Approve</Btn>
+                <Btn v="danger" onClick={()=>rejectTrip(t)} style={{padding:"9px 14px",fontSize:12}}>✗ Reject</Btn>
+              </div>
+            </div>
+          </Card>
+        );
+      })}
+
+      {recent.length>0&&<>
+        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,margin:"20px 0 10px"}}>Recently Decided</div>
+        {recent.map(t=>(
+          <div key={t.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",background:"#fff",borderRadius:9,marginBottom:7,border:`1px solid ${BDR}`,opacity:0.7}}>
+            <div>
+              <div style={{fontWeight:600,fontSize:13,color:INK}}>{t.name}</div>
+              <div style={{fontSize:10,color:MUTED}}>{getUser(t.createdBy)?.name||"Unknown"} · {t.startDate}</div>
+            </div>
+            <Badge s={t.status==="active"?"Active":"Rejected"} sm/>
+          </div>
+        ))}
+      </>}
     </div>
   );
 }
@@ -3921,6 +4052,25 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
         {[["Employee",e?.name],["Date",c.date+(c.weekendFlag?" 📅":"")],["Category",`${CI[c.category]||""} ${c.category}`],["Trip",trip?.name],["Vendor",c.vendor||"—"],["Notes",c.notes||"—"],...(c.remarks?[["Remarks",c.remarks]]:[])].map(([k,v])=>(
           <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid #f3f4f6`,fontSize:12}}><span style={{color:MUTED}}>{k}</span><span style={{fontWeight:600,color:INK,maxWidth:260,textAlign:"right"}}>{v}</span></div>
         ))}
+        {/* GST Bifurcation — visible to manager/admin/finance */}
+        {c.gstAmount>0&&<div style={{margin:"10px 0",padding:"10px 12px",background:"#f0fde9",borderRadius:8,border:`1px solid ${GM}`}}>
+          <div style={{fontSize:10,fontWeight:700,color:GD,textTransform:"uppercase",letterSpacing:.5,marginBottom:7}}>GST Bifurcation</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+            <div style={{textAlign:"center"}}><div style={{fontSize:9,color:MUTED,marginBottom:2}}>Base Value</div><div style={{fontWeight:700,fontSize:13,color:INK}}>{fmt(c.amount-(c.gstAmount||0))}</div></div>
+            <div style={{textAlign:"center"}}><div style={{fontSize:9,color:MUTED,marginBottom:2}}>GST Amount</div><div style={{fontWeight:700,fontSize:13,color:INK}}>{fmt(c.gstAmount||0)}</div></div>
+            <div style={{textAlign:"center"}}><div style={{fontSize:9,color:MUTED,marginBottom:2}}>Total</div><div style={{fontWeight:700,fontSize:13,color:INK}}>{fmt(c.amount)}</div></div>
+          </div>
+        </div>}
+        {c.gstAmount>0&&<div style={{padding:"8px 12px",background:c.gstItc?"#f0fde9":c.gstItc===false?"#fee2e2":"#f9fafb",borderRadius:7,border:`1px solid ${c.gstItc?GM:c.gstItc===false?"#fca5a5":BDR}`,marginBottom:8}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <span style={{fontSize:11,fontWeight:600,color:INK}}>GST ITC Status</span>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>{if(setClaims)setClaims(p=>p.map(x=>x.id===c.id?{...x,gstItc:true}:x));}} style={{padding:"3px 10px",borderRadius:5,fontSize:10,fontWeight:700,cursor:"pointer",border:"none",background:c.gstItc===true?"#16a34a":"#e5e7eb",color:c.gstItc===true?"#fff":MUTED}}>✓ ITC Eligible</button>
+              <button onClick={()=>{if(setClaims)setClaims(p=>p.map(x=>x.id===c.id?{...x,gstItc:false}:x));}} style={{padding:"3px 10px",borderRadius:5,fontSize:10,fontWeight:700,cursor:"pointer",border:"none",background:c.gstItc===false?"#dc2626":"#e5e7eb",color:c.gstItc===false?"#fff":MUTED}}>✗ Not Eligible</button>
+            </div>
+          </div>
+          <div style={{fontSize:10,color:MUTED,marginTop:3}}>Finance team marks ITC eligibility for GSTR-2A matching</div>
+        </div>}
         {c.anomaly&&<div style={{background:"#ede9fe",border:"1px solid #c4b5fd",borderRadius:7,padding:"8px 11px",marginTop:9,fontSize:11,color:"#7c3aed"}}>🔍 Anomaly: {(c.anomalyReasons||[]).join(" · ")}</div>}
         {/* Receipts */}
         {displayReceipts.length>0&&<div style={{marginTop:10}}>
@@ -4014,55 +4164,55 @@ export default function Root(){
       customAuthRef.current=true;
       setSession(saved);
       setLoading(false);
-      return;
+      // Still set up listener for auth events (don't return early)
+      // Just don't wait for Supabase to tell us who we are
     }
 
-    // 2. Hard timeout — always fires, no matter what
-    const hardTimer=setTimeout(()=>setLoading(false), 2000);
+    // 2. Hard timeout — always fires
+    const hardTimer=setTimeout(()=>{setLoading(false);},3000);
 
-    // 3. Check existing session directly (fast path)
-    supabase.auth.getSession().then(async({data:{session:sess},error})=>{
-      if(error||!sess?.user){
-        // No active Supabase session → show login
+    // 3. Check existing Supabase session (skip if custom auth already loaded)
+    if(!saved?.customAuth){
+      supabase.auth.getSession().then(async({data:{session:sess},error})=>{
+        if(error||!sess?.user){
+          clearTimeout(hardTimer);
+          setLoading(false);
+          return;
+        }
+        clearTimeout(hardTimer);
+        await resolveSupabaseUser(sess.user.id);
+      }).catch(()=>{
         clearTimeout(hardTimer);
         setLoading(false);
-        return;
-      }
-      // Has a Supabase session → resolve who they are
-      clearTimeout(hardTimer);
-      await resolveSupabaseUser(sess.user.id);
-    }).catch(()=>{
-      clearTimeout(hardTimer);
-      setLoading(false);
-    });
+      });
+    } else {
+      clearTimeout(hardTimer); // custom auth loaded — clear timer immediately
+    }
 
-    // 4. Also listen for auth changes (password recovery, token refresh)
+    // 4. Always listen for auth state changes
     const{data:{subscription}}=supabase.auth.onAuthStateChange(async(event,sess)=>{
       if(event==="PASSWORD_RECOVERY"){
-        setIsReset(true);setSession(null);setLoading(false);
-        clearTimeout(hardTimer);return;
+        setIsReset(true);setSession(null);setLoading(false);return;
       }
       if(event==="SIGNED_OUT"){
         resolving.current=false;
+        // Custom auth users always get SIGNED_OUT from Supabase — ignore it
         const savedSess=loadSess();
         if(savedSess?.customAuth&&savedSess?.sbUser){
           customAuthRef.current=true;
           setSession(savedSess);
-          setLoading(false);clearTimeout(hardTimer);return;
+          setLoading(false);return;
         }
-        if(customAuthRef.current){setLoading(false);clearTimeout(hardTimer);return;}
-        setSession(null);setIsReset(false);setLoading(false);
-        clearTimeout(hardTimer);return;
+        if(customAuthRef.current){setLoading(false);return;}
+        // Real sign out — clear everything
+        setSession(null);setIsReset(false);setLoading(false);return;
       }
-      // TOKEN_REFRESHED — update session silently
       if(event==="TOKEN_REFRESHED"&&sess?.user&&!resolving.current){
         resolving.current=true;
         await resolveSupabaseUser(sess.user.id);
       }
-      // SIGNED_IN fires after Google OAuth redirect
       if(event==="SIGNED_IN"&&sess?.user&&!resolving.current){
         resolving.current=true;
-        clearTimeout(hardTimer);
         await resolveSupabaseUser(sess.user.id);
       }
     });
