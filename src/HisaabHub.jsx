@@ -1222,6 +1222,13 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const noRcpt=co.policy.receiptMandatoryAbove>0&&amount>co.policy.receiptMandatoryAbove&&(!form.receipts||!form.receipts.length);
     const vLow=(form.vendor||"").toLowerCase();
     if(co.policy.vendorBlacklist?.some(v=>vLow.includes(v.toLowerCase()))){toast(`Vendor "${form.vendor}" is blacklisted`,"error");return;}
+    const catEx=(()=>{
+      const cur=co.claims.filter(c=>c.empId===user.id&&c.tripId===tripId&&c.category===form.category&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
+      const tot=co.claims.filter(c=>c.empId===user.id&&c.tripId===tripId&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0)+amount;
+      const nc=cur+amount;
+      const al=co.policy.categoryPct[form.category]||100;
+      return tot>0&&(nc/tot)*100>al;
+    })();
     const auto=!catEx&&!weekend&&!noRcpt&&amount<=co.policy.autoApproveLimit;
     const{isAnomaly,reasons}=detectAnomaly(form,amount);
     const claimId="EXP-"+uid();
