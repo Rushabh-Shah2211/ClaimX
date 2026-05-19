@@ -555,9 +555,11 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
   const[tab,setTab]=useState("companies");
   const[notif,setNtf]=useState(null);
   const[modal,setMdl]=useState(null);
-  const[sbCoList,setSbCoList]=useState(null); // Supabase companies list
+  const[sbCoList,setSbCoList]=useState(null);
   const[loading,setLoading]=useState(false);
   const[form,setForm]=useState({name:"",industry:"",plan:"Starter",maxUsers:5,adminName:"",adminEmail:"",adminPw:""});
+  const[userCounts,setUserCounts]=useState({});
+
   const toast=(msg,t="success")=>{setNtf({msg,t});setTimeout(()=>setNtf(null),3000);};
   const allCo=SB_ENABLED?(sbCoList||[]):Object.values(DB);
   const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",fontFamily:FB,width:"100%"};
@@ -625,7 +627,6 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
   };
 
   // Fetch users count per company for billing tab
-  const [userCounts,setUserCounts]=useState({});
   useEffect(()=>{
     if(!SB_ENABLED)return;
     supabase.from("users").select("company_id").then(({data})=>{
@@ -992,6 +993,11 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         return;
       }
       setCoData(data);
+      // Also refresh edit requests after company data loads
+      if(SB_ENABLED){
+        const{data:erData}=await supabase.from("edit_requests").select("*").eq("company_id",cid).order("created_at",{ascending:false});
+        if(erData)setEditRequests(erData);
+      }
     }catch(e){setSbError(e.message);}
     finally{setLoadingData(false);}
   },[cid]);
@@ -1139,7 +1145,6 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const{data}=await supabase.from("edit_requests").select("*").eq("company_id",cid).order("created_at",{ascending:false});
     if(data)setEditRequests(data);
   };
-  useEffect(()=>{if(co)loadEditRequests();},[!!co]);
 
   const submitEditRequest=async(claim,reason)=>{
     const req={company_id:cid,claim_id:claim.id,requested_by:user.id,requester_name:user.name,reason,status:"Pending"};
