@@ -3846,6 +3846,41 @@ function TripApprovalsTab({trips,getUser,approveTrip,rejectTrip,isAdmin}){
 }
 
 
+// ─── TRAVEL CALENDAR ─────────────────────────────────────────────────────────
+function TravelCalendar({trips,users,isAdmin,myDept}){
+  const td=today();
+  const travellers=trips
+    .filter(t=>t.status==="active"&&t.startDate<=td&&t.endDate>=td)
+    .flatMap(t=>(t.assignedTo||[]).map(uid=>{
+      const u=users.find(x=>x.id===uid);
+      if(!u)return null;
+      if(!isAdmin&&u.dept!==myDept)return null;
+      return{user:u,trip:t};
+    }).filter(Boolean));
+  return(
+    <Card style={{padding:16,marginBottom:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK}}>✈ Travelling Today</div>
+        <span style={{fontSize:10,color:MUTED}}>{td}</span>
+      </div>
+      {travellers.length===0
+        ?<div style={{fontSize:12,color:MUTED,textAlign:"center",padding:"10px 0"}}>No employees on trip today</div>
+        :<div style={{display:"flex",flexDirection:"column",gap:7}}>
+          {travellers.map(({user:u,trip:t},i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",background:"#f8faf6",borderRadius:8,border:`1px solid ${BDR}`}}>
+              <div style={{width:26,height:26,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:GD,fontSize:9,flexShrink:0}}>{u.avatar||inits(u.name)}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:600,fontSize:12,color:INK}}>{u.name} <span style={{fontSize:10,color:MUTED}}>({u.dept||"—"})</span></div>
+                <div style={{fontSize:10,color:MUTED,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.name} · Returns {t.endDate}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      }
+    </Card>
+  );
+}
+
 // ─── SETTLEMENTS TAB ─────────────────────────────────────────────────────────
 function SettlementsTab({trips,claims,users,getUser,isAdmin,myDept}){
   const[expandedEmp,setExpandedEmp]=useState(null);
