@@ -40,7 +40,7 @@ const CATS=DEFAULT_CATS; // backward compat — actual list comes from policy
 const CI={Travel:"✈️",Meals:"🍽️",Accommodation:"🏨","Office Supplies":"📦","Client Entertainment":"🥂",Software:"💻",Training:"📚",Miscellaneous:"🗂️",Other:"📋"};
 // DEPTS is now dynamic — comes from company policy. Use DEFAULT_DEPTS as fallback.
 const DEPTS=DEFAULT_DEPTS; // backward compat alias
-const CURRENCIES=["INR","USD","EUR","GBP","AED","SGD"];
+const CURRENCIES=["INR","USD","EUR","GBP","AED","SGD","JPY","CHF","CAD","AUD","CNY","HKD"];
 const ROLES=[
   // admin = company admin (full access, override, dual-approve, no data hidden)
   {id:"admin",   label:"Admin",   color:"#7c3aed", perms:["approve","view_all","manage_trips","manage_employees","export","submit","override","dual_approve","admin_close","view_finance","set_balance"]},
@@ -911,40 +911,88 @@ function SaUsers({DB,userCounts}){
   const allUsers=SB_ENABLED?[]:(Object.values(DB).flatMap(co=>co.users.map(u=>({...u,coName:co.meta.name}))));
   const[sbUsers,setSbUsers]=useState([]);
   const[editUser,setEditUser]=useState(null);
-  const[editForm,setEditForm]=useState({name:"",role:"employee",dept:"",balance:0});
+  const[newRole,setNewRole]=useState("employee");
+  const[busy,setBusy]=useState(false);
+  const[msg,setMsg]=useState("");
   useEffect(()=>{if(!SB_ENABLED)return;supabase.from("users").select("*,companies(name)").then(({data})=>{if(data)setSbUsers(data);});},[]);
   const rows=SB_ENABLED?sbUsers:allUsers;
 
-  const openEdit=u=>{setEditUser(u);setEditForm({name:u.name,role:u.role,dept:u.dept,balance:u.balance||0});};
-  const saveEdit=async()=>{
-    if(SB_ENABLED){await supabase.from("users").update({name:editForm.name,role:editForm.role,dept:editForm.dept,balance:editForm.balance}).eq("id",editUser.id);const{data}=await supabase.from("users").select("*,companies(name)");if(data)setSbUsers(data);}
-    setEditUser(null);
+  const openEdit=u=>{setEditUser(u);setNewRole(u.role);setMsg("");};
+  const saveRole=async()=>{
+    if(!editUser)return;
+    setBusy(true);setMsg("");
+    try{
+      if(SB_ENABLED){
+        const{error}=await supabase.from("users").update({role:newRole}).eq("id",editUser.id);
+        if(error)throw new Error(error.message);
+        const{data}=await supabase.from("users").select("*,companies(name)");
+        if(data)setSbUsers(data);
+      }
+      setMsg("✓ Role updated to "+newRole);
+      setTimeout(()=>setEditUser(null),1000);
+    }catch(e){setMsg("Error: "+e.message);}
+    finally{setBusy(false);}
   };
-  const inpS2={padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",fontFamily:FB,width:"100%"};
 
+  const suspendUser=async(u)=>{
+    const newSuspended=!u.is_suspended;
+    if(SB_ENABLED){
+      await supabase.from("users").update({is_suspended:newSuspended}).eq("id",u.id);
+      const{data}=await supabase.from("users").select("*,companies(name)");
+      if(data)setSbUsers(data);
+    }
+  };
+
+  const deleteUser=async(u)=>{
+    if(!window.confirm(`Delete ${u.name}? This cannot be undone.`))return;
+    if(SB_ENABLED){
+      await supabase.from("users").delete().eq("id",u.id);
+      setSbUsers(p=>p.filter(x=>x.id!==u.id));
+    }
+  };
+
+  const inpS2={padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",fontFamily:FB,width:"100%"};
   return(<>
-    <Card><table style={{width:"100%"}}><thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Role</th><th>Dept</th><th>Balance</th><th>Edit</th></tr></thead>
-      <tbody>{rows.map(u=><tr key={u.id} className="rh">
-        <td><div style={{display:"flex",alignItems:"center",gap:7}}><div style={{width:28,height:28,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:GD,fontSize:10}}>{u.avatar||inits(u.name)}</div><span style={{fontWeight:600,fontSize:13}}>{u.name}</span></div></td>
-        <td style={{color:MUTED,fontSize:12}}>{u.email}</td>
-        <td style={{fontSize:11}}>{u.coName||(u.companies?.name)||u.company_id||""}</td>
-        <td style={{textTransform:"capitalize",color:MUTED,fontSize:12}}>{u.role}</td>
-        <td style={{color:MUTED,fontSize:12}}>{u.dept}</td>
-        <td style={{fontSize:12,fontWeight:600}}>₹{Number(u.balance||0).toLocaleString("en-IN")}</td>
-        <td><Btn v="outline" onClick={()=>openEdit(u)} style={{padding:"3px 8px",fontSize:11}}>✏</Btn></td>
-      </tr>)}</tbody>
-    </table></Card>
+    <Card>
+      <div style={{padding:"10px 14px",background:"#fef3c7",borderRadius:"8px 8px 0 0",fontSize:11,color:"#92400e",fontWeight:600}}>
+        ⚠ Super Admin can only change user roles, suspend, or delete users. Company data and financial details are private.
+      </div>
+      <div className="mob-scroll">
+      <table style={{width:"100%",minWidth:600}}>
+        <thead><tr><th>Name</th><th>Company</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>{rows.map(u=><tr key={u.id} className="rh" style={{opacity:u.is_suspended?0.6:1}}>
+          <td><div style={{display:"flex",alignItems:"center",gap:7}}>
+            <div style={{width:28,height:28,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:GD,fontSize:10}}>{u.avatar||inits(u.name)}</div>
+            <div><div style={{fontWeight:600,fontSize:13}}>{u.name}</div><div style={{fontSize:10,color:MUTED}}>{u.email||u.username||"—"}</div></div>
+          </div></td>
+          <td style={{fontSize:11}}>{u.coName||(u.companies?.name)||"—"}</td>
+          <td><span style={{background:ROLES.find(r=>r.id===u.role)?.color+"20"||GL,color:ROLES.find(r=>r.id===u.role)?.color||GD,padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700,textTransform:"capitalize"}}>{u.role}</span></td>
+          <td>{u.is_suspended?<span style={{background:"#fee2e2",color:"#dc2626",padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700}}>Suspended</span>:<span style={{background:"#dcfce7",color:"#16a34a",padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700}}>Active</span>}</td>
+          <td><div style={{display:"flex",gap:5}}>
+            <Btn v="outline" onClick={()=>openEdit(u)} style={{padding:"3px 8px",fontSize:11}}>Role</Btn>
+            <Btn v={u.is_suspended?"primary":"warning"} onClick={()=>suspendUser(u)} style={{padding:"3px 8px",fontSize:11}}>{u.is_suspended?"Activate":"Suspend"}</Btn>
+            <Btn v="danger" onClick={()=>deleteUser(u)} style={{padding:"3px 8px",fontSize:11}}>✕</Btn>
+          </div></td>
+        </tr>)}</tbody>
+      </table>
+      </div>
+    </Card>
     {editUser&&(
-      <div style={{position:"fixed",inset:0,background:"#00000060",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,backdropFilter:"blur(3px)"}} onClick={()=>setEditUser(null)}>
-        <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:28,width:420,boxShadow:"0 24px 60px #0003"}}>
-          <h3 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK,marginBottom:16}}>Edit User — {editUser.email}</h3>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:12}}>
-            <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:4,textTransform:"uppercase"}}>Name</label><input value={editForm.name} onChange={e=>setEditForm({...editForm,name:e.target.value})} style={inpS2}/></div>
-            <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:4,textTransform:"uppercase"}}>Department</label><select value={editForm.dept} onChange={e=>setEditForm({...editForm,dept:e.target.value})} style={{...inpS2,appearance:"none"}}>{DEPTS.map(d=><option key={d}>{d}</option>)}</select></div>
-            <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:4,textTransform:"uppercase"}}>Role</label><select value={editForm.role} onChange={e=>setEditForm({...editForm,role:e.target.value})} style={{...inpS2,appearance:"none"}}>{ROLES.map(r=><option key={r.id} value={r.id}>{r.label}</option>)}</select></div>
-            <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:4,textTransform:"uppercase"}}>Wallet Balance ₹</label><input type="number" value={editForm.balance} onChange={e=>setEditForm({...editForm,balance:parseFloat(e.target.value)||0})} style={inpS2}/></div>
+      <div style={{position:"fixed",inset:0,background:"#00000060",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,backdropFilter:"blur(3px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)setEditUser(null);}}>
+        <div onMouseDown={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:28,width:"min(420px,94vw)",boxShadow:"0 24px 60px #0003"}}>
+          <h3 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK,marginBottom:4}}>Change Role</h3>
+          <p style={{color:MUTED,fontSize:12,marginBottom:16}}>{editUser.name} · {editUser.companies?.name||editUser.company_id}</p>
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:6,textTransform:"uppercase"}}>New Role</label>
+            <select value={newRole} onChange={e=>setNewRole(e.target.value)} style={{...inpS2,appearance:"none"}}>
+              {ROLES.map(r=><option key={r.id} value={r.id}>{r.label}</option>)}
+            </select>
           </div>
-          <div style={{display:"flex",gap:9}}><Btn onClick={saveEdit} style={{flex:1,padding:11}}>Save Changes</Btn><Btn v="outline" onClick={()=>setEditUser(null)}>Cancel</Btn></div>
+          {msg&&<div style={{fontSize:12,marginBottom:10,color:msg.startsWith("✓")?"#16a34a":"#dc2626",padding:"6px 10px",background:msg.startsWith("✓")?"#f0fde9":"#fee2e2",borderRadius:6}}>{msg}</div>}
+          <div style={{display:"flex",gap:9}}>
+            <Btn onClick={saveRole} disabled={busy} style={{flex:1,padding:11}}>{busy?"Saving…":"Save Role"}</Btn>
+            <Btn v="outline" onClick={()=>setEditUser(null)}>Cancel</Btn>
+          </div>
         </div>
       </div>
     )}
@@ -1392,6 +1440,37 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     }
   };
 
+  const[showFundReq,setSFR]=useState(false);
+  const[showShortcuts,setSSC]=useState(false);
+
+  // Keyboard shortcuts
+  useEffect(()=>{
+    const handler=(e)=>{
+      if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"||e.target.tagName==="SELECT")return;
+      if(e.key==="?"||e.key==="/"){e.preventDefault();setSSC(p=>!p);return;}
+      if(e.key==="Escape"){setMdl(null);setSSC(false);setSFR(false);return;}
+      if(e.ctrlKey||e.metaKey||e.altKey)return;
+      const map={n:"submit",a:"approvals",c:"claims",t:"trips",d:"dashboard",f:"finance_view",i:"inbox"};
+      if(map[e.key.toLowerCase()]){e.preventDefault();setTab(map[e.key.toLowerCase()]);}
+    };
+    window.addEventListener("keydown",handler);
+    return()=>window.removeEventListener("keydown",handler);
+  },[]);
+
+  // Fund request handler
+  const handleFundRequest=async(req)=>{
+    const tripName=co.trips.find(t=>t.id===req.tripId)?.name||req.tripId;
+    const deptMgrs=co.users.filter(u=>["manager","admin"].includes(u.role));
+    for(const m of deptMgrs){
+      await sbPushNotif(m.id,`💰 Fund request: ${req.empName} needs ₹${req.amount.toLocaleString("en-IN")} for "${tripName}" — ${req.reason}`,"warn");
+    }
+    if(SB_ENABLED){
+      await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});
+      await loadFromSB();
+    }
+    toast("✓ Fund request sent to manager");
+  };
+
   // ── Edit Request handlers ──────────────────────────────────────────────────
   // Resolve the effective approver (handles delegation)
   const effectiveApprover=(userId)=>{
@@ -1513,7 +1592,13 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const{isAnomaly,reasons}=detectAnomaly(form,amount);
     const claimId="EXP-"+uid();
 
-    const claimData={id:claimId,tripId,empId:user.id,date:claimDate,category:form.category,desc:form.desc,amount,origAmount:parseFloat(form.origAmount||amount),origCur:form.currency||"INR",status:auto?"Approved":"Pending",autoApproved:auto,receipts:form.receipts||[],remarks:auto?"Auto-approved":"",flagged:catEx,anomaly:isAnomaly,anomalyReasons:reasons,comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||"",projectCode:form.projectCode||trip?.projectCode||""};
+    const claimData={id:claimId,tripId,empId:user.id,date:claimDate,category:form.category,desc:form.desc,amount,origAmount:parseFloat(form.origAmount||amount),origCur:form.currency||"INR",
+      // Never reveal auto-approval to employee — show as plain "Pending" initially
+      status:auto?"Approved":"Pending",autoApproved:auto,
+      receipts:form.receipts||[],
+      // Never store "Auto-approved" in remarks visible to employee — store neutral text
+      remarks:auto?"Approved":"",
+      flagged:catEx,anomaly:isAnomaly,anomalyReasons:reasons,comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||"",projectCode:form.projectCode||trip?.projectCode||""};
 
     if(!online){
       if(SB_ENABLED){
@@ -1971,6 +2056,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       {!online&&<div style={{position:"fixed",bottom:0,left:0,right:0,background:"#92400e",color:"#fef3c7",textAlign:"center",padding:"7px",fontSize:12,fontWeight:600,zIndex:999}}>📴 Offline — claims queued ({queue.length}) · will sync when connected</div>}
       {showHelp&&<HelpManual userRole={user.role} onClose={()=>setSHelp(false)}/>}
       {showCam&&<CameraModal onCapture={f=>{setCamF(f);setSCam(false);setTab("submit");}} onClose={()=>setSCam(false)}/>}
+      {showShortcuts&&<ShortcutHelp onClose={()=>setSSC(false)}/>}
+      {showFundReq&&hasPerm("submit")&&<FundRequestModal trips={co.trips} user={user} cid={cid} onClose={()=>setSFR(false)} onSubmit={handleFundRequest} sbEnabled={SB_ENABLED}/>}
       {showProf&&(
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:800,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setSPro(false)}>
           <div onClick={e=>e.stopPropagation()} style={{background:"#f5faf3",borderRadius:16,padding:28,width:580,maxHeight:"90vh",overflow:"auto",boxShadow:"0 20px 60px #0003"}}>
@@ -2019,23 +2106,27 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       </div>
 
       {/* CONTENT */}
-      <div style={{flex:1,padding:"16px 18px",overflow:"auto",minWidth:0,paddingBottom:72}} className="fin">
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,paddingBottom:12,borderBottom:`1px solid ${BDR}`}}>
-          <div style={{display:"flex",alignItems:"center",gap:9}}>
-            <div style={{width:30,height:30,borderRadius:8,background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,color:GD,fontSize:11}}>{inits(activeMeta.name)}</div>
-            <div><div style={{fontWeight:700,color:INK,fontSize:14}}>{activeMeta.name}</div><div style={{fontSize:10,color:MUTED}}>{activeMeta.industry} · {activeMeta.plan} Plan{user.delegateTo?` · Delegating→${getUser(user.delegateTo)?.name}`:""}</div></div>
+      <div style={{flex:1,padding:"16px 18px",overflow:"auto",minWidth:0,paddingBottom:80}} className="fin">
+        {/* FX Ticker Tape */}
+        <div style={{margin:"-16px -18px 12px -18px"}}><FXTicker/></div>
+        {/* Top bar */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,paddingBottom:10,borderBottom:`1px solid ${BDR}`,flexWrap:"wrap",gap:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0,flex:1}}>
+            <div style={{width:30,height:30,borderRadius:8,background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,color:GD,fontSize:11,flexShrink:0}}>{inits(activeMeta.name)}</div>
+            <div style={{minWidth:0}}><div style={{fontWeight:700,color:INK,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{activeMeta.name}</div><div style={{fontSize:10,color:MUTED}}>{activeMeta.plan}{user.delegateTo?` · →${getUser(user.delegateTo)?.name?.split(" ")[0]}`:""}</div></div>
           </div>
-          <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}>
+          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
             {hasPerm("export")&&<>
               <Btn v="outline" onClick={exportCSV}   style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ CSV</Btn>
               <Btn v="outline" onClick={exportTally} style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ Tally</Btn>
               <Btn v="outline" onClick={exportGSTR}  style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ GSTR</Btn>
               <Btn v="outline" onClick={exportZoho}  style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ Zoho</Btn>
-              <Btn v="dark"    onClick={exportSAP}   style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ SAP</Btn>
               {isManager&&<Btn v="outline" onClick={exportMonthlyDigest} style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">📊 Digest</Btn>}
             </>}
+            {isEmployee&&<button onClick={()=>setSFR(true)} title="Request Funds" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>💰</button>}
             <button onClick={()=>setSCam(true)} title="Camera" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>📷</button>
             <button onClick={()=>{setTab("inbox");markRead();}} style={{position:"relative",background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>🔔{myNotifs.length>0&&<span style={{position:"absolute",top:-4,right:-4,width:16,height:16,background:"#ef4444",borderRadius:"50%",color:"#fff",fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{myNotifs.length}</span>}</button>
+            <button onClick={()=>setSSC(true)} title="Keyboard Shortcuts (?)" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>⌨</button>
             <button onClick={()=>setSHelp(true)} style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>❓</button>
             {SB_ENABLED&&<button onClick={loadFromSB} style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>🔄</button>}
           </div>
@@ -3523,6 +3614,150 @@ function FinanceTab({claims,trips,getUser,users,isAdmin,policy,onExportPDF}){
   );
 }
 
+// ─── FX TICKER TAPE ──────────────────────────────────────────────────────────
+function FXTicker(){
+  const PAIRS=["USD","EUR","GBP","CHF","JPY","CAD","AUD","SGD","AED","HKD","CNY"];
+  const[rates,setRates]=useState(null);
+  const[err,setErr]=useState(false);
+  useEffect(()=>{
+    // Free FX API — exchangerate-api.com open endpoint
+    fetch("https://open.er-api.com/v6/latest/INR")
+      .then(r=>r.json())
+      .then(d=>{
+        if(d.result==="success"){
+          // Convert from INR base: rate = how many INR per 1 foreign currency = 1/d.rates[cur]
+          const r={};
+          PAIRS.forEach(c=>{if(d.rates[c])r[c]=+(1/d.rates[c]).toFixed(4);});
+          setRates(r);
+        }else setErr(true);
+      })
+      .catch(()=>setErr(true));
+  },[]);
+
+  if(err||!rates)return null;
+
+  const items=PAIRS.filter(c=>rates[c]).map(c=>`1 ${c} = ₹${rates[c].toLocaleString("en-IN")}`);
+  // Duplicate for seamless loop
+  const display=[...items,...items];
+
+  return(
+    <div style={{background:"#0f1c09",color:G,fontSize:11,fontFamily:FB,fontWeight:600,overflow:"hidden",borderBottom:"1px solid rgba(126,217,87,.2)",height:24,display:"flex",alignItems:"center",position:"relative"}}>
+      <div style={{background:"#0f1c09",color:G,padding:"0 10px",fontSize:10,fontWeight:700,letterSpacing:1,flexShrink:0,borderRight:"1px solid rgba(126,217,87,.2)",height:"100%",display:"flex",alignItems:"center",zIndex:1}}>
+        💱 LIVE FX
+      </div>
+      <div style={{overflow:"hidden",flex:1,position:"relative"}}>
+        <style>{`@keyframes ticker{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}`}</style>
+        <div style={{display:"flex",gap:0,animation:"ticker 60s linear infinite",whiteSpace:"nowrap"}}>
+          {display.map((item,i)=>(
+            <span key={i} style={{padding:"0 20px",color:"rgba(126,217,87,.85)",borderRight:"1px solid rgba(126,217,87,.15)"}}>
+              {item}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div style={{fontSize:9,color:"rgba(126,217,87,.4)",padding:"0 8px",flexShrink:0}}>er-api.com</div>
+    </div>
+  );
+}
+
+// ─── FUND REQUEST ─────────────────────────────────────────────────────────────
+function FundRequestModal({trips,user,cid,onClose,onSubmit,sbEnabled}){
+  const myTrips=trips.filter(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(user.id)));
+  const[tripId,setTripId]=useState(myTrips[0]?.id||"");
+  const[amount,setAmount]=useState("");
+  const[reason,setReason]=useState("");
+  const[busy,setBusy]=useState(false);
+  const[done,setDone]=useState(false);
+  const inpS={width:"100%",padding:"10px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"#fafff8",outline:"none",fontFamily:FB};
+
+  const submit=async()=>{
+    if(!tripId||!amount||!reason){return;}
+    setBusy(true);
+    const req={id:"FR-"+Date.now(),tripId,empId:user.id,empName:user.name,amount:parseFloat(amount),reason,status:"Pending",date:today(),companyId:cid};
+    await onSubmit(req);
+    setDone(true);setBusy(false);
+    setTimeout(onClose,2000);
+  };
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,backdropFilter:"blur(3px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div onMouseDown={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:28,width:"min(460px,94vw)",boxShadow:"0 24px 60px #0003"}}>
+        <h3 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK,marginBottom:6}}>💰 Fund Request</h3>
+        <p style={{color:MUTED,fontSize:12,marginBottom:18}}>Request additional funds for a trip. Your manager will review and approve.</p>
+        {done?(
+          <div style={{textAlign:"center",padding:"20px 0"}}>
+            <div style={{fontSize:40,marginBottom:8}}>✅</div>
+            <div style={{fontWeight:700,color:INK}}>Request Submitted!</div>
+            <div style={{fontSize:12,color:MUTED,marginTop:4}}>Your manager has been notified.</div>
+          </div>
+        ):(
+          <>
+            <div style={{marginBottom:12}}>
+              <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Trip</label>
+              <select value={tripId} onChange={e=>setTripId(e.target.value)} style={{...inpS,appearance:"none"}}>
+                {myTrips.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+                {myTrips.length===0&&<option value="">No active trips</option>}
+              </select>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Amount Requested ₹</label>
+              <input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="e.g. 5000" style={inpS}/>
+            </div>
+            <div style={{marginBottom:18}}>
+              <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Reason / Justification</label>
+              <textarea value={reason} onChange={e=>setReason(e.target.value)} rows={3} placeholder="Explain why additional funds are needed..." style={{...inpS,resize:"vertical"}}/>
+            </div>
+            <div style={{display:"flex",gap:9}}>
+              <Btn onClick={submit} disabled={busy||!tripId||!amount||!reason||myTrips.length===0} style={{flex:1,padding:11}}>{busy?"Submitting…":"Submit Request"}</Btn>
+              <Btn v="outline" onClick={onClose}>Cancel</Btn>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── KEYBOARD SHORTCUTS ───────────────────────────────────────────────────────
+const SHORTCUTS=[
+  {key:"N",label:"New Expense",desc:"Open expense submission"},
+  {key:"A",label:"Approvals",desc:"Go to approvals"},
+  {key:"C",label:"Claims",desc:"View claims"},
+  {key:"T",label:"Trips",desc:"View trips"},
+  {key:"D",label:"Dashboard",desc:"Go to dashboard"},
+  {key:"F",label:"Finance",desc:"Finance view"},
+  {key:"I",label:"Inbox",desc:"Open inbox"},
+  {key:"?",label:"Shortcuts",desc:"Show this help"},
+  {key:"Esc",label:"Close",desc:"Close any modal"},
+];
+
+function ShortcutHelp({onClose}){
+  return(
+    <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div onMouseDown={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:28,width:"min(480px,94vw)",boxShadow:"0 24px 60px #0003"}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
+          <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>⌨ Keyboard Shortcuts</div>
+          <button onClick={onClose} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:MUTED}}>✕</button>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+          {SHORTCUTS.map(s=>(
+            <div key={s.key} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:"#f8faf6",borderRadius:8}}>
+              <kbd style={{background:"#0f1c09",color:G,padding:"3px 8px",borderRadius:5,fontSize:11,fontWeight:700,fontFamily:"monospace",minWidth:28,textAlign:"center"}}>{s.key}</kbd>
+              <div>
+                <div style={{fontSize:12,fontWeight:600,color:INK}}>{s.label}</div>
+                <div style={{fontSize:10,color:MUTED}}>{s.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{marginTop:14,padding:"8px 12px",background:GL,borderRadius:8,fontSize:10,color:MUTED,textAlign:"center"}}>
+          Press <kbd style={{background:"#0f1c09",color:G,padding:"1px 5px",borderRadius:3,fontSize:10,fontFamily:"monospace"}}>?</kbd> anywhere to show/hide this menu
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── HELP MANUAL ─────────────────────────────────────────────────────────────
 const HELP_CONTENT={
   manager:{
@@ -3739,8 +3974,10 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
           </div>
         </div>}
         {type==="detail"&&<div style={{marginTop:11,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-          <Badge s={c.autoApproved&&c.status==="Approved"?"Auto-Approved":c.status}/>
+          {/* Never show auto-approved status to employees — just show "Approved" */}
+          <Badge s={c.status==="Approved"||c.status==="Auto-Approved"?"Approved":c.status}/>
           <div style={{display:"flex",gap:7}}>
+            {/* Edit request: only for own approved claims, no auto-approved reveal */}
             {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&onEditRequest&&(
               <Btn v="warning" onClick={()=>setMdl({type:"editRequest",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Request Edit</Btn>
             )}
@@ -3923,10 +4160,18 @@ export default function Root(){
     resolving.current=false;
     const isCustomAuth=session?.customAuth||customAuthRef.current;
     customAuthRef.current=false;
+    // Clear session storage first
+    saveSess(null);
+    try{
+      localStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem(STORAGE_KEY);
+    }catch(e){}
     if(SB_ENABLED&&!isCustomAuth){
-      try{await supabase.auth.signOut();}catch(e){console.warn("signOut error:",e);}
+      try{await supabase.auth.signOut();}catch(e){console.warn("signOut:",e);}
     }
-    setSession(null);setIsReset(false);saveSess(null);
+    setSession(null);setIsReset(false);
+    // Force hard redirect to clear all stale state
+    setTimeout(()=>{ window.location.replace("/"); },50);
   };
 
   // If we have a valid custom auth session already, skip the loading screen entirely
