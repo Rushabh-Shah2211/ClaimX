@@ -57,6 +57,13 @@ const GLSTYLE=`@import url('https://fonts.googleapis.com/css2?family=Playfair+Di
 @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
 .fin{animation:fadeIn .2s ease}
+/* Custom scrollbar */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(126,217,87,.35);border-radius:10px}
+::-webkit-scrollbar-thumb:hover{background:rgba(126,217,87,.6)}
+[data-dark="true"] ::-webkit-scrollbar-thumb{background:rgba(126,217,87,.25)}
+* {scrollbar-width:thin;scrollbar-color:rgba(126,217,87,.4) transparent}
 input::placeholder{color:var(--muted)}
 th{text-align:left;padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--th-border);color:var(--ink)}
 td{padding:11px 14px;font-size:13px;color:var(--td-color);border-bottom:1px solid var(--td-border)}
@@ -140,6 +147,7 @@ const mapTrip=r=>r?({
   categoryLimits:r.category_limits||{},
   settledAt:r.settled_at||null,
   settledBy:r.settled_by||null,
+  employeeBudgets:r.employee_budgets||{},
 }):null;
 const mapClaim=r=>r?({id:r.id,companyId:r.company_id,tripId:r.trip_id,empId:r.emp_id,date:r.date,category:r.category,desc:r.description,vendor:r.vendor,amount:parseFloat(r.amount)||0,origAmount:parseFloat(r.orig_amount)||0,origCur:r.orig_currency,status:r.status,autoApproved:r.auto_approved,remarks:r.remarks,flagged:r.flagged,anomaly:r.anomaly,anomalyReasons:r.anomaly_reasons||[],weekendFlag:r.weekend_flag,notes:r.notes,receipts:(r.receipts||[]).map(rc=>({id:rc.id,name:rc.file_name,storagePath:rc.storage_path,type:rc.mime_type,url:null})),comments:(r.claim_comments||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at)).map(c=>({id:c.id,userId:c.user_id,name:c.user_name,text:c.text,time:new Date(c.created_at).toLocaleString()}))}):null;
 const mapPolicy=r=>r?({autoApproveLimit:parseFloat(r.auto_approve_limit),reimbursementMode:r.reimbursement_mode,receiptMandatoryAbove:parseFloat(r.receipt_mandatory_above),weekendRequiresApproval:r.weekend_requires_approval,multiLevelApproval:r.multi_level_approval,approvalLevels:r.approval_levels,vendorWhitelist:r.vendor_whitelist||[],vendorBlacklist:r.vendor_blacklist||[],departmentBudgets:r.department_budgets||{},categoryPct:r.category_pct||{},scheduledReports:r.scheduled_reports||{}}):null;
@@ -2555,7 +2563,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   const navItems=[
     {id:"dashboard", icon:"▦",  label:"Dashboard"},
-    {id:"claims",    icon:"📋", label:isAdmin?"All Claims":isManager?"Dept Claims":"My Claims"},
+    {id:"claims",    icon:"📋", label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"},
     ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
     {id:"trips",     icon:"🗂️", label:"Trips / Periods"},
     ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:pendingClaims.length+pendingTopups.length}]:[{id:"topup",icon:"💰",label:"Top-up"}]),
@@ -2563,13 +2571,12 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     ...(canApprove?[{id:"trip_approvals",icon:"🗺️",label:"Trip Approvals",badge:co.trips.filter(t=>t.status==="pending_approval").length}]:[]),
     ...(canApprove&&editRequests.filter(r=>r.status==="Pending").length>0?[{id:"editreqs",icon:"✏️",label:"Edit Requests",badge:editRequests.filter(r=>r.status==="Pending").length}]:[]),
     {id:"analytics", icon:"📊", label:"Analytics"},
-    {id:"inbox",     icon:"🔔", label:"Inbox",badge:myNotifs.length},
-    {id:"audit",     icon:"🗒️", label:"Audit Log"},
+    // Inbox moved to notification bell in top bar - not in sidebar
+    ...(canApprove||isFinance?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
     ...(isAdmin||isFinance?[{id:"finance_view",icon:"💼",label:"Finance"}]:[]),
     ...(isAdmin||isManager?[{id:"employees",icon:"👥",label:"Employees"}]:[]),
     ...(isAdmin?[{id:"policy",icon:"⚙️",label:"Policy"}]:[]),
-    // My History tab for employees
-    ...(!isManager&&!isAdmin?[{id:"my_history",icon:"🗃️",label:"My History"}]:[]),
+    // My History merged into My Expenses (claims tab)
     {id:"help",      icon:"❓", label:"Help"},
   ];
 
@@ -2616,7 +2623,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           <button onClick={()=>setSB(!sidebar)} style={{width:26,height:26,borderRadius:7,background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.1)",color:"rgba(255,255,255,.4)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,flexShrink:0}}>{sidebar?"◀":"▶"}</button>
         </div>
         {sidebar&&<div style={{background:"rgba(255,255,255,.06)",borderRadius:8,padding:"7px 10px",marginBottom:10}}><div style={{fontSize:9,color:G,fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:1}}>Workspace</div><div style={{color:"#fff",fontSize:11,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{activeMeta.name}</div></div>}
-        {sidebar&&<div style={{background:co.policy.reimbursementMode?"#1e3a5f":"#1a3510",border:`1px solid ${co.policy.reimbursementMode?"#3b82f6":G}`,borderRadius:7,padding:"4px 9px",marginBottom:6,fontSize:9,fontWeight:600,color:co.policy.reimbursementMode?"#93c5fd":G}}>{co.policy.reimbursementMode?"💳 Reimbursement Mode":"💼 Balance Mode"}</div>}
+        {sidebar&&<div style={{background:co.policy.reimbursementMode?"#1e3a5f":"#1a3510",border:`1px solid ${co.policy.reimbursementMode?"#3b82f6":G}`,borderRadius:7,padding:"4px 9px",marginBottom:6,fontSize:9,fontWeight:600,color:co.policy.reimbursementMode?"#93c5fd":G}}>{user.role==="admin"?"🔑 Admin":user.role==="manager"?"👔 Manager":user.role==="finance"?"💼 Finance":"👤 Employee"}</div>}
         
         <nav style={{display:"flex",flexDirection:"column",gap:2,overflow:"auto",flex:1}}>
           {navItems.map(item=>(
@@ -2633,7 +2640,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           {sidebar?(
             <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:7,cursor:"pointer"}} onClick={()=>setSPro(true)}>
               <div style={{width:28,height:28,borderRadius:"50%",background:canApprove?G:"#334155",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:700,fontSize:10,flexShrink:0}}>{user.avatar}</div>
-              <div style={{overflow:"hidden"}}><div style={{color:"#fff",fontSize:11,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{user.name.split(" ")[0]}</div><div style={{color:"rgba(255,255,255,.35)",fontSize:9,textTransform:"capitalize"}}>{user.role}</div></div>
+              <div style={{overflow:"hidden"}}><div style={{color:"#fff",fontSize:11,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{user.name.split(" ")[0]}</div><div style={{color:"rgba(255,255,255,.35)",fontSize:9,textTransform:"capitalize"}}>{user.role==="admin"?"Admin":user.role==="manager"?"Manager":user.role==="finance"?"Finance":"Employee"}</div></div>
             </div>
           ):(
             <div style={{display:"flex",justifyContent:"center",marginBottom:7}} onClick={()=>setSPro(true)}>
@@ -2713,7 +2720,24 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           isManager={isManager} isAdmin={isAdmin} getUser={getUser} users={co.users}
           closeTrip={closeTrip} toast={toast} uid={user.id} userRole={user.role}
           sbPushNotif={sbPushNotif} companyUsers={co.users}
-          sbCreateTrip={sbCreateTrip}/>}
+          sbCreateTrip={sbCreateTrip}
+          sbUpdateTrip={async(tripId,patch)=>{
+            if(SB_ENABLED){
+              const dbPatch={};
+              if(patch.name!==undefined)dbPatch.name=patch.name;
+              if(patch.endDate!==undefined)dbPatch.end_date=patch.endDate;
+              if(patch.startDate!==undefined)dbPatch.start_date=patch.startDate;
+              if(patch.budget!==undefined)dbPatch.budget=patch.budget;
+              if(patch.categoryLimits!==undefined)dbPatch.category_limits=patch.categoryLimits;
+              if(patch.employeeBudgets!==undefined)dbPatch.employee_budgets=patch.employeeBudgets;
+              const{error}=await supabase.from("trips").update(dbPatch).eq("id",tripId);
+              if(error)throw new Error(error.message);
+              await loadFromSB();
+            } else {
+              setTrips(p=>p.map(t=>t.id===tripId?{...t,...patch}:t));
+            }
+          }}
+        />}
         {tab==="approvals"&&canApprove&&<>
           <ApprovalsTab pendingClaims={pendingClaims} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip}/>
           {editRequests.length>0&&<Card style={{padding:16,marginTop:16}}>
@@ -2722,7 +2746,11 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           </Card>}
         </>}
         {tab==="topup"&&!canApprove&&<TopupTab user={user} topups={co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} sbCreateTopup={async(req)=>{if(SB_ENABLED){await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending"});await loadFromSB();}}}/>}
-        {tab==="analytics"&&<Analytics claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept||c.empId===user.id;}):co.claims.filter(c=>c.empId===user.id)} trips={co.trips} users={co.users} isManager={isManager} getUser={getUser} policy={co.policy} printSummary={printSummary} user={user}/>}
+        {tab==="analytics"&&<Analytics
+          claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept;}):co.claims.filter(c=>c.empId===user.id)}
+          trips={isAdmin?co.trips:isManager?co.trips.filter(t=>{const assigned=(t.assignedTo||[]);return assigned.some(id=>{const u=getUser(id);return u?.dept===myUser?.dept;})||t.createdBy===user.id;}):co.trips.filter(t=>(t.assignedTo||[]).includes(user.id)||t.createdBy===user.id)}
+          users={isAdmin?co.users:isManager?co.users.filter(u=>u.dept===myUser?.dept):co.users.filter(u=>u.id===user.id)}
+          isManager={isManager} isAdmin={isAdmin} getUser={getUser} policy={co.policy} printSummary={printSummary} user={user}/>}
         {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
         {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={co.auditLog||[]} claims={co.claims} getUser={getUser}/>}
         {tab==="my_history"&&!isManager&&!isAdmin&&<MyHistoryTab user={user} trips={co.trips} claims={co.claims} getUser={getUser} exportClaimsPDF={exportClaimsPDF}/>}
@@ -2933,7 +2961,178 @@ function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,subm
   );
 }
 
-// ─── INLINE TRIP MODAL (from Submit tab) ─────────────────────────────────────
+// ─── TRIP EDIT MODAL ──────────────────────────────────────────────────────────
+function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin}){
+  const[form,setForm]=useState({
+    name:trip.name,startDate:trip.startDate,endDate:trip.endDate,
+    projectCode:trip.projectCode||"",currency:trip.currency||"INR",
+  });
+  const[busy,setBusy]=useState(false);
+  const inpS={width:"100%",padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB};
+  const save=async()=>{
+    if(!form.name?.trim()||!form.endDate){alert("Name and end date required");return;}
+    setBusy(true);
+    try{
+      await onSave(trip.id,{name:form.name,startDate:form.startDate,endDate:form.endDate,projectCode:form.projectCode,currency:form.currency});
+      onClose();
+    }catch(e){alert("Update failed: "+e.message);}
+    finally{setBusy(false);}
+  };
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:26,width:"min(480px,96vw)",boxShadow:"0 24px 60px rgba(0,0,0,.2)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
+          <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>Edit Trip</div>
+          <button onClick={onClose} style={{background:"none",border:"none",fontSize:18,cursor:"pointer",color:MUTED}}>✕</button>
+        </div>
+        {!isAdmin&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"7px 11px",marginBottom:12,fontSize:11,color:"#92400e"}}>Changes will be saved directly. Admin approval not required for managers.</div>}
+        <div style={{marginBottom:11}}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Trip Name</label><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} style={inpS}/></div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:11}}>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Start Date</label><input type="date" value={form.startDate} onChange={e=>setForm({...form,startDate:e.target.value})} style={inpS}/></div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>End Date</label><input type="date" value={form.endDate} min={form.startDate} onChange={e=>setForm({...form,endDate:e.target.value})} style={inpS}/></div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:16}}>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Project / Cost Centre</label><input value={form.projectCode} onChange={e=>setForm({...form,projectCode:e.target.value})} style={inpS}/></div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Currency</label>
+            <select value={form.currency} onChange={e=>setForm({...form,currency:e.target.value})} style={{...inpS,appearance:"none"}}>
+              {["INR","USD","EUR","GBP","AED","SGD","JPY","CHF","CAD","AUD"].map(c=><option key={c}>{c}</option>)}
+            </select></div>
+        </div>
+        <div style={{display:"flex",gap:9,justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{padding:"9px 16px",borderRadius:8,border:`1px solid ${BDR}`,background:"transparent",color:MUTED,cursor:"pointer",fontSize:13}}>Cancel</button>
+          <Btn onClick={save} disabled={busy} style={{padding:"9px 22px",fontSize:13}}>{busy?"Saving…":"Save Changes"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── TRIP BUDGET MODAL (per-employee budgets) ─────────────────────────────────
+function TripBudgetModal({trip,users,claims,getUser,onClose,onSave,sbCreateTopup}){
+  const assigned=(trip.assignedTo||[]).map(id=>users.find(u=>u.id===id)).filter(Boolean);
+  const empBudgets=trip.employeeBudgets||{};
+  const[budgets,setBudgets]=useState(()=>{
+    const b={};
+    assigned.forEach(u=>{b[u.id]=empBudgets[u.id]||{allocated:0,topups:0,note:""};});
+    return b;
+  });
+  const[busy,setBusy]=useState(false);
+  const[showTopup,setShowTopup]=useState(null); // empId
+  const[topupAmt,setTopupAmt]=useState("");
+  const[topupNote,setTopupNote]=useState("");
+  const inpS={padding:"8px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:13,background:"var(--input-bg,#fafff8)",width:"100%"};
+
+  const getEmpSpent=(empId)=>claims.filter(c=>c.tripId===trip.id&&c.empId===empId&&c.status==="Approved").reduce((s,c)=>s+c.amount,0);
+  const totalAllocated=Object.values(budgets).reduce((s,b)=>s+(parseFloat(b.allocated)||0)+(parseFloat(b.topups)||0),0);
+
+  const save=async()=>{
+    setBusy(true);
+    try{await onSave(trip.id,{employeeBudgets:budgets,budget:totalAllocated});onClose();}
+    catch(e){alert("Save failed: "+e.message);}
+    finally{setBusy(false);}
+  };
+
+  const addTopup=async(empId)=>{
+    const amt=parseFloat(topupAmt);
+    if(!amt||amt<=0){alert("Enter a valid amount");return;}
+    setBudgets(p=>({...p,[empId]:{...p[empId],topups:(parseFloat(p[empId].topups)||0)+amt}}));
+    if(sbCreateTopup)await sbCreateTopup({empId,tripId:trip.id,amount:amt,reason:topupNote,date:today(),status:"Approved"});
+    setShowTopup(null);setTopupAmt("");setTopupNote("");
+  };
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:26,width:"min(640px,96vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 24px 60px rgba(0,0,0,.25)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div>
+            <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>Per-Employee Budgets</div>
+            <div style={{fontSize:11,color:MUTED}}>{trip.name} · {trip.currency||"INR"}</div>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",fontSize:18,cursor:"pointer",color:MUTED}}>✕</button>
+        </div>
+
+        {/* Summary */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16}} className="mob-grid-1">
+          <Card style={{padding:12,textAlign:"center"}}>
+            <div style={{fontSize:9,color:MUTED,textTransform:"uppercase",fontWeight:700}}>Total Budget</div>
+            <div style={{fontFamily:FD,fontSize:18,fontWeight:700,color:INK}}>{fmt(trip.budget||0)}</div>
+          </Card>
+          <Card style={{padding:12,textAlign:"center"}}>
+            <div style={{fontSize:9,color:MUTED,textTransform:"uppercase",fontWeight:700}}>Allocated</div>
+            <div style={{fontFamily:FD,fontSize:18,fontWeight:700,color:totalAllocated>(trip.budget||0)?"#dc2626":INK}}>{fmt(totalAllocated)}</div>
+          </Card>
+          <Card style={{padding:12,textAlign:"center"}}>
+            <div style={{fontSize:9,color:MUTED,textTransform:"uppercase",fontWeight:700}}>Unallocated</div>
+            <div style={{fontFamily:FD,fontSize:18,fontWeight:700,color:INK}}>{fmt(Math.max(0,(trip.budget||0)-totalAllocated))}</div>
+          </Card>
+        </div>
+
+        {assigned.length===0&&<div style={{color:MUTED,fontSize:13,padding:"16px 0",textAlign:"center"}}>No employees assigned to this trip yet.</div>}
+
+        {/* Per-employee rows */}
+        {assigned.map(u=>{
+          const b=budgets[u.id]||{allocated:0,topups:0};
+          const spent=getEmpSpent(u.id);
+          const total=(parseFloat(b.allocated)||0)+(parseFloat(b.topups)||0);
+          const balance=total-spent;
+          return(
+            <Card key={u.id} style={{padding:14,marginBottom:10}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                <div style={{width:32,height:32,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:GD,fontSize:11}}>{u.avatar||inits(u.name)}</div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:13,color:INK}}>{u.name}</div>
+                  <div style={{fontSize:10,color:MUTED}}>{u.dept||u.role}</div>
+                </div>
+                <button onClick={()=>setShowTopup(u.id)} style={{padding:"4px 10px",background:"#f0fde9",border:`1px solid ${G}`,borderRadius:6,cursor:"pointer",fontSize:11,color:GD,fontWeight:600}}>＋ Top-up</button>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8}}>
+                <div>
+                  <div style={{fontSize:9,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:3}}>Allocated ₹</div>
+                  <input type="number" value={b.allocated||""} onChange={e=>setBudgets(p=>({...p,[u.id]:{...p[u.id],allocated:parseFloat(e.target.value)||0}}))} placeholder="0" style={{...inpS,fontSize:12}}/>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:9,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:3}}>Top-ups</div>
+                  <div style={{padding:"8px 0",fontWeight:600,color:INK}}>{fmt(parseFloat(b.topups)||0)}</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:9,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:3}}>Spent</div>
+                  <div style={{padding:"8px 0",fontWeight:600,color:"#dc2626"}}>{fmt(spent)}</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:9,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:3}}>Balance</div>
+                  <div style={{padding:"8px 0",fontFamily:FD,fontWeight:700,fontSize:15,color:balance>=0?"#16a34a":"#dc2626"}}>{balance>=0?"+":""}{fmt(balance)}</div>
+                </div>
+              </div>
+              {/* Progress bar */}
+              {total>0&&<div style={{marginTop:8,height:4,background:"#f3f4f6",borderRadius:2,overflow:"hidden"}}>
+                <div style={{height:"100%",width:Math.min(100,Math.round(spent/total*100))+"%",background:spent>total?"#ef4444":G,borderRadius:2,transition:"width .3s"}}/>
+              </div>}
+              {/* Topup input */}
+              {showTopup===u.id&&<div style={{marginTop:10,padding:"10px",background:GL,borderRadius:8}}>
+                <div style={{fontSize:10,fontWeight:700,color:INK,marginBottom:6}}>Add Top-up for {u.name}</div>
+                <div style={{display:"flex",gap:8,marginBottom:6}}>
+                  <input type="number" value={topupAmt} onChange={e=>setTopupAmt(e.target.value)} placeholder="Amount ₹" style={{...inpS,flex:1}}/>
+                  <input value={topupNote} onChange={e=>setTopupNote(e.target.value)} placeholder="Reason (optional)" style={{...inpS,flex:2}}/>
+                </div>
+                <div style={{display:"flex",gap:7}}>
+                  <Btn onClick={()=>addTopup(u.id)} style={{padding:"6px 16px",fontSize:12}}>Add</Btn>
+                  <button onClick={()=>setShowTopup(null)} style={{padding:"6px 12px",background:"transparent",border:`1px solid ${BDR}`,borderRadius:6,cursor:"pointer",fontSize:12,color:MUTED}}>Cancel</button>
+                </div>
+              </div>}
+            </Card>
+          );
+        })}
+
+        <div style={{display:"flex",gap:9,justifyContent:"flex-end",marginTop:8}}>
+          <button onClick={onClose} style={{padding:"10px 18px",borderRadius:8,border:`1px solid ${BDR}`,background:"transparent",color:MUTED,cursor:"pointer",fontSize:13}}>Cancel</button>
+          <Btn onClick={save} disabled={busy} style={{padding:"10px 24px",fontSize:13}}>{busy?"Saving…":"Save Budgets"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function InlineTripModal({user,co,sbCreateTrip,onClose}){
   const CURRENCIES2=["INR","USD","EUR","GBP","AED","SGD","JPY","CHF","CAD","AUD"];
   const[busy,setBusy]=useState(false);
@@ -3277,13 +3476,17 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
             </div>}
           </div>}
         </div>
+        {/* Draft saved indicator */}
+        {(fm.category||fm.desc||fm.amount)&&<div style={{fontSize:9,color:MUTED,marginBottom:4,textAlign:"right"}}>💾 Draft auto-saved</div>}
         <div style={{display:"flex",gap:9}}>
           <Btn onClick={async()=>{
             if(!fm.category){alert("Please select a category");return;}
             if(!fm.desc){alert("Please enter a description");return;}
             if(!fm.amount||parseFloat(fm.amount)<=0){alert("Please enter a valid amount");return;}
-            const tripId=fm.tripId||myTrips[0]?.id;
-            if(!tripId){alert("No active trip. Please create a trip first.");return;}
+            // Always resolve tripId — auto-select first active trip if not set
+            const resolvedTripId=fm.tripId||(myTrips.length>0?myTrips[0].id:null);
+            if(!resolvedTripId){alert("No active trip found. Please create a trip first.");return;}
+            const tripId=resolvedTripId;
             try{
               await submitClaim({...fm,tripId});
               // Clear this form after successful submission
@@ -3315,11 +3518,14 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
 }
 
 // ─── TRIPS TAB ────────────────────────────────────────────────────────────────
-function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTrip,toast,uid:userId,userRole,sbCreateTrip,sbPushNotif,companyUsers}){
+function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTrip,toast,uid:userId,userRole,sbCreateTrip,sbPushNotif,companyUsers,sbUpdateTrip}){
   const [showNew,setShowNew]=useState(false);
   const [form,setForm]=useState({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[],projectCode:"",tripMode:"balance",currency:"INR",categoryLimits:{}});
   const [showCatLimits,setShowCatLimits]=useState(false);
   const [expandedId,setExpId]=useState(null);
+  const [editTrip,setEditTrip]=useState(null);   // trip being edited
+  const [budgetTrip,setBudgetTrip]=useState(null); // trip for budget management
+  const isEmployee=!isManager&&!isAdmin;
   const emps=users?.filter(u=>u.role==="employee")||[];
   const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",width:"100%"};
   const toggle=id=>setForm(f=>({...f,assignedTo:f.assignedTo.includes(id)?f.assignedTo.filter(x=>x!==id):[...f.assignedTo,id]}));
@@ -3331,7 +3537,13 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
     if(!form.name?.trim()){toast("Please enter a trip name","error");return;}
     if(!form.endDate){toast("Please enter an end date","error");return;}
     if(!form.startDate){toast("Please enter a start date","error");return;}
-    const assigned=[...new Set([...(isManager||isAdmin?(form.assignedTo.length>0?form.assignedTo:emps.map(e=>e.id)):[userId]),userId])];
+    // Manager/admin only included if they explicitly selected themselves
+    // Employees always include themselves
+    const baseList=isManager||isAdmin
+      ?(form.assignedTo.length>0?form.assignedTo:emps.map(e=>e.id))
+      :[userId];
+    // Do NOT auto-add manager/admin to trip unless they explicitly added themselves
+    const assigned=[...new Set(isEmployee?[...baseList,userId]:baseList)];
     const status=isManager||isAdmin?"active":"pending_approval";
     const newTrip={
       id:"TRP-"+uid(),name:form.name.trim(),type:form.type,
@@ -3427,7 +3639,24 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
         </div>}
         <div style={{display:"flex",gap:8}}><Btn onClick={create}>Create →</Btn><Btn v="outline" onClick={()=>setShowNew(false)}>Cancel</Btn></div>
       </Card>}
-      {visible.length===0&&<Card style={{padding:36,textAlign:"center"}}><div style={{fontSize:26,marginBottom:6}}>🗂️</div><div style={{fontWeight:700,color:INK}}>{isManager?"No trips yet":"No trips assigned to you yet"}</div></Card>}
+      {/* Edit trip modal */}
+      {editTrip&&<TripEditModal trip={editTrip} users={users} getUser={getUser} isAdmin={isAdmin}
+        onClose={()=>setEditTrip(null)}
+        onSave={async(id,patch)=>{
+          if(sbUpdateTrip)await sbUpdateTrip(id,patch);
+          else setTrips(p=>p.map(t=>t.id===id?{...t,...patch}:t));
+          setEditTrip(null);toast("✓ Trip updated");
+        }}
+      />}
+      {/* Per-employee budget modal */}
+      {budgetTrip&&<TripBudgetModal trip={budgetTrip} users={users} claims={claims} getUser={getUser}
+        onClose={()=>setBudgetTrip(null)}
+        onSave={async(id,patch)=>{
+          if(sbUpdateTrip)await sbUpdateTrip(id,patch);
+          else setTrips(p=>p.map(t=>t.id===id?{...t,...patch}:t));
+          setBudgetTrip(null);toast("✓ Budgets saved");
+        }}
+      />}
       <div style={{display:"flex",flexDirection:"column",gap:10}}>
         {visible.map(t=>{
           const spent=isManager?claims.filter(c=>c.tripId===t.id&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0):claims.filter(c=>c.tripId===t.id&&c.empId===userId&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
@@ -3452,7 +3681,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                   <Btn onClick={()=>approveTrip(t)} style={{fontSize:10,padding:"5px 10px"}}>✓ Approve</Btn>
                   <Btn v="danger" onClick={()=>rejectTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>✗</Btn>
                 </>}
-                {(isAdmin||isManager)&&t.status==="active"&&<><Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"");doc.output("dataurlnewwindow");}catch(e){toast("PDF failed","error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄</Btn><Btn v="warning" onClick={()=>closeTrip(t.id)} style={{fontSize:10,padding:"5px 10px"}}>🔒 Close</Btn></>}
+                {(isAdmin||isManager)&&t.status==="active"&&<><Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"");doc.output("dataurlnewwindow");}catch(e){toast("PDF failed","error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄</Btn><Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>✏</Btn><Btn v="outline" onClick={()=>setBudgetTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>💰</Btn><Btn v="warning" onClick={()=>closeTrip(t.id)} style={{fontSize:10,padding:"5px 10px"}}>🔒 Close</Btn></>}
               </div>
             </div>
             <div style={{display:"flex",gap:16,marginBottom:6,flexWrap:"wrap"}}>
