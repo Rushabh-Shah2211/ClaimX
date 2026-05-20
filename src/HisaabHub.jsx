@@ -1836,8 +1836,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   };
 
   const rejectTrip=async(trip)=>{
-    if(SB_ENABLED){await supabase.from("trips").update({status:"rejected"}).eq("id",trip.id);await loadFromSB();}
-    else setTrips(p=>p.map(t=>t.id===trip.id?{...t,status:"rejected"}:t));
+    if(SB_ENABLED){await supabase.from("trips").update({status:"declined"}).eq("id",trip.id);await loadFromSB();}
+    else setTrips(p=>p.map(t=>t.id===trip.id?{...t,status:"declined"}:t));
     await sbPushNotif(trip.createdBy,`Your trip "${trip.name}" was not approved`,"error");
     toast(`Trip "${trip.name}" rejected`,"warn");
   };
@@ -1983,16 +1983,15 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const tripId=form.tripId||co.trips.find(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(user.id)))?.id;
     if(!tripId){const msg="No active trip assigned to you. Please create or join a trip first.";toast(msg,"error");throw new Error(msg);}
     const claimDate=form.date||today();
+    // Resolve the trip object once — used throughout
+    const selectedTrip=co.trips.find(t=>t.id===tripId);
     // Block future dates
     if(claimDate>today()){toast("Invoice date cannot be in the future","error");return;}
     // Validate claim date is within trip date range
-    if(tripId){
-      const selectedTrip=co.trips.find(t=>t.id===tripId);
-      if(selectedTrip?.startDate&&selectedTrip?.endDate){
-        if(claimDate<selectedTrip.startDate||claimDate>selectedTrip.endDate){
-          const msg2=`Expense date ${claimDate} is outside trip range (${selectedTrip.startDate} to ${selectedTrip.endDate}). Please fix the date.`;
-          toast(msg2,"error");throw new Error(msg2);
-        }
+    if(selectedTrip?.startDate&&selectedTrip?.endDate){
+      if(claimDate<selectedTrip.startDate||claimDate>selectedTrip.endDate){
+        const msg2=`Expense date ${claimDate} is outside trip range (${selectedTrip.startDate} to ${selectedTrip.endDate}). Please fix the date.`;
+        toast(msg2,"error");throw new Error(msg2);
       }
     }
     const weekend=co.policy.weekendRequiresApproval&&isWknd(claimDate);
