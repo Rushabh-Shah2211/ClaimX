@@ -1743,7 +1743,12 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           <>
             <div style={{width:40,height:40,border:`3px solid ${GM}`,borderTopColor:G,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 14px"}}/>
             <div style={{color:MUTED,fontSize:13}}>Loading your workspace…</div>
-            <button onClick={onLogout} style={{marginTop:16,background:"none",border:"none",color:MUTED,fontSize:12,cursor:"pointer",fontFamily:FB}}>← Sign out</button>
+            <button onClick={()=>{
+              // Nuclear clear — guaranteed to work
+              try{localStorage.removeItem(SESSION_KEY);}catch{}
+              try{localStorage.removeItem(STORAGE_KEY);}catch{}
+              window.location.replace("/");
+            }} style={{marginTop:16,background:"none",border:"none",color:MUTED,fontSize:12,cursor:"pointer",fontFamily:FB}}>← Sign out</button>
           </>
         )}
       </div>
@@ -2635,7 +2640,10 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               <div style={{width:26,height:26,borderRadius:"50%",background:canApprove?G:"#334155",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:700,fontSize:9,cursor:"pointer"}}>{user.avatar}</div>
             </div>
           )}
-          <button onClick={onLogout} style={{width:"100%",padding:"6px",background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.1)",borderRadius:6,color:"rgba(255,255,255,.35)",fontFamily:FB,fontSize:10,cursor:"pointer"}}>{sidebar?"Sign Out":"↩"}</button>
+          <button onClick={()=>{
+            try{localStorage.removeItem(SESSION_KEY);}catch{}
+            window.location.replace("/");
+          }} style={{width:"100%",padding:"6px",background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.1)",borderRadius:6,color:"rgba(255,255,255,.35)",fontFamily:FB,fontSize:10,cursor:"pointer"}}>{sidebar?"Sign Out":"↩"}</button>
         </div>
       </div>
 
@@ -3320,14 +3328,13 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
   const canSetBudget=isManager||isAdmin;
 
   const create=async()=>{
-    if(!form.name||!form.endDate){toast("Fill name and end date","error");return;}
-    if(!form.startDate){toast("Fill start date","error");return;}
-    if(canSetBudget&&form.budget===""&&form.tripMode!=="reimbursement"){toast("Please set a budget amount (enter 0 if unknown)","error");return;}
+    if(!form.name?.trim()){toast("Please enter a trip name","error");return;}
+    if(!form.endDate){toast("Please enter an end date","error");return;}
+    if(!form.startDate){toast("Please enter a start date","error");return;}
     const assigned=[...new Set([...(isManager||isAdmin?(form.assignedTo.length>0?form.assignedTo:emps.map(e=>e.id)):[userId]),userId])];
-    // Employee-created trips start as pending_approval; manager-created are active
     const status=isManager||isAdmin?"active":"pending_approval";
     const newTrip={
-      id:"TRP-"+uid(),name:form.name,type:form.type,
+      id:"TRP-"+uid(),name:form.name.trim(),type:form.type,
       startDate:form.startDate,endDate:form.endDate,
       status,budget:parseFloat(form.budget)||0,
       spent:0,assignedTo:assigned,createdBy:userId,
@@ -3338,12 +3345,20 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
       topupsTotal:0,
       categoryLimits:form.categoryLimits||{},
     };
-    if(sbCreateTrip){await sbCreateTrip(newTrip,assigned);}
-    else{setTrips(p=>[newTrip,...p]);}
-    setShowNew(false);
-    setForm({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[],projectCode:"",tripMode:"balance",currency:"INR",categoryLimits:{}});
-    setShowCatLimits(false);
-    toast(status==="active"?"✓ Trip created":"✓ Trip created — awaiting manager approval");
+    try{
+      if(sbCreateTrip){
+        await sbCreateTrip(newTrip,assigned);
+      }else{
+        setTrips(p=>[newTrip,...p]);
+        toast(status==="active"?"✓ Trip created":"✓ Trip submitted for manager approval");
+      }
+      setShowNew(false);
+      setForm({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[],projectCode:"",tripMode:"balance",currency:"INR",categoryLimits:{}});
+      setShowCatLimits(false);
+    }catch(err){
+      toast("Failed to create trip: "+(err?.message||String(err)),"error");
+      console.error("Trip create error:",err);
+    }
   };
 
   // Employee sees own + assigned; manager/admin sees all
@@ -5376,7 +5391,10 @@ export default function Root(){
     }
 
     // ── STEP 2: No saved session — check Supabase for Google OAuth session ────
-    const hardTimer=setTimeout(()=>setLoading(false), 4000);
+    const hardTimer=setTimeout(()=>{
+      console.warn("Auth timeout — forcing login screen");
+      setLoading(false);
+    }, 3000); // 3s max — never hang
 
     supabase.auth.getSession().then(async({data:{session:sess},error})=>{
       clearTimeout(hardTimer);
