@@ -6,8 +6,21 @@ import { createClient } from "@supabase/supabase-js";
 const SUPA_URL  = import.meta.env.VITE_SUPABASE_URL  || "";
 const SUPA_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 const supabase  = (SUPA_URL && SUPA_ANON)
-  ? createClient(SUPA_URL, SUPA_ANON, { auth:{ persistSession:true, autoRefreshToken:true }})
+  ? createClient(SUPA_URL, SUPA_ANON, {
+      auth:{ persistSession:true, autoRefreshToken:true, storageKey:'claimx_sb_auth' }
+    })
   : null;
+
+// Set a JWT on the Supabase client so auth.uid() works in RLS
+const setSupabaseJWT=async(accessToken, refreshToken)=>{
+  if(!supabase||!accessToken)return;
+  try{
+    await supabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken || accessToken,
+    });
+  }catch(e){console.warn('setSupabaseJWT:',e.message);}
+};
 
 const SB_ENABLED = !!supabase; // false → falls back to localStorage demo mode
 
@@ -131,7 +144,20 @@ const ROLES=[
 ];
 const TIERED=[{min:1,max:5,ppu:299},{min:6,max:20,ppu:249},{min:21,max:50,ppu:199},{min:51,max:999,ppu:149}];
 
-// ─── SUPABASE DATA LAYER ──────────────────────────────────────────────────────
+// ─── SET USER CONTEXT FOR RLS ─────────────────────────────────────────────────
+// After custom auth login, call this RPC to set app.current_user_id in Postgres session
+const setRLSContext=async(userId)=>{
+  if(!supabase||!userId)return;
+  try{
+    // This RPC sets the session variable that RLS policies read
+    await supabase.rpc('set_user_context',{p_user_id:userId});
+  }catch(e){
+    // Non-fatal — app still works, just without RLS enforcement on this session
+    console.warn('RLS context not set:',e.message);
+  }
+};
+
+
 // Mappers: snake_case DB → camelCase app
 const mapUser=r=>r?({id:r.id,cid:r.company_id,companyId:r.company_id,name:r.name,email:r.email||"",username:r.username||"",mobile:r.mobile||"",role:r.role,avatar:r.avatar,dept:r.dept,balance:parseFloat(r.balance)||0,reimbursable:parseFloat(r.reimbursable)||0,delegateTo:r.delegate_to||null,isSuspended:r.is_suspended||false,authType:r.auth_type||"custom"}):null;
 const mapTrip=r=>r?({
@@ -724,64 +750,53 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
       if(!trimmed||!pw){setErr("Please enter your username and password.");setBusy(false);return;}
 
       if(SB_ENABLED){
-        // Wrap RPC in a 10-second timeout
-        const rpcWithTimeout=()=>new Promise((resolve,reject)=>{
-          const t=setTimeout(()=>reject(new Error("Login timed out. Check your connection.")),10000);
-          supabase.rpc("authenticate_user",{p_login:trimmed,p_password:pw})
-            .then(r=>{clearTimeout(t);resolve(r);})
-            .catch(e=>{clearTimeout(t);reject(e);});
-        });
-
-        let customResult=null,rpcError=null;
+        // Try /api/auth (JWT mode — proper RLS via auth.uid())
+        let customResult=null;
         try{
-          const res=await rpcWithTimeout();
-          customResult=res.data;
-          rpcError=res.error;
-        }catch(e){
-          // Timeout or network error — if email, try Supabase Auth directly
-          if(trimmed.includes("@")){
-            const{error:authErr}=await supabase.auth.signInWithPassword({
-              email:trimmed.toLowerCase(),password:pw
-            });
-            if(!authErr)return;
+          const apiRes=await Promise.race([
+            fetch("/api/auth",{method:"POST",headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({login:trimmed,password:pw})}),
+            new Promise((_,rej)=>setTimeout(()=>rej(new Error("Login timed out")),12000))
+          ]);
+          if(!apiRes.ok&&apiRes.status!==401){throw new Error("API error "+apiRes.status);}
+          const apiData=await apiRes.json();
+          if(apiData.error){throw new Error(apiData.error);}
+          customResult=apiData;
+          // JWT mode: set Supabase session so auth.uid() works for RLS
+          if(customResult.jwt_mode&&customResult.access_token){
+            await setSupabaseJWT(customResult.access_token,customResult.refresh_token);
           }
-          throw new Error(e.message||"Connection failed. Please try again.");
-        }
-
-        if(rpcError){
-          if(trimmed.includes("@")){
-            const{error:authErr}=await supabase.auth.signInWithPassword({email:trimmed.toLowerCase(),password:pw});
-            if(!authErr)return;
+        }catch(apiErr){
+          if(apiErr.message.includes("timed out")||apiErr.message.includes("Login")||apiErr.message.includes("User not")||apiErr.message.includes("Incorrect")){
+            throw apiErr;
           }
-          throw new Error("Service error: "+rpcError.message);
+          // /api/auth not available (local dev or Vercel not deployed) — fall back to RPC
+          console.warn("/api/auth unavailable, using RPC:",apiErr.message);
+          try{
+            const{data,error:rpcErr}=await supabase.rpc("authenticate_user",{p_login:trimmed,p_password:pw});
+            if(rpcErr)throw new Error(rpcErr.message);
+            if(data?.error)throw new Error(data.error);
+            customResult=data;
+          }catch(rpcErr2){
+            throw new Error(rpcErr2.message||"Login failed");
+          }
         }
 
         if(customResult&&!customResult.error){
+          // Set RLS context (fallback for non-JWT mode)
+          if(!customResult.jwt_mode)await setRLSContext(customResult.id);
           onLogin({
             id:customResult.id,name:customResult.name,email:customResult.email||"",
             username:customResult.username||"",mobile:customResult.mobile||"",
             role:customResult.role,avatar:customResult.avatar,dept:customResult.dept,
             balance:customResult.balance,reimbursable:customResult.reimbursable,
             delegateTo:customResult.delegate_to,isSuspended:false,
-            authType:"custom",cid:customResult.company_id,companyId:customResult.company_id
-          },{id:customResult.company_id});
+            authType:"custom",cid:customResult.company_id,companyId:customResult.company_id,
+            jwtMode:customResult.jwt_mode||false,
+          },{id:customResult.company_id,name:customResult.company_name});
           return;
         }
-
-        const customErr=customResult?.error||"";
-        if(trimmed.includes("@")){
-          const{error:authErr}=await supabase.auth.signInWithPassword({
-            email:trimmed.toLowerCase(),password:pw
-          });
-          if(!authErr)return;
-          if(customErr&&customErr!=="User not found")throw new Error(customErr);
-          throw new Error(
-            authErr.message==="Invalid login credentials"?"Incorrect email or password.":
-            authErr.message==="Email not confirmed"?"Please verify your email first.":
-            authErr.message
-          );
-        }
-        throw new Error(customErr||"No account found with those credentials.");
+        throw new Error(customResult?.error||"Login failed. Check your credentials.");
 
       }else{
         await new Promise(r=>setTimeout(r,400));
@@ -5700,6 +5715,8 @@ export default function Root(){
       customAuthRef.current=true;
       setSession(saved);
       setLoading(false); // immediate — no waiting
+      // Re-establish RLS context after page refresh
+      if(saved.sbUser?.id)setRLSContext(saved.sbUser.id).catch(()=>{});
       // Minimal listener — only for password recovery
       const{data:{subscription}}=supabase.auth.onAuthStateChange((event)=>{
         if(event==="PASSWORD_RECOVERY"){setIsReset(true);setSession(null);setLoading(false);}
