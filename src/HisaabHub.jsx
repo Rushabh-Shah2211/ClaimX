@@ -1650,6 +1650,15 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const[showPrefs,setSPrefs]=useState(false);
   const[showFundReq,setSFR]=useState(false);
   const[showShortcuts,setSSC]=useState(false);
+  // Show onboarding tutorial on first login
+  const[showTutorial,setShowTutorial]=useState(()=>{
+    try{return !localStorage.getItem("claimx_tutorial_done_"+user.id);}catch{return false;}
+  });
+  const closeTutorial=()=>{
+    try{localStorage.setItem("claimx_tutorial_done_"+user.id,"1");}catch{}
+    setShowTutorial(false);
+  };
+  const[showChatbot,setShowChatbot]=useState(false);
 
   // Keyboard shortcuts
   useEffect(()=>{
@@ -2010,6 +2019,28 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         toast(isAnomaly?"🔍 Submitted — anomaly flagged":catEx?"⚠️ Submitted — category % exceeded":"✓ Claim submitted");
       }
     }
+    // Handle expense splitting — create claims for each split colleague
+    if(form.splitWith&&form.splitWith.length>0){
+      const splitCount=form.splitWith.length+1;
+      const splitAmount=Math.round(amount/splitCount);
+      for(const colleagueId of form.splitWith){
+        const splitClaimId="EXP-"+uid();
+        const splitData={...claimData,id:splitClaimId,empId:colleagueId,amount:splitAmount,
+          desc:form.desc+" (split from "+claimId+")",autoApproved:false,status:"Pending",splitFrom:claimId};
+        if(SB_ENABLED){
+          await supabase.from("claims").insert({
+            id:splitClaimId,company_id:cid,trip_id:tripId,emp_id:colleagueId,
+            date:claimDate,category:form.category,description:splitData.desc,
+            vendor:form.vendor||"",amount:splitAmount,status:"Pending",
+            orig_currency:"INR",auto_approved:false,
+          });
+        } else {
+          setClaims(p=>[splitData,...p]);
+        }
+        // Notify the colleague
+        await sbPushNotif(colleagueId,`${user.name} split a ${fmt(amount)} expense with you — your share: ${fmt(splitAmount)}`,"info");
+      }
+    }
     setMdl(null);
   };
 
@@ -2081,6 +2112,28 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       setAudit(p=>[{id:"AL-"+uid(),action:finalStatus,claimId,by:user.id,byName:user.name,at:new Date().toLocaleString(),remarks},...(p||[])]);
     }
     toast(isFullyApproved?"✓ Fully Approved":finalStatus==="Manager Approved"?"✓ Manager approved — awaiting admin":finalStatus==="Rejected"?"Rejected":"Done",isFullyApproved?"success":finalStatus==="Manager Approved"?"warn":"error");
+    // Handle expense splitting — create claims for each split colleague
+    if(form.splitWith&&form.splitWith.length>0){
+      const splitCount=form.splitWith.length+1;
+      const splitAmount=Math.round(amount/splitCount);
+      for(const colleagueId of form.splitWith){
+        const splitClaimId="EXP-"+uid();
+        const splitData={...claimData,id:splitClaimId,empId:colleagueId,amount:splitAmount,
+          desc:form.desc+" (split from "+claimId+")",autoApproved:false,status:"Pending",splitFrom:claimId};
+        if(SB_ENABLED){
+          await supabase.from("claims").insert({
+            id:splitClaimId,company_id:cid,trip_id:tripId,emp_id:colleagueId,
+            date:claimDate,category:form.category,description:splitData.desc,
+            vendor:form.vendor||"",amount:splitAmount,status:"Pending",
+            orig_currency:"INR",auto_approved:false,
+          });
+        } else {
+          setClaims(p=>[splitData,...p]);
+        }
+        // Notify the colleague
+        await sbPushNotif(colleagueId,`${user.name} split a ${fmt(amount)} expense with you — your share: ${fmt(splitAmount)}`,"info");
+      }
+    }
     setMdl(null);
   };
 
@@ -2096,6 +2149,28 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       sbPushNotif(req.empId,`Top-up ${decision.toLowerCase()}${decision==="Approved"?": "+fmt(req.amount):""}`,decision==="Approved"?"success":"error");
     }
     toast(decision==="Approved"?`✓ Top-up approved`:"Rejected",decision==="Approved"?"success":"error");
+    // Handle expense splitting — create claims for each split colleague
+    if(form.splitWith&&form.splitWith.length>0){
+      const splitCount=form.splitWith.length+1;
+      const splitAmount=Math.round(amount/splitCount);
+      for(const colleagueId of form.splitWith){
+        const splitClaimId="EXP-"+uid();
+        const splitData={...claimData,id:splitClaimId,empId:colleagueId,amount:splitAmount,
+          desc:form.desc+" (split from "+claimId+")",autoApproved:false,status:"Pending",splitFrom:claimId};
+        if(SB_ENABLED){
+          await supabase.from("claims").insert({
+            id:splitClaimId,company_id:cid,trip_id:tripId,emp_id:colleagueId,
+            date:claimDate,category:form.category,description:splitData.desc,
+            vendor:form.vendor||"",amount:splitAmount,status:"Pending",
+            orig_currency:"INR",auto_approved:false,
+          });
+        } else {
+          setClaims(p=>[splitData,...p]);
+        }
+        // Notify the colleague
+        await sbPushNotif(colleagueId,`${user.name} split a ${fmt(amount)} expense with you — your share: ${fmt(splitAmount)}`,"info");
+      }
+    }
     setMdl(null);
   };
 
@@ -2439,7 +2514,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     ...(isAdmin||isFinance?[{id:"finance_view",icon:"💼",label:"Finance"}]:[]),
     ...(isAdmin||isManager?[{id:"employees",icon:"👥",label:"Employees"}]:[]),
     ...(isAdmin?[{id:"policy",icon:"⚙️",label:"Policy"}]:[]),
-    ...(canApprove?[{id:"settlements",icon:"💳",label:"Settlements"}]:[]),
+    // My History tab for employees
+    ...(!isManager&&!isAdmin?[{id:"my_history",icon:"🗃️",label:"My History"}]:[]),
     {id:"help",      icon:"❓", label:"Help"},
   ];
 
@@ -2461,6 +2537,12 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       {showShortcuts&&<ShortcutHelp onClose={()=>setSSC(false)}/>}
       {showPrefs&&<PrefsModal onClose={()=>setSPrefs(false)}/>}
       {showFundReq&&hasPerm("submit")&&<FundRequestModal trips={co.trips} user={user} cid={cid} onClose={()=>setSFR(false)} onSubmit={handleFundRequest} sbEnabled={SB_ENABLED}/>}
+      {showTutorial&&<OnboardingTutorial role={user.role} onClose={closeTutorial}/>}
+      {showChatbot&&<AIChatbot user={user} co={co} onClose={()=>setShowChatbot(false)}/>}
+      {/* Floating chatbot button */}
+      <button onClick={()=>setShowChatbot(p=>!p)} style={{position:"fixed",bottom:72,right:20,width:48,height:48,borderRadius:"50%",background:`linear-gradient(135deg,${G},${GD})`,color:"#fff",border:"none",fontSize:22,cursor:"pointer",boxShadow:"0 4px 16px rgba(126,217,87,.5)",zIndex:799,display:"flex",alignItems:"center",justifyContent:"center"}}>
+        {showChatbot?"✕":"🤖"}
+      </button>
       {showProf&&(
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:800,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setSPro(false)}>
           <div onClick={e=>e.stopPropagation()} style={{background:"#f5faf3",borderRadius:16,padding:28,width:"min(580px,96vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 20px 60px #0003"}}>
@@ -2524,7 +2606,28 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               <Btn v="outline" onClick={exportTally} style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ Tally</Btn>
               <Btn v="outline" onClick={exportGSTR}  style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ GSTR</Btn>
               <Btn v="outline" onClick={exportZoho}  style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ Zoho</Btn>
-              {isManager&&<Btn v="outline" onClick={exportMonthlyDigest} style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">📊 Digest</Btn>}
+              {isManager&&<Btn v="outline" onClick={async()=>{
+                // Monthly digest — email to all finance users
+                const financeUsers=co.users.filter(u=>u.role==="finance"||u.role==="admin");
+                const thisMonth=new Date().toLocaleString("default",{month:"long",year:"numeric"});
+                const approved=co.claims.filter(c=>c.status==="Approved");
+                const total=approved.reduce((s,c)=>s+c.amount,0);
+                const byEmp={};
+                approved.forEach(c=>{byEmp[c.empId]=(byEmp[c.empId]||0)+c.amount;});
+                const topRows=Object.entries(byEmp).sort((a,b)=>b[1]-a[1]).slice(0,10)
+                  .map(([id,amt])=>`<tr><td>${getUser(id)?.name||id}</td><td>₹${amt.toLocaleString("en-IN")}</td></tr>`).join("");
+                const html=`<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
+                  <div style="background:#0f1c09;padding:18px 24px;border-radius:10px 10px 0 0"><span style="color:#7ED957;font-weight:800;font-size:18px">ClaimX</span> <span style="color:rgba(255,255,255,.4);font-size:11px">Monthly Digest — ${thisMonth}</span></div>
+                  <div style="background:#fff;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px">
+                    <h2 style="color:#1a2e12;font-size:16px">Expense Summary — ${activeMeta?.name||""}</h2>
+                    <p>Total approved: <strong>₹${total.toLocaleString("en-IN")}</strong> across ${approved.length} claims</p>
+                    <table style="width:100%;border-collapse:collapse;margin-top:16px"><thead><tr style="background:#f0fde9"><th style="padding:8px;text-align:left">Employee</th><th style="padding:8px;text-align:left">Total</th></tr></thead><tbody>${topRows}</tbody></table>
+                  </div></div>`;
+                for(const u of financeUsers){
+                  if(u.email)await emailAlert(u.email,`ClaimX Monthly Digest — ${thisMonth}`,`Expense digest for ${thisMonth}`,html);
+                }
+                toast("✓ Monthly digest sent to finance team");
+              }} style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">📊 Digest</Btn>}
             </>}
             {isEmployee&&<button onClick={()=>setSFR(true)} title="Request Funds" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>💰</button>}
             <button onClick={()=>setSCam(true)} title="Camera" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>📷</button>
@@ -2548,7 +2651,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           trips={co.trips} isManager={isManager} isAdmin={isAdmin} isFinance={isFinance}
           getUser={getUser} setMdl={setMdl} submitEditRequest={submitEditRequest}
           hasEditWindow={hasEditWindow} userId={user.id} onExportPDF={exportClaimsPDF}/>}
-        {tab==="submit"&&hasPerm("submit")&&<SubmitTab user={user} co={co} submitClaim={submitClaim} camFile={camFile} clearCamFile={()=>setCamF(null)} onCam={()=>setSCam(true)} companyCategories={companyCategories}/>}
+        {tab==="submit"&&hasPerm("submit")&&<SubmitTab user={user} co={co} submitClaim={submitClaim} camFile={camFile} clearCamFile={()=>setCamF(null)} onCam={()=>setSCam(true)} companyCategories={companyCategories} onCreateTrip={()=>setTab("trips")} sbCreateTrip={sbCreateTrip}/>}
         {tab==="trips"&&<TripsTab trips={co.trips} setTrips={fn=>{if(!SB_ENABLED)setTrips(fn);}} claims={co.claims}
           isManager={isManager} isAdmin={isAdmin} getUser={getUser} users={co.users}
           closeTrip={closeTrip} toast={toast} uid={user.id} userRole={user.role}
@@ -2615,6 +2718,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="analytics"&&<Analytics claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept||c.empId===user.id;}):co.claims.filter(c=>c.empId===user.id)} trips={co.trips} users={co.users} isManager={isManager} getUser={getUser} policy={co.policy} printSummary={printSummary} user={user}/>}
         {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
         {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={co.auditLog||[]} claims={co.claims} getUser={getUser}/>}
+        {tab==="my_history"&&!isManager&&!isAdmin&&<MyHistoryTab user={user} trips={co.trips} claims={co.claims} getUser={getUser} exportClaimsPDF={exportClaimsPDF}/>}
         {tab==="settlements"&&canApprove&&<SettlementsTab trips={co.trips} claims={co.claims} users={co.users} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} cid={cid} sbEnabled={SB_ENABLED}/>}
         {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}/>}
         {tab==="trip_approvals"&&canApprove&&<TripApprovalsTab trips={co.trips} getUser={getUser} approveTrip={approveTrip} rejectTrip={rejectTrip} isAdmin={isAdmin}/>}
@@ -2665,8 +2769,8 @@ function EmpDash({user,myUser,co,setTab}){
       </div>
       <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:12,marginBottom:14}}>
         <Card style={{padding:20,background:`linear-gradient(135deg,${DARK},#2d5a1b)`}}>
-          <div style={{fontSize:10,color:"rgba(255,255,255,.45)",fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>{co.policy.reimbursementMode?"Pending Reimbursement":"Wallet Balance"}</div>
-          <div style={{fontFamily:FD,fontSize:28,fontWeight:700,color:INK,marginTop:5}}>{fmt(co.policy.reimbursementMode?myUser?.reimbursable||0:myUser?.balance||0)}</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,.55)",fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>{co.policy.reimbursementMode?"Pending Reimbursement":"Wallet Balance"}</div>
+          <div style={{fontFamily:FD,fontSize:28,fontWeight:700,color:"#ffffff",marginTop:5}}>{fmt(co.policy.reimbursementMode?myUser?.reimbursable||0:myUser?.balance||0)}</div>
           {!co.policy.reimbursementMode&&<div style={{marginTop:8}}><PBar value={approved} max={(myUser?.balance||0)+approved} h={3} color={G}/></div>}
         </Card>
         <Card style={{padding:16}}><div style={{fontSize:20}}>📋</div><div style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginTop:3}}>{claims.length}</div><div style={{fontSize:11,color:MUTED}}>Total Claims</div></Card>
@@ -2822,12 +2926,85 @@ function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,subm
   );
 }
 
+// ─── INLINE TRIP MODAL (from Submit tab) ─────────────────────────────────────
+function InlineTripModal({user,co,sbCreateTrip,onClose}){
+  const CURRENCIES2=["INR","USD","EUR","GBP","AED","SGD","JPY","CHF","CAD","AUD"];
+  const[busy,setBusy]=useState(false);
+  const[form,setForm]=useState({name:"",type:"trip",startDate:today(),endDate:"",budget:"",currency:"INR",tripMode:"reimbursement",projectCode:""});
+  const inpS2={width:"100%",padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB};
+  const upd=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const create=async()=>{
+    if(!form.name.trim()){alert("Please enter a trip name");return;}
+    if(!form.endDate){alert("Please set an end date");return;}
+    setBusy(true);
+    try{
+      const newTrip={id:"TRP-"+uid(),name:form.name.trim(),type:form.type,startDate:form.startDate,endDate:form.endDate,status:"pending_approval",budget:parseFloat(form.budget)||0,spent:0,assignedTo:[user.id],createdBy:user.id,tripMode:form.tripMode||"reimbursement",currency:form.currency||"INR",projectCode:form.projectCode||"",openingBalance:parseFloat(form.budget)||0,topupsTotal:0,categoryLimits:{}};
+      if(sbCreateTrip)await sbCreateTrip(newTrip,[user.id]);
+      else alert("Trip creation not available — please go to the Trips tab");
+      onClose();
+    }catch(e){alert("Failed: "+(e?.message||e));}
+    finally{setBusy(false);}
+  };
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:26,width:"min(500px,96vw)",maxHeight:"92vh",overflow:"auto",boxShadow:"0 24px 60px rgba(0,0,0,.25)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>Create New Trip</div>
+          <button onClick={onClose} style={{background:"none",border:"none",fontSize:18,cursor:"pointer",color:MUTED}}>✕</button>
+        </div>
+        <div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,padding:"7px 11px",marginBottom:14,fontSize:11,color:"#92400e"}}>💡 Your trip will require manager approval before you can submit expenses to it.</div>
+        <div style={{marginBottom:11}}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Trip Name *</label><input value={form.name} onChange={e=>upd("name",e.target.value)} placeholder="e.g. Mumbai Client Visit" style={inpS2}/></div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:11}}>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Start Date</label><input type="date" value={form.startDate} onChange={e=>upd("startDate",e.target.value)} style={inpS2}/></div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>End Date *</label><input type="date" value={form.endDate} min={form.startDate} onChange={e=>upd("endDate",e.target.value)} style={inpS2}/></div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:11,marginBottom:11}}>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Type</label>
+            <select value={form.type} onChange={e=>upd("type",e.target.value)} style={{...inpS2,appearance:"none"}}>
+              <option value="trip">Business Trip</option><option value="monthly">Monthly Period</option><option value="project">Project</option><option value="client">Client Project</option>
+            </select></div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Mode</label>
+            <select value={form.tripMode} onChange={e=>upd("tripMode",e.target.value)} style={{...inpS2,appearance:"none"}}>
+              <option value="reimbursement">Reimbursement</option><option value="balance">Balance (Advance)</option><option value="client">Client Billing</option>
+            </select></div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Currency</label>
+            <select value={form.currency} onChange={e=>upd("currency",e.target.value)} style={{...inpS2,appearance:"none"}}>{CURRENCIES2.map(c=><option key={c}>{c}</option>)}</select></div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:16}}>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Project / Cost Centre</label><input value={form.projectCode} onChange={e=>upd("projectCode",e.target.value)} placeholder="PRJ-001" style={inpS2}/></div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Estimated Budget ₹</label><input type="number" value={form.budget} onChange={e=>upd("budget",e.target.value)} placeholder="0 if unknown" style={inpS2}/></div>
+        </div>
+        <div style={{display:"flex",gap:9,justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{padding:"9px 16px",borderRadius:8,border:`1px solid ${BDR}`,background:"transparent",color:MUTED,cursor:"pointer",fontSize:13}}>Cancel</button>
+          <Btn onClick={create} disabled={busy} style={{padding:"9px 22px",fontSize:13}}>{busy?"Creating…":"Create Trip →"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── SUBMIT TAB (OCR fixed — no stale closures) ───────────────────────────────
-function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCategories}){
+function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCategories,onCreateTrip,sbCreateTrip}){
   const cats=companyCategories||DEFAULT_CATS;
   const blankForm=()=>({id:uid(),date:today(),category:"",desc:"",amount:"",origAmount:"",currency:"INR",tripId:"",notes:"",vendor:"",receipts:[],ocrState:"idle",ocrData:null,scanning:false,gstAmount:"",projectCode:""});
-  const [forms,setForms]=useState([blankForm()]);
+  const [forms,setForms]=useState(()=>{
+    try{
+      const d=localStorage.getItem("claimx_draft_v1");
+      if(d){const p=JSON.parse(d);return p.length>0?p:[blankForm()];}
+    }catch{}
+    return[blankForm()];
+  });
   const [idx,setIdx]=useState(0);
+  const [showTripModal,setShowTripModal]=useState(false);
+  const saveDraft=useCallback((f)=>{
+    try{localStorage.setItem("claimx_draft_v1",JSON.stringify(Array.isArray(f)?f:[f]));}catch{}
+  },[]);
+  const clearDraft=()=>{try{localStorage.removeItem("claimx_draft_v1");}catch{}};
+  // Auto-save draft on every form change
+  useEffect(()=>{
+    if(forms.some(f=>f.category||f.desc||f.amount||f.vendor))
+      try{localStorage.setItem("claimx_draft_v1",JSON.stringify(forms));}catch{}
+  },[forms]);
   const fileRefs=useRef({});
   const policy=co.policy;
   const myTrips=co.trips.filter(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(user.id)));
@@ -2939,7 +3116,21 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
 
   const addForm=()=>{const nf=blankForm();setForms(p=>[...p,nf]);setIdx(forms.length);};
   const removeForm=i=>{if(forms.length===1)return;setForms(p=>p.filter((_,j)=>j!==i));setIdx(Math.max(0,idx-1));};
-  const submitAll=()=>forms.filter(f=>f.category&&f.desc&&f.amount).forEach(f=>submitClaim(f));
+  const submitAll=async()=>{
+    const valid=forms.filter(f=>f.category&&f.desc&&f.amount);
+    if(!valid.length){alert("No complete forms to submit. Please fill Category, Description, and Amount.");return;}
+    let ok=0,fail=0;
+    for(const f of valid){
+      try{
+        const tripId=f.tripId||myTrips[0]?.id;
+        if(!tripId){fail++;continue;}
+        await submitClaim({...f,tripId});
+        ok++;
+      }catch(e){fail++;}
+    }
+    setForms([blankForm()]);setIdx(0);
+    if(fail>0)alert(`${ok} submitted, ${fail} failed.`);
+  };
 
   const fm=forms[idx]||forms[0];
   const amt=parseFloat(fm.amount)||0;
@@ -3080,27 +3271,37 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
           </div>}
         </div>
         <div style={{display:"flex",gap:9}}>
-          <Btn onClick={()=>submitClaim(fm)} style={{flex:1,padding:11}} disabled={!fm.category||!fm.desc||!fm.amount||!myTrips.length}>
+          <Btn onClick={async()=>{
+            if(!fm.category){alert("Please select a category");return;}
+            if(!fm.desc){alert("Please enter a description");return;}
+            if(!fm.amount||parseFloat(fm.amount)<=0){alert("Please enter a valid amount");return;}
+            const tripId=fm.tripId||myTrips[0]?.id;
+            if(!tripId){alert("No active trip. Please create a trip first.");return;}
+            try{
+              await submitClaim({...fm,tripId});
+              // Clear this form after successful submission
+              const newForms=forms.map((x,i)=>i===idx?blankForm():x);
+              setForms(newForms);
+              setIdx(0);
+              // Clear draft if all forms blank
+              if(newForms.every(f=>!f.category&&!f.desc&&!f.amount))
+                try{localStorage.removeItem("claimx_draft_v1");}catch{}
+            }catch(e){alert("Submission failed: "+(e?.message||e));}
+          }} style={{flex:1,padding:11}}>
             {amt>0&&amt<=policy.autoApproveLimit?"⚡ Submit & Auto-Approve":"Submit Claim →"}
           </Btn>
           <Btn v="outline" onClick={()=>setForms(p=>p.map((x,i)=>i===idx?blankForm():x))}>Clear</Btn>
         </div>
         {!myTrips.length&&<div style={{marginTop:8,padding:"10px 12px",background:"#fef3c7",borderRadius:8,border:"1px solid #fcd34d"}}>
-          <div style={{fontSize:11,color:"#92400e",fontWeight:600,marginBottom:6}}>⚠ No active trips. Create a quick trip below:</div>
-          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            <input id="qt-name" placeholder="Trip name" style={{flex:2,padding:"7px 10px",border:`1px solid ${BDR}`,borderRadius:6,fontSize:11,minWidth:120}}/>
-            <input id="qt-end" type="date" style={{flex:1,padding:"7px 10px",border:`1px solid ${BDR}`,borderRadius:6,fontSize:11,minWidth:120}}/>
-            <button onClick={async()=>{
-              const name=document.getElementById("qt-name").value.trim();
-              const end=document.getElementById("qt-end").value;
-              if(!name||!end){return;}
-              const newTrip={id:"TRP-"+Date.now(),name,type:"trip",startDate:today(),endDate:end,status:"pending_approval",budget:0,spent:0,assignedTo:[user.id],createdBy:user.id,tripMode:"reimbursement",currency:"INR",projectCode:"",categoryLimits:{}};
-              if(co.submitClaim){}// handled by parent
-              if(window._sbCreateTrip)await window._sbCreateTrip(newTrip,[user.id]);
-              document.getElementById("qt-name").value="";
-            }} style={{padding:"7px 14px",background:G,color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontWeight:700}}>Create Trip</button>
+          <div style={{fontSize:11,color:"#92400e",fontWeight:600,marginBottom:4}}>⚠ No active trips assigned to you.</div>
+          <div style={{fontSize:11,color:"#92400e",marginBottom:8}}>Create a trip first, then come back to submit your expense.</div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>setShowTripModal(true)} style={{padding:"6px 14px",background:"#f59e0b",color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontWeight:700}}>＋ Create New Trip</button>
+            {onCreateTrip&&<button onClick={onCreateTrip} style={{padding:"6px 14px",background:"transparent",color:"#92400e",border:"1px solid #fcd34d",borderRadius:6,cursor:"pointer",fontSize:11}}>Go to Trips tab →</button>}
           </div>
         </div>}
+        {/* Inline trip creation modal */}
+        {showTripModal&&<InlineTripModal user={user} co={co} sbCreateTrip={sbCreateTrip} onClose={()=>setShowTripModal(false)}/>}
       </Card>
     </div>
   );
@@ -3122,8 +3323,8 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
   const create=async()=>{
     if(!form.name||!form.endDate){toast("Fill name and end date","error");return;}
     if(!form.startDate){toast("Fill start date","error");return;}
-    if(canSetBudget&&!form.budget){toast("Fill budget","error");return;}
-    const assigned=isManager?(form.assignedTo.length>0?form.assignedTo:emps.map(e=>e.id)):[userId];
+    if(canSetBudget&&form.budget===""&&form.tripMode!=="reimbursement"){toast("Please set a budget amount (enter 0 if unknown)","error");return;}
+    const assigned=[...new Set([...(isManager||isAdmin?(form.assignedTo.length>0?form.assignedTo:emps.map(e=>e.id)):[userId]),userId])];
     // Employee-created trips start as pending_approval; manager-created are active
     const status=isManager||isAdmin?"active":"pending_approval";
     const newTrip={
@@ -3141,7 +3342,8 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
     if(sbCreateTrip){await sbCreateTrip(newTrip,assigned);}
     else{setTrips(p=>[newTrip,...p]);}
     setShowNew(false);
-    setForm({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[]});
+    setForm({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[],projectCode:"",tripMode:"balance",currency:"INR",categoryLimits:{}});
+    setShowCatLimits(false);
     toast(status==="active"?"✓ Trip created":"✓ Trip created — awaiting manager approval");
   };
 
@@ -3838,7 +4040,7 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
               <td style={{fontFamily:"monospace",fontSize:11,color:GD,fontWeight:600}}>{e.username||"—"}</td>
               <td><span style={{background:role.color+"25",color:role.color,padding:"2px 7px",borderRadius:5,fontSize:10,fontWeight:700}}>{role.label}</span></td>
               <td><span style={{background:GL,color:GD,padding:"1px 6px",borderRadius:4,fontSize:10,fontWeight:600}}>{e.dept}</span></td>
-              <td style={{fontWeight:700,color:policy.reimbursementMode?"#7c3aed":G,fontSize:12}}>{policy.reimbursementMode?fmt(e.reimbursable||0):fmt(e.balance||0)}</td>
+              <td style={{fontWeight:700,color:policy.reimbursementMode?"#7c3aed":INK,fontSize:12}}>{policy.reimbursementMode?fmt(e.reimbursable||0):fmt(e.balance||0)}</td>
               <td style={{fontSize:12,color:MUTED}}>{ec.length}</td>
               <td>{e.isSuspended
                 ?<span style={{background:"#fee2e2",color:"#dc2626",padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700}}>⊘ Suspended</span>
@@ -4186,7 +4388,113 @@ function TripApprovalsTab({trips,getUser,approveTrip,rejectTrip,isAdmin}){
 }
 
 
-// ─── TRAVEL CALENDAR ─────────────────────────────────────────────────────────
+// ─── MY HISTORY TAB ───────────────────────────────────────────────────────────
+function MyHistoryTab({user,trips,claims,getUser,exportClaimsPDF}){
+  const[expandedTrip,setExpandedTrip]=useState(null);
+  const myClaims=claims.filter(c=>c.empId===user.id);
+  const myTrips=trips.filter(t=>(t.assignedTo||[]).includes(user.id)||t.createdBy===user.id);
+
+  const generateClientPDF=async(trip)=>{
+    const {jsPDF}=await import("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js").then(m=>m.default||m);
+    const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
+    const W=210,M=18;let y=M;
+    doc.setFillColor(15,28,9);doc.rect(0,0,W,26,"F");
+    doc.setTextColor(126,217,87);doc.setFont("helvetica","bold");doc.setFontSize(16);doc.text("ClaimX",M,16);
+    doc.setTextColor(200,200,200);doc.setFontSize(9);doc.text("Client Reimbursement Claim",M+22,16);
+    doc.setTextColor(150,150,150);doc.text(new Date().toLocaleDateString("en-IN"),W-M,16,{align:"right"});
+    y=32;
+    doc.setTextColor(20,20,20);doc.setFontSize(13);doc.setFont("helvetica","bold");
+    doc.text("CLIENT REIMBURSEMENT CLAIM",W/2,y,{align:"center"});y+=7;
+    doc.setFontSize(10);doc.setFont("helvetica","normal");doc.setTextColor(80,80,80);
+    doc.text(`Trip: ${trip.name} · ${trip.startDate} to ${trip.endDate}`,W/2,y,{align:"center"});y+=5;
+    doc.text(`Employee: ${user.name} · ${trip.projectCode||""}`,W/2,y,{align:"center"});y+=10;
+    const tc=myClaims.filter(c=>c.tripId===trip.id&&c.status==="Approved");
+    const total=tc.reduce((s,c)=>s+c.amount,0);
+    doc.setFillColor(21,128,61);doc.rect(M,y,W-2*M,7,"F");
+    doc.setTextColor(255,255,255);doc.setFontSize(8);doc.setFont("helvetica","bold");
+    ["Date","Category","Description","Vendor","Amount","Receipt"].forEach((h,i)=>{
+      const x=M+2+[0,20,38,80,114,138][i];doc.text(h,x,y+5);});
+    y+=8;
+    tc.forEach((c,i)=>{
+      if(y>270){doc.addPage();y=14;}
+      doc.setFillColor(i%2===0?250:244,i%2===0?253:249,i%2===0?244:240);
+      doc.rect(M,y,W-2*M,6,"F");
+      doc.setTextColor(40,40,40);doc.setFontSize(7.5);doc.setFont("helvetica","normal");
+      const vals=[c.date||"",c.category?.slice(0,10)||"",c.desc?.slice(0,22)||"",c.vendor?.slice(0,14)||"—","₹"+(c.amount||0).toLocaleString("en-IN"),c.receipts?.length?"✓":"—"];
+      vals.forEach((v,vi)=>{const x=M+2+[0,20,38,80,114,138][vi];doc.text(String(v),x,y+4.5);});
+      y+=6.5;
+    });
+    y+=4;doc.setDrawColor(21,128,61);doc.line(M,y,W-M,y);y+=5;
+    doc.setFont("helvetica","bold");doc.setFontSize(10);doc.setTextColor(20,20,20);
+    doc.text(`Total Claim: ₹${total.toLocaleString("en-IN")}`,W-M,y,{align:"right"});y+=12;
+    doc.setFont("helvetica","normal");doc.setFontSize(9);doc.setTextColor(80,80,80);
+    doc.text("I hereby certify that the above expenses were incurred for business purposes",M,y);y+=5;
+    doc.text("and are claimed for reimbursement as per company policy.",M,y);y+=12;
+    doc.text("Signature: ________________________",M,y);
+    doc.text(`Date: ${new Date().toLocaleDateString("en-IN")}`,W-M,y,{align:"right"});
+    doc.setFontSize(7.5);doc.setTextColor(150,150,150);
+    doc.text("Generated by ClaimX by RB · claim-x-beta.vercel.app",W/2,286,{align:"center"});
+    doc.save(`Claim_${trip.name.replace(/\s+/g,"_")}_${user.name.replace(/\s+/g,"_")}.pdf`);
+  };
+
+  return(
+    <div>
+      <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:4}}>My History</h1>
+      <p style={{color:MUTED,fontSize:12,marginBottom:16}}>Complete record of all your trips and expenses</p>
+      {myTrips.length===0&&<Card style={{padding:32,textAlign:"center"}}><div style={{fontSize:40}}>🗃️</div><div style={{color:MUTED,marginTop:8}}>No trips yet. Submit your first expense to get started.</div></Card>}
+      {[...myTrips].sort((a,b)=>b.startDate?.localeCompare(a.startDate||"")||0).map(t=>{
+        const tc=myClaims.filter(c=>c.tripId===t.id);
+        const approved=tc.filter(c=>c.status==="Approved");
+        const total=approved.reduce((s,c)=>s+c.amount,0);
+        const isOpen=expandedTrip===t.id;
+        return(
+          <Card key={t.id} style={{marginBottom:10,padding:0,overflow:"hidden"}}>
+            <div onClick={()=>setExpandedTrip(isOpen?null:t.id)} style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",cursor:"pointer",background:isOpen?"var(--gl,#f0fde9)":"var(--card,#fff)"}}>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+                  <span style={{fontFamily:FD,fontSize:14,fontWeight:700,color:INK}}>{t.name}</span>
+                  <Badge s={t.status==="active"?"Active":t.status==="closed"?"Closed":t.status==="pending_approval"?"Pending":"Rejected"} sm/>
+                  {t.tripMode==="client"&&<span style={{background:"#eff6ff",color:"#2563eb",fontSize:9,padding:"1px 7px",borderRadius:4,fontWeight:700}}>CLIENT</span>}
+                </div>
+                <div style={{fontSize:10,color:MUTED}}>{t.startDate} → {t.endDate}{t.projectCode&&` · ${t.projectCode}`}</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontFamily:FD,fontSize:15,fontWeight:700,color:INK}}>{fmt(total)}</div>
+                <div style={{fontSize:9,color:MUTED}}>{approved.length}/{tc.length} approved</div>
+              </div>
+              <div style={{display:"flex",gap:6}} onClick={e=>e.stopPropagation()}>
+                <button onClick={()=>exportClaimsPDF&&exportClaimsPDF(tc,`${t.name} — My Claims`,user.name)} style={{padding:"4px 9px",background:"none",border:`1px solid ${BDR}`,borderRadius:6,cursor:"pointer",fontSize:10,color:MUTED}}>⬇ PDF</button>
+                {t.tripMode==="client"&&<button onClick={()=>generateClientPDF(t)} style={{padding:"4px 9px",background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:6,cursor:"pointer",fontSize:10,color:"#2563eb",fontWeight:600}}>📄 Client Claim</button>}
+              </div>
+              <span style={{color:MUTED,fontSize:12}}>{isOpen?"▲":"▼"}</span>
+            </div>
+            {isOpen&&<div style={{borderTop:`1px solid ${BDR}`,background:"var(--bg,#f8faf6)"}}>
+              {tc.length===0&&<div style={{padding:"16px 18px",color:MUTED,fontSize:12}}>No expenses in this trip yet.</div>}
+              {tc.map((c,i)=>(
+                <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 18px",borderBottom:`1px solid ${BDR}`,background:i%2===0?"transparent":"rgba(0,0,0,.01)"}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:12,fontWeight:600,color:INK}}>{c.desc}</div>
+                    <div style={{fontSize:10,color:MUTED}}>{c.date} · {c.category} · {c.vendor||"—"}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontWeight:700,fontSize:13,color:INK}}>{fmt(c.amount)}</div>
+                    <Badge s={c.status==="Approved"?"Approved":c.status==="Pending"?"Pending":"Rejected"} sm/>
+                  </div>
+                </div>
+              ))}
+              <div style={{padding:"10px 18px",borderTop:`1px solid ${BDR}`,display:"flex",justifyContent:"flex-end",gap:8}}>
+                <span style={{fontSize:11,color:MUTED}}>Total approved:</span>
+                <span style={{fontWeight:700,color:INK,fontSize:13}}>{fmt(total)}</span>
+              </div>
+            </div>}
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+
 function TravelCalendar({trips,users,isAdmin,myDept}){
   const td=today();
   const travellers=trips
@@ -4248,7 +4556,9 @@ function SettlementsTab({trips,claims,users,getUser,isAdmin,myDept,cid,sbEnabled
         });
       }
       // Reload page to reflect settlement
-      window.location.reload();
+      // Don't reload page — just refresh data from Supabase
+      if(typeof loadFromSB==="function")await loadFromSB();
+      else setSettling(null);
     }catch(e){
       alert("Settlement failed: "+e.message);
     }finally{setSettling(null);}
@@ -4570,7 +4880,210 @@ function ShortcutHelp({onClose}){
   );
 }
 
-// ─── HELP MANUAL ─────────────────────────────────────────────────────────────
+// ─── AI CHATBOT ───────────────────────────────────────────────────────────────
+function AIChatbot({user,co,onClose}){
+  const CHAT_KEY="claimx_chat_"+user?.id;
+  const[msgs,setMsgs]=useState(()=>{
+    try{const s=localStorage.getItem(CHAT_KEY);if(s)return JSON.parse(s);}catch{}
+    return[{role:"assistant",content:"Hi! I'm ClaimX Assistant. Ask me anything about submitting expenses, approving claims, creating trips, or any other feature. How can I help?"}];
+  });
+  const[input,setInput]=useState("");
+  const[busy,setBusy]=useState(false);
+  const[chatCount,setChatCount]=useState(0);
+  const[showHuman,setShowHuman]=useState(false);
+  const[humanForm,setHumanForm]=useState({name:user?.name||"",email:user?.email||"",msg:""});
+  const endRef=useRef(null);
+
+  // Save chat history whenever msgs changes
+  useEffect(()=>{
+    try{localStorage.setItem(CHAT_KEY,JSON.stringify(msgs.slice(-50)));}catch{}
+  },[msgs]);
+
+  const resetChat=()=>{
+    const init=[{role:"assistant",content:"Chat history cleared. How can I help you?"}];
+    setMsgs(init);setChatCount(0);setShowHuman(false);
+    try{localStorage.removeItem(CHAT_KEY);}catch{}
+  };
+
+  const CONTEXT=`You are ClaimX Assistant, a helpful support bot for ClaimX by RB — a cloud-based expense management app.
+Key features: expense claims submission with AI OCR, trip management with budgets, multi-level approval (employee→manager→admin), settlements, GST ITC tracking, analytics, dark mode, keyboard shortcuts.
+User: ${user?.name||"Unknown"}, Role: ${user?.role||"employee"}, Company: ${co?.meta?.name||"Unknown"}.
+Active trips: ${(co?.trips||[]).filter(t=>t.status==="active").length}.
+Pending claims: ${(co?.claims||[]).filter(c=>c.status==="Pending").length}.
+Be concise, helpful, and use bullet points when listing steps. If you can't help, offer to connect to a human assistant.`;
+
+  const send=async()=>{
+    if(!input.trim()||busy)return;
+    const userMsg={role:"user",content:input};
+    const newMsgs=[...msgs,userMsg];
+    setMsgs(newMsgs);setInput("");setBusy(true);
+    const newCount=chatCount+1;
+    setChatCount(newCount);
+    try{
+      const res=await fetch("/api/anthropic/v1/messages",{
+        method:"POST",headers:{"Content-Type":"application/json","anthropic-version":"2023-06-01"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-20250514",max_tokens:500,
+          system:CONTEXT,
+          messages:newMsgs.slice(-10).map(m=>({role:m.role,content:m.content}))
+        })
+      });
+      const data=await res.json();
+      const reply=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("")||"Sorry, I couldn't process that.";
+      setMsgs(p=>[...p,{role:"assistant",content:reply}]);
+      if(newCount>=5)setShowHuman(true);
+    }catch(e){
+      setMsgs(p=>[...p,{role:"assistant",content:"Sorry, I'm having trouble connecting. Please try again or contact support@rbshah.co.in"}]);
+    }
+    setBusy(false);
+    setTimeout(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),100);
+  };
+
+  const sendHumanRequest=async()=>{
+    if(!humanForm.name||!humanForm.email)return;
+    try{
+      await fetch("/api/email",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          to:"support@rbshah.co.in",
+          subject:`ClaimX Human Support Request — ${humanForm.name}`,
+          html:`<p><strong>User:</strong> ${humanForm.name} (${user?.role})</p><p><strong>Email:</strong> ${humanForm.email}</p><p><strong>Company:</strong> ${co?.meta?.name}</p><p><strong>Message:</strong> ${humanForm.msg}</p>`
+        })});
+    }catch(e){}
+    setMsgs(p=>[...p,{role:"assistant",content:`✓ Your details have been sent to our support team. We'll contact you at ${humanForm.email} within 24 hours.`}]);
+    setShowHuman(false);
+  };
+
+  return(
+    <div style={{position:"fixed",bottom:72,right:20,width:"min(380px,95vw)",height:"min(520px,80vh)",background:"var(--card,#fff)",borderRadius:16,boxShadow:"0 20px 60px rgba(0,0,0,.2)",display:"flex",flexDirection:"column",zIndex:800,border:"1px solid var(--bdr)"}}>
+      {/* Header */}
+      <div style={{background:`linear-gradient(135deg,${DARK},#2d5a1b)`,padding:"14px 16px",borderRadius:"16px 16px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{display:"flex",alignItems:"center",gap:9}}>
+          <div style={{width:32,height:32,borderRadius:"50%",background:"linear-gradient(135deg,#7ED957,#5CB83A)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>🤖</div>
+          <div><div style={{color:"#fff",fontWeight:700,fontSize:13}}>ClaimX Assistant</div><div style={{color:"rgba(255,255,255,.5)",fontSize:10}}>AI-powered · {msgs.length-1} messages</div></div>
+        </div>
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          <button onClick={resetChat} title="Clear chat history" style={{background:"none",border:"1px solid rgba(255,255,255,.2)",color:"rgba(255,255,255,.5)",borderRadius:6,padding:"3px 8px",fontSize:10,cursor:"pointer"}}>↺ Reset</button>
+          <button onClick={onClose} style={{background:"none",border:"none",color:"rgba(255,255,255,.6)",fontSize:18,cursor:"pointer"}}>✕</button>
+        </div>
+      </div>
+      {/* Messages */}
+      <div style={{flex:1,overflow:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:10}}>
+        {msgs.map((m,i)=>(
+          <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
+            <div style={{maxWidth:"82%",padding:"9px 13px",borderRadius:m.role==="user"?"12px 12px 3px 12px":"12px 12px 12px 3px",background:m.role==="user"?G:"var(--gl,#f0fde9)",color:m.role==="user"?"#fff":INK,fontSize:12,lineHeight:1.6}}>
+              {m.content}
+            </div>
+          </div>
+        ))}
+        {busy&&<div style={{display:"flex",gap:4,padding:"8px 12px"}}>
+          {[0,1,2].map(i=><div key={i} style={{width:6,height:6,borderRadius:"50%",background:MUTED,animation:`bounce .8s ease-in-out ${i*.15}s infinite alternate`}}/>)}
+        </div>}
+        {showHuman&&!busy&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:10,padding:"10px 12px",fontSize:11,color:"#92400e"}}>
+          <div style={{fontWeight:700,marginBottom:4}}>💬 Connect with a human assistant?</div>
+          <div style={{marginBottom:8,color:MUTED}}>Would you like us to reach out to you?</div>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>setShowHuman(false)} style={{padding:"5px 10px",background:"transparent",border:"1px solid #fcd34d",borderRadius:6,cursor:"pointer",fontSize:11,color:"#92400e"}}>Not now</button>
+            <button onClick={()=>setShowHuman("form")} style={{padding:"5px 12px",background:"#f59e0b",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,color:"#fff",fontWeight:700}}>Yes, contact me</button>
+          </div>
+        </div>}
+        {showHuman==="form"&&<div style={{background:"#f8faf6",border:"1px solid var(--bdr)",borderRadius:10,padding:"12px"}}>
+          <div style={{fontWeight:700,fontSize:12,color:INK,marginBottom:8}}>Your contact details:</div>
+          {[["Name","name","text"],["Email","email","email"],["Message (optional)","msg","text"]].map(([l,k,t])=>(
+            <div key={k} style={{marginBottom:7}}>
+              <div style={{fontSize:9,color:MUTED,textTransform:"uppercase",fontWeight:700,marginBottom:2}}>{l}</div>
+              <input type={t} value={humanForm[k]} onChange={e=>setHumanForm({...humanForm,[k]:e.target.value})} style={{width:"100%",padding:"6px 9px",border:"1px solid var(--bdr)",borderRadius:6,fontSize:12,background:"var(--input-bg,#fff)"}}/>
+            </div>
+          ))}
+          <button onClick={sendHumanRequest} style={{width:"100%",padding:"8px",background:G,color:"#fff",border:"none",borderRadius:7,cursor:"pointer",fontSize:12,fontWeight:700}}>Send Request</button>
+        </div>}
+        <div ref={endRef}/>
+      </div>
+      {/* Input */}
+      <div style={{padding:"10px 12px",borderTop:"1px solid var(--bdr)",display:"flex",gap:8}}>
+        <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}} placeholder="Ask anything…" style={{flex:1,padding:"8px 11px",border:"1px solid var(--bdr)",borderRadius:9,fontSize:12,background:"var(--input-bg,#fafff8)"}} disabled={busy}/>
+        <button onClick={send} disabled={busy||!input.trim()} style={{padding:"8px 14px",background:busy?"#e5e7eb":G,color:"#fff",border:"none",borderRadius:9,cursor:busy?"not-allowed":"pointer",fontSize:13,fontWeight:700}}>↑</button>
+      </div>
+      <style>{`@keyframes bounce{0%{transform:translateY(0)}100%{transform:translateY(-6px)}}`}</style>
+    </div>
+  );
+}
+
+
+const TUTORIAL_STEPS = {
+  employee:[
+    {icon:"🎉",title:"Welcome to ClaimX!",body:"ClaimX makes expense management effortless. Let's take a quick tour of your account."},
+    {icon:"✈️",title:"Trips & Periods",body:"Before submitting expenses, your manager creates a Trip and assigns you to it. Each trip has a budget and date range."},
+    {icon:"📤",title:"Submit Expenses",body:"Tap '+ New Expense' to file a claim. Upload your invoice and AI will auto-fill the details. You can submit multiple invoices at once."},
+    {icon:"📋",title:"Track Your Claims",body:"The Claims tab shows all your submissions with approval status. Approved claims update your wallet balance automatically."},
+    {icon:"💰",title:"Request Funds",body:"Running low? Use the 💰 button in the top bar to request additional funds from your manager for any active trip."},
+    {icon:"🌙",title:"Customise Display",body:"Use the 🌙 button in the top bar to toggle dark mode and adjust font size to your preference."},
+    {icon:"⌨️",title:"Keyboard Shortcuts",body:"Press ? anywhere to see all keyboard shortcuts. Use N for New Expense, A for Approvals, C for Claims, T for Trips."},
+    {icon:"✅",title:"You're all set!",body:"That's it! Start by going to the Submit tab to file your first expense. Your manager will approve it quickly."},
+  ],
+  manager:[
+    {icon:"🎉",title:"Welcome to ClaimX!",body:"As a Manager, you can create trips, approve expenses, and monitor your team's spending."},
+    {icon:"🗂️",title:"Create a Trip",body:"Go to Trips tab → Create Trip. Set a budget, date range, and assign employees. They can only submit claims within trip dates."},
+    {icon:"✓",title:"Approve Expenses",body:"Pending claims appear in the Approvals tab with a badge count. Review each claim — amounts above auto-approve limit need your sign-off."},
+    {icon:"🗺️",title:"Trip Approvals",body:"When employees create their own trips, they appear in Trip Approvals for your review. Approve to activate, reject to decline."},
+    {icon:"👥",title:"Manage Employees",body:"Add employees in the Employees tab. Each employee gets a username and password for login. Managers are created by Admin."},
+    {icon:"📊",title:"Analytics",body:"The Analytics tab shows spending by category, employee, and trip. Use it to identify high-spend patterns and anomalies."},
+    {icon:"💳",title:"Settlements",body:"The Settlements tab shows who owes money and who is owed. Close a trip to generate the settlement PDF."},
+    {icon:"✅",title:"You're all set!",body:"Start by creating your first trip in the Trips tab and assigning your team members."},
+  ],
+  admin:[
+    {icon:"🎉",title:"Welcome to ClaimX!",body:"As Admin, you have full access to all company data, approvals, policy settings, and financial exports."},
+    {icon:"⚙️",title:"Set Company Policy",body:"Go to Policy tab first. Set auto-approve limits, receipt thresholds, categories, and departments for your company."},
+    {icon:"👥",title:"Add Managers & Staff",body:"In Employees tab, create managers first. Managers can then create their own team members."},
+    {icon:"🗂️",title:"Trips & Budgets",body:"Create trips with budgets. You can assign any combination of employees and managers. Trip currency and category limits can be set per trip."},
+    {icon:"✓",title:"Dual Approval",body:"Claims above the dual-approve threshold need both manager and admin sign-off. Set this in Policy."},
+    {icon:"💼",title:"Finance & Exports",body:"Finance tab shows all approved expenses. Export to CSV, Tally, GSTR-2A, or Zoho Books. PDF exports available for all views."},
+    {icon:"📊",title:"Analytics",body:"Full company analytics — top spenders, category trends, anomaly reports, and spending behaviour analysis."},
+    {icon:"✅",title:"You're all set!",body:"Start with Policy settings, then create your first trip and team members."},
+  ],
+};
+TUTORIAL_STEPS.finance=TUTORIAL_STEPS.employee;
+TUTORIAL_STEPS.approver=TUTORIAL_STEPS.manager;
+
+function OnboardingTutorial({role,onClose}){
+  const steps=TUTORIAL_STEPS[role]||TUTORIAL_STEPS.employee;
+  const[step,setStep]=useState(0);
+  const s=steps[step];
+  const isLast=step===steps.length-1;
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:900,backdropFilter:"blur(6px)"}}>
+      <div style={{background:"var(--card,#fff)",borderRadius:20,padding:36,width:"min(480px,94vw)",boxShadow:"0 32px 80px rgba(0,0,0,.25)",position:"relative"}}>
+        {/* Progress dots */}
+        <div style={{display:"flex",justifyContent:"center",gap:6,marginBottom:20}}>
+          {steps.map((_,i)=>(
+            <div key={i} onClick={()=>setStep(i)} style={{width:i===step?20:7,height:7,borderRadius:4,background:i===step?G:i<step?"#a3e076":"#e5e7eb",transition:"all .25s",cursor:"pointer"}}/>
+          ))}
+        </div>
+        {/* Content */}
+        <div style={{textAlign:"center",padding:"0 8px"}}>
+          <div style={{fontSize:52,marginBottom:12}}>{s.icon}</div>
+          <h2 style={{fontFamily:FD,fontSize:22,fontWeight:700,color:INK,marginBottom:10}}>{s.title}</h2>
+          <p style={{color:MUTED,fontSize:14,lineHeight:1.7,marginBottom:28}}>{s.body}</p>
+        </div>
+        {/* Navigation */}
+        <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+          {step>0&&<button onClick={()=>setStep(step-1)} style={{padding:"10px 20px",borderRadius:9,border:`1.5px solid ${BDR}`,background:"transparent",color:MUTED,cursor:"pointer",fontSize:13}}>← Back</button>}
+          {!isLast?(
+            <Btn onClick={()=>setStep(step+1)} style={{padding:"10px 28px",fontSize:13}}>Next →</Btn>
+          ):(
+            <Btn onClick={onClose} style={{padding:"10px 28px",fontSize:13,background:G}}>Get Started! 🚀</Btn>
+          )}
+        </div>
+        {/* Skip */}
+        <button onClick={onClose} style={{position:"absolute",top:14,right:16,background:"none",border:"none",fontSize:18,cursor:"pointer",color:MUTED}}>✕</button>
+        <div style={{textAlign:"center",marginTop:14}}>
+          <button onClick={onClose} style={{background:"none",border:"none",color:MUTED,fontSize:11,cursor:"pointer"}}>Skip tutorial</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 const HELP_CONTENT={
   manager:{
     title:"Manager Guide",
@@ -4847,71 +5360,60 @@ export default function Root(){
       return;
     }
 
-    // 1. Immediately restore custom auth session — no Supabase needed
+    // ── STEP 1: Immediately check localStorage for any saved session ──────────
     const saved=loadSess();
+
+    // Custom auth users (username/password) — restore immediately, no Supabase needed
     if(saved?.customAuth&&saved?.sbUser){
       customAuthRef.current=true;
       setSession(saved);
-      setLoading(false);
-      // Still set up listener for auth events (don't return early)
-      // Just don't wait for Supabase to tell us who we are
-    }
-
-    // 2. Hard timeout — always fires
-    const hardTimer=setTimeout(()=>{setLoading(false);},3000);
-
-    // 3. Check existing Supabase session (skip if custom auth already loaded)
-    if(!saved?.customAuth){
-      supabase.auth.getSession().then(async({data:{session:sess},error})=>{
-        if(error||!sess?.user){
-          clearTimeout(hardTimer);
-          setLoading(false);
-          return;
-        }
-        clearTimeout(hardTimer);
-        await resolveSupabaseUser(sess.user.id);
-      }).catch(()=>{
-        clearTimeout(hardTimer);
-        setLoading(false);
+      setLoading(false); // immediate — no waiting
+      // Minimal listener — only for password recovery
+      const{data:{subscription}}=supabase.auth.onAuthStateChange((event)=>{
+        if(event==="PASSWORD_RECOVERY"){setIsReset(true);setSession(null);setLoading(false);}
+        // All other events (SIGNED_OUT etc.) are ignored for custom auth users
       });
-    } else {
-      clearTimeout(hardTimer); // custom auth loaded — clear timer immediately
+      return()=>subscription.unsubscribe();
     }
 
-    // 4. Always listen for auth state changes
+    // ── STEP 2: No saved session — check Supabase for Google OAuth session ────
+    const hardTimer=setTimeout(()=>setLoading(false), 4000);
+
+    supabase.auth.getSession().then(async({data:{session:sess},error})=>{
+      clearTimeout(hardTimer);
+      if(error||!sess?.user){
+        setLoading(false);
+        return;
+      }
+      await resolveSupabaseUser(sess.user.id);
+    }).catch(()=>{
+      clearTimeout(hardTimer);
+      setLoading(false);
+    });
+
+    // Listen for OAuth sign-in (Google redirect) and password recovery
     const{data:{subscription}}=supabase.auth.onAuthStateChange(async(event,sess)=>{
       if(event==="PASSWORD_RECOVERY"){
-        setIsReset(true);setSession(null);setLoading(false);return;
+        setIsReset(true);setSession(null);setLoading(false);
+        clearTimeout(hardTimer);return;
       }
-      if(event==="SIGNED_OUT"){
-        resolving.current=false;
-        // Check if this was intentional (user clicked sign out)
-        const intentional=sessionStorage.getItem("claimx_logout")==="1";
-        if(intentional){
-          try{sessionStorage.removeItem("claimx_logout");}catch(e){}
-          setSession(null);saveSess(null);setLoading(false);return;
-        }
-        // Not intentional — check for custom auth session to restore
-        const savedSess=loadSess();
-        if(savedSess?.customAuth&&savedSess?.sbUser){
-          customAuthRef.current=true;
-          setSession(savedSess);
-          setLoading(false);return;
-        }
-        if(customAuthRef.current){
-          const s=loadSess();
-          if(s?.sbUser){setSession(s);setLoading(false);return;}
-        }
-        // Genuine Supabase sign out — go to login
-        setSession(null);saveSess(null);setIsReset(false);setLoading(false);return;
+      if(event==="SIGNED_IN"&&sess?.user&&!resolving.current){
+        resolving.current=true;
+        clearTimeout(hardTimer);
+        await resolveSupabaseUser(sess.user.id);
       }
       if(event==="TOKEN_REFRESHED"&&sess?.user&&!resolving.current){
         resolving.current=true;
         await resolveSupabaseUser(sess.user.id);
       }
-      if(event==="SIGNED_IN"&&sess?.user&&!resolving.current){
-        resolving.current=true;
-        await resolveSupabaseUser(sess.user.id);
+      if(event==="SIGNED_OUT"){
+        // Only clear if this was intentional logout (flag set by handleLogout)
+        const wasIntentional=sessionStorage.getItem("claimx_logout")==="1";
+        if(wasIntentional){
+          try{sessionStorage.removeItem("claimx_logout");}catch{}
+          setSession(null);setLoading(false);
+        }
+        // Unintentional SIGNED_OUT (e.g. token expired) — reload to re-check
       }
     });
 
@@ -4997,21 +5499,23 @@ export default function Root(){
     }
   };
   const handleLogout=async()=>{
-    resolving.current=false;
+    const isCustomAuth=session?.customAuth||customAuthRef.current;
     customAuthRef.current=false;
-    const isCustomAuth=session?.customAuth;
-    // Set flag FIRST so SIGNED_OUT handler won't restore the session
-    try{sessionStorage.setItem("claimx_logout","1");}catch(e){}
-    // Clear all session data
+    resolving.current=false;
+
+    // Clear all stored session data first
     saveSess(null);
     try{localStorage.removeItem(SESSION_KEY);}catch(e){}
-    setSession(null);
-    setIsReset(false);
-    // Sign out from Supabase for Google OAuth users
-    if(SB_ENABLED&&!isCustomAuth){
+
+    // For OAuth users: set flag + call Supabase signOut
+    if(!isCustomAuth&&SB_ENABLED){
+      try{sessionStorage.setItem("claimx_logout","1");}catch(e){}
       try{await supabase.auth.signOut();}catch(e){}
     }
-    // Immediate redirect — no setTimeout
+
+    // Clear React state then redirect
+    setSession(null);
+    setIsReset(false);
     window.location.replace("/");
   };
 
