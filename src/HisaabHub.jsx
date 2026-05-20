@@ -575,6 +575,116 @@ const Logo=({width=200,dark=false})=>(
 
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
+// ─── LEGAL CONTENT ────────────────────────────────────────────────────────────
+const PRIVACY_POLICY=`**RB Finsol Private Limited** ("we") operates ClaimX by RB. This policy explains how we collect, use, and protect your data.
+
+**Data we collect:** Name, email, username, mobile, expense claims, invoice images, trip details, GST data, usage logs, and authentication tokens.
+
+**How we use it:** To provide expense management services, process claims, send notifications, generate reports, detect fraud, and comply with tax laws (Income Tax Act, GST law). Legal basis: contract performance, legitimate interests, legal obligation.
+
+**Storage:** Supabase (AWS infrastructure), encrypted at rest (AES-256) and in transit (TLS 1.2+). Data may be stored in USA/EU/Singapore.
+
+**Third parties:** Supabase (hosting), Anthropic (AI OCR — images not used for training), Resend (email), Interakt/Jio (WhatsApp), Vercel (app hosting). We do not sell your data.
+
+**International transfers:** Standard Contractual Clauses used for EEA/UK transfers.
+
+**Your rights (all users):** Access, correct, export (CSV), and request deletion of your data. **EU/UK (GDPR):** Also portability, objection, restriction, supervisory authority complaint. **California (CCPA):** Know, delete, opt-out of sale (we don't sell). **India (DPDP Act 2023):** Access, correction, erasure, grievance redressal.
+
+**Retention:** Active subscription period + 7 years for tax/audit compliance.
+
+**Invoice images:** Processed by Anthropic for OCR only. Not used for AI training. Retained for audit purposes.
+
+**Cookies:** See Cookie Policy tab.
+
+**Children:** Service not directed to under-18s.
+
+**Contact/Grievance Officer:** legal@rbshah.co.in · RB Finsol Private Limited, Rajkot, Gujarat 360001, India.
+
+*Last updated: May 2026. Material changes notified 30 days in advance.*`;
+
+const TERMS_OF_SERVICE=`**Agreement:** By using ClaimX by RB, you agree to these Terms with RB Finsol Private Limited.
+
+**The Service:** Cloud-based expense management — submit, approve, track expenses; manage trips; AI invoice OCR; generate accounting exports.
+
+**Your responsibilities:**
+- Maintain credential confidentiality; notify us of unauthorised access at support@rbshah.co.in
+- Submit only genuine, accurate expense claims
+- Ensure invoices uploaded are authentic business documents
+- Do not share accounts or bypass approval workflows
+
+**Prohibited:** Submitting false claims, reverse-engineering the app, storing unrelated data, violating any law.
+
+**AI Features:** Invoice scanning (Anthropic Claude) is for convenience — always verify AI-extracted data. We do not guarantee OCR accuracy.
+
+**Subscription:** Auto-renews unless cancelled 30 days before renewal. No refunds for partial periods (except where required by law). Pricing changes notified 60 days in advance.
+
+**Your data:** You own it. Request full export within 30 days of termination. Data deleted 30 days post-termination (except legally required records).
+
+**Intellectual Property:** Service owned by RB Finsol Private Limited. You retain ownership of your submitted data.
+
+**Availability:** We target 99.5% uptime but provide no guarantee. Not liable for downtime or third-party failures.
+
+**Limitation of Liability:** Maximum liability = fees paid in prior 12 months. Not liable for indirect or consequential damages.
+
+**Governing Law:** Laws of India. Disputes first negotiated, then arbitration under Arbitration and Conciliation Act 1996 in Rajkot, Gujarat. EU consumers may use EU ODR platform.
+
+**Termination:** 30 days' notice by either party. Immediate termination for material breach.
+
+**Contact:** support@rbshah.co.in · RB Finsol Private Limited, Rajkot, Gujarat 360001, India.
+
+*Last updated: May 2026.*`;
+
+const COOKIE_POLICY=`**Cookies and similar technologies** (localStorage, sessionStorage) store small files on your device to help ClaimX by RB function and remember your preferences.
+
+**Strictly Necessary (cannot be disabled):**
+- \`claimx_session\` — Keeps you logged in (session / 30 days)
+- \`claimx_logout\` — Prevents session restore during sign-out (session only)
+- \`sb-*\` — Supabase authentication tokens (session / 7 days)
+
+**Functional (can be declined — functionality reduced):**
+- \`claimx_prefs_v1\` — Display preferences: dark mode, font size (1 year)
+- \`claimx_offline_queue\` — Queues claims when offline (temporary, until synced)
+- \`claimx_db\` — Offline data cache (session)
+
+**Analytics:** None currently.
+
+**Advertising/Tracking:** None. We do not participate in advertising networks.
+
+**Third-party cookies:** Only Supabase authentication (\`sb-*\`). No other third-party cookies.
+
+**Managing cookies:**
+- **Browser settings:** Block or delete cookies (blocking strictly necessary cookies prevents login)
+- **Preferences:** Toggle in Profile → Display Preferences
+- **Clear all:** Use Sign Out button or clear localStorage in browser DevTools
+
+**Your choices at login:** "Accept All" includes functional cookies. "Essential Only" limits to strictly necessary cookies only (preferences will not be saved between sessions).
+
+*Last updated: May 2026. Contact: legal@rbshah.co.in*`;
+
+function LegalContent({type}){
+  const text=type==="privacy"?PRIVACY_POLICY:type==="terms"?TERMS_OF_SERVICE:COOKIE_POLICY;
+  return(
+    <div style={{fontSize:13,lineHeight:1.8,color:"#374151"}}>
+      {text.split("\n").map((line,i)=>{
+        if(line.startsWith("**")&&line.endsWith("**")&&line.length>4){
+          return<h3 key={i} style={{fontFamily:FD,fontSize:15,fontWeight:700,color:"#1a2e12",margin:"18px 0 6px"}}>{line.replace(/\*\*/g,"")}</h3>;
+        }
+        if(line.startsWith("- ")){
+          return<div key={i} style={{paddingLeft:16,marginBottom:3}}>• {line.slice(2).replace(/\*\*([^*]+)\*\*/g,"$1")}</div>;
+        }
+        if(line.startsWith("*")&&line.endsWith("*")){
+          return<div key={i} style={{fontSize:11,color:"#9ca3af",marginTop:12,fontStyle:"italic"}}>{line.replace(/\*/g,"")}</div>;
+        }
+        if(!line.trim())return<div key={i} style={{height:8}}/>;
+        // Bold inline text
+        const parts=line.split(/\*\*([^*]+)\*\*/g);
+        return<p key={i} style={{margin:"4px 0"}}>{parts.map((p,j)=>j%2===1?<strong key={j}>{p}</strong>:p)}</p>;
+      })}
+    </div>
+  );
+}
+
+// ─── LOGIN ─────────────────────────────────────────────────────────────────────
 function Login({onLogin,DB,isPasswordRecovery=false}){
   const[login,  setLogin] =useState(""); // username, email, or mobile
   const[pass,   setPass]  =useState("");
@@ -586,6 +696,18 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
   const[busy,   setBusy]  =useState(false);
   const[gBusy,  setGB]    =useState(false);
   const[view,   setView]  =useState(isPasswordRecovery?"reset":"login");
+  const[legalModal,setLegalModal]=useState(null);
+  const[cookieConsent,setCookieConsentState]=useState(()=>{
+    try{return localStorage.getItem("claimx_cookie_consent");}catch{return null;}
+  });
+  const acceptCookies=()=>{
+    try{localStorage.setItem("claimx_cookie_consent","accepted_"+(new Date().toISOString().slice(0,10)));}catch{}
+    setCookieConsentState("accepted");
+  };
+  const declineCookies=()=>{
+    try{localStorage.setItem("claimx_cookie_consent","functional_only");}catch{}
+    setCookieConsentState("functional_only");
+  };
 
   const attempt=async(loginVal,pw)=>{
     setErr("");setBusy(true);
@@ -724,7 +846,50 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
       <style>{GLSTYLE}</style>
       <div style={{position:"absolute",inset:0,backgroundImage:"linear-gradient(rgba(126,217,87,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(126,217,87,.025) 1px,transparent 1px)",backgroundSize:"44px 44px"}}/>
 
-      {/* Left branding — hidden on mobile */}
+      {/* Cookie Consent Banner */}
+      {!cookieConsent&&(
+        <div style={{position:"fixed",bottom:0,left:0,right:0,background:"#1a2e12",borderTop:"2px solid #7ED957",padding:"14px 20px",zIndex:1000,display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+          <div style={{flex:1,minWidth:240}}>
+            <div style={{color:"#fff",fontWeight:700,fontSize:13,marginBottom:3}}>🍪 We use cookies</div>
+            <div style={{color:"rgba(255,255,255,.6)",fontSize:11}}>
+              We use essential cookies for login and functional cookies for your display preferences. No advertising or tracking cookies.{" "}
+              <span onClick={()=>setLegalModal("cookies")} style={{color:"#7ED957",cursor:"pointer",textDecoration:"underline"}}>Cookie Policy</span>
+              {" · "}
+              <span onClick={()=>setLegalModal("privacy")} style={{color:"#7ED957",cursor:"pointer",textDecoration:"underline"}}>Privacy Policy</span>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,flexShrink:0}}>
+            <button onClick={declineCookies} style={{padding:"7px 14px",background:"transparent",border:"1px solid rgba(255,255,255,.3)",borderRadius:7,color:"rgba(255,255,255,.6)",cursor:"pointer",fontSize:11}}>Essential Only</button>
+            <button onClick={acceptCookies} style={{padding:"7px 18px",background:"#7ED957",border:"none",borderRadius:7,color:"#fff",cursor:"pointer",fontSize:12,fontWeight:700}}>Accept All</button>
+          </div>
+        </div>
+      )}
+
+      {/* Legal Document Modal */}
+      {legalModal&&(
+        <div style={{position:"fixed",inset:0,background:"#00000080",zIndex:1001,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(4px)"}} onClick={()=>setLegalModal(null)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,width:"min(720px,95vw)",maxHeight:"85vh",display:"flex",flexDirection:"column",overflow:"hidden",boxShadow:"0 24px 60px #0006"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 24px",borderBottom:"1px solid #e5e7eb",background:"#f8faf6"}}>
+              <div style={{fontFamily:FD,fontSize:16,fontWeight:700,color:"#1a2e12"}}>
+                {legalModal==="privacy"?"Privacy Policy":legalModal==="terms"?"Terms of Service":"Cookie Policy"}
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                {["privacy","terms","cookies"].map(t=>(
+                  <button key={t} onClick={()=>setLegalModal(t)} style={{padding:"4px 10px",borderRadius:5,border:"none",background:legalModal===t?"#7ED957":"#e5e7eb",color:legalModal===t?"#fff":"#6b7280",fontSize:10,fontWeight:600,cursor:"pointer",textTransform:"capitalize"}}>{t==="privacy"?"Privacy":t==="terms"?"Terms":"Cookies"}</button>
+                ))}
+                <button onClick={()=>setLegalModal(null)} style={{padding:"4px 10px",borderRadius:5,border:"none",background:"#f3f4f6",color:"#6b7280",fontSize:12,cursor:"pointer"}}>✕</button>
+              </div>
+            </div>
+            <div style={{overflow:"auto",padding:"24px",flex:1,fontSize:13,lineHeight:1.7,color:"#374151"}}>
+              <LegalContent type={legalModal}/>
+            </div>
+            <div style={{padding:"12px 24px",borderTop:"1px solid #e5e7eb",display:"flex",justifyContent:"space-between",alignItems:"center",background:"#f8faf6"}}>
+              <div style={{fontSize:10,color:"#9ca3af"}}>Last updated: May 2026 · RB Finsol Private Limited</div>
+              <button onClick={()=>setLegalModal(null)} style={{padding:"7px 18px",background:"#7ED957",border:"none",borderRadius:7,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="mob-hide" style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",padding:"60px 64px",position:"relative",zIndex:1}}>
         <div style={{marginBottom:40}}><Logo width={240} dark/></div>
         <h2 style={{fontFamily:FD,fontSize:28,fontWeight:700,color:"#fff",lineHeight:1.3,marginBottom:12}}>Smarter expense<br/>management for<br/>growing Indian teams.</h2>
@@ -816,7 +981,14 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
             </div>}
           </>)}
         </div>
-        <div style={{marginTop:14,textAlign:"center",fontSize:10,color:"rgba(255,255,255,0.2)"}}>© 2026 ClaimX by RB · Privacy · Terms</div>
+        <div style={{marginTop:14,textAlign:"center",fontSize:10,color:"rgba(255,255,255,0.2)"}}>
+          © 2026 ClaimX by RB ·{" "}
+          <span onClick={()=>setLegalModal("privacy")} style={{cursor:"pointer",textDecoration:"underline",color:"rgba(255,255,255,0.35)"}}>Privacy Policy</span>
+          {" · "}
+          <span onClick={()=>setLegalModal("terms")} style={{cursor:"pointer",textDecoration:"underline",color:"rgba(255,255,255,0.35)"}}>Terms of Service</span>
+          {" · "}
+          <span onClick={()=>setLegalModal("cookies")} style={{cursor:"pointer",textDecoration:"underline",color:"rgba(255,255,255,0.35)"}}>Cookie Policy</span>
+        </div>
       </div>
     </div>
   );
