@@ -1766,6 +1766,55 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const pendingClaims=co.claims.filter(c=>c.status==="Pending"||(c.status==="Manager Approved"&&isAdmin));
   const pendingTopups=co.topups.filter(t=>t.status==="Pending");
 
+  // ── sbCreateTrip — defined once, used by both TripsTab and SubmitTab ─────────
+  const sbCreateTrip=async(trip,assigned)=>{
+    if(SB_ENABLED){
+      try{
+        const tripStatus=isManager||isAdmin?"active":"pending_approval";
+        const insertRow={
+          id:trip.id,company_id:cid,
+          name:trip.name,type:trip.type||"trip",
+          start_date:trip.startDate,end_date:trip.endDate,
+          status:tripStatus,
+          budget:parseFloat(trip.budget)||0,
+          spent:0,created_by:user.id,
+        };
+        try{Object.assign(insertRow,{
+          trip_mode:trip.tripMode||"balance",
+          currency:trip.currency||"INR",
+          project_code:trip.projectCode||null,
+          opening_balance:parseFloat(trip.budget)||0,
+          category_limits:Object.keys(trip.categoryLimits||{}).length>0?trip.categoryLimits:null,
+        });}catch(e){}
+        const{error:tripErr}=await supabase.from("trips").insert(insertRow);
+        if(tripErr){
+          const{error:retry}=await supabase.from("trips").insert({
+            id:trip.id,company_id:cid,name:trip.name,type:trip.type||"trip",
+            start_date:trip.startDate,end_date:trip.endDate,
+            status:tripStatus,budget:parseFloat(trip.budget)||0,spent:0,created_by:user.id,
+          });
+          if(retry)throw new Error(retry.message);
+        }
+        if(assigned?.length){
+          await supabase.from("trip_assignments").insert(
+            assigned.map(uid=>({trip_id:trip.id,user_id:uid}))
+          ).then(()=>{}).catch(()=>{});
+        }
+        if(!isManager&&!isAdmin){
+          const mgrs=co.users.filter(u=>["manager","admin"].includes(u.role));
+          for(const m of mgrs)await sbPushNotif(m.id,`New trip "${trip.name}" by ${user.name} awaits approval`,"info");
+        }
+        await loadFromSB();
+        toast(tripStatus==="active"?"✓ Trip created":"✓ Trip submitted for approval");
+      }catch(err){
+        toast("Trip creation failed: "+err.message,"error");
+      }
+    }else{
+      setTrips(p=>[{...trip,status:isManager||isAdmin?"active":"pending_approval"},...p]);
+      toast(isManager||isAdmin?"✓ Trip created":"✓ Trip submitted for approval");
+    }
+  };
+
   const approveTrip=async(trip)=>{
     if(SB_ENABLED){await supabase.from("trips").update({status:"active"}).eq("id",trip.id);await loadFromSB();}
     else setTrips(p=>p.map(t=>t.id===trip.id?{...t,status:"active"}:t));
@@ -2656,57 +2705,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           isManager={isManager} isAdmin={isAdmin} getUser={getUser} users={co.users}
           closeTrip={closeTrip} toast={toast} uid={user.id} userRole={user.role}
           sbPushNotif={sbPushNotif} companyUsers={co.users}
-          sbCreateTrip={async(trip,assigned)=>{
-            if(SB_ENABLED){
-              try{
-                const tripStatus=isManager||isAdmin?"active":"pending_approval";
-                const insertRow={
-                  id:trip.id, company_id:cid,
-                  name:trip.name, type:trip.type||"trip",
-                  start_date:trip.startDate, end_date:trip.endDate,
-                  status:tripStatus,
-                  budget:parseFloat(trip.budget)||0,
-                  spent:0,
-                  created_by:user.id,
-                };
-                // Add optional columns only if they exist in schema
-                try{Object.assign(insertRow,{
-                  trip_mode:trip.tripMode||"balance",
-                  currency:trip.currency||"INR",
-                  project_code:trip.projectCode||null,
-                  opening_balance:parseFloat(trip.budget)||0,
-                  category_limits:Object.keys(trip.categoryLimits||{}).length>0?trip.categoryLimits:null,
-                });}catch(e){}
-                const{error:tripErr}=await supabase.from("trips").insert(insertRow);
-                if(tripErr){
-                  // If extra columns fail, retry with minimal columns
-                  const{error:retry}=await supabase.from("trips").insert({
-                    id:trip.id,company_id:cid,name:trip.name,type:trip.type||"trip",
-                    start_date:trip.startDate,end_date:trip.endDate,
-                    status:tripStatus,budget:parseFloat(trip.budget)||0,spent:0,created_by:user.id,
-                  });
-                  if(retry)throw new Error(retry.message);
-                }
-                // Assign users (non-fatal if table missing)
-                if(assigned?.length){
-                  await supabase.from("trip_assignments").insert(
-                    assigned.map(uid=>({trip_id:trip.id,user_id:uid}))
-                  ).then(()=>{}).catch(()=>{});
-                }
-                // Notify managers if employee created
-                if(!isManager&&!isAdmin){
-                  const mgrs=co.users.filter(u=>["manager","admin"].includes(u.role));
-                  for(const m of mgrs)await sbPushNotif(m.id,`New trip "${trip.name}" by ${user.name} awaits approval`,"info");
-                }
-                await loadFromSB();
-              }catch(err){
-                toast("Trip creation failed: "+err.message,"error");
-              }
-            } else {
-              // Local mode — add directly
-              setTrips(p=>[{...trip,status:isManager||isAdmin?"active":"pending_approval"},...p]);
-            }
-          }}/>}
+          sbCreateTrip={sbCreateTrip}/>}
         {tab==="approvals"&&canApprove&&<>
           <ApprovalsTab pendingClaims={pendingClaims} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip}/>
           {editRequests.length>0&&<Card style={{padding:16,marginTop:16}}>
