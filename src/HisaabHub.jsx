@@ -1,4 +1,5 @@
 import React,{ useState, useRef, useEffect, useCallback, Component, createContext, useContext } from "react";
+import { jsPDF } from "jspdf";
 import { createClient } from "@supabase/supabase-js";
 
 // ─── SUPABASE CLIENT ──────────────────────────────────────────────────────────
@@ -339,8 +340,7 @@ const claimEmailHtml=(action,claim,remarks,companyName)=>{
 
 // ─── TRIP SETTLEMENT PDF ──────────────────────────────────────────────────────
 const generateSettlementPDF=async(trip,claims,getUser,companyName)=>{
-  // Dynamic import jsPDF from CDN
-  const {jsPDF}=await import("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js").then(m=>m.default||m);
+  // jsPDF loaded from npm package
   const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
   const W=210,M=20;
   let y=M;
@@ -1981,7 +1981,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const submitClaim=async(form)=>{
     const amount=parseFloat(form.amount);
     const tripId=form.tripId||co.trips.find(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(user.id)))?.id;
-    if(!tripId){toast("No active trip assigned","error");return;}
+    if(!tripId){const msg="No active trip assigned to you. Please create or join a trip first.";toast(msg,"error");throw new Error(msg);}
     const claimDate=form.date||today();
     // Block future dates
     if(claimDate>today()){toast("Invoice date cannot be in the future","error");return;}
@@ -1990,8 +1990,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       const selectedTrip=co.trips.find(t=>t.id===tripId);
       if(selectedTrip?.startDate&&selectedTrip?.endDate){
         if(claimDate<selectedTrip.startDate||claimDate>selectedTrip.endDate){
-          toast(`Expense date ${claimDate} is outside trip range (${selectedTrip.startDate} to ${selectedTrip.endDate})`,"error");
-          return;
+          const msg2=`Expense date ${claimDate} is outside trip range (${selectedTrip.startDate} to ${selectedTrip.endDate}). Please fix the date.`;
+          toast(msg2,"error");throw new Error(msg2);
         }
       }
     }
@@ -2016,7 +2016,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       status:auto?"Approved":"Pending",autoApproved:auto,
       receipts:form.receipts||[],
       remarks:auto?"Approved":"",
-      flagged:catEx,anomaly:isAnomaly,anomalyReasons:reasons,comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||"",projectCode:form.projectCode||trip?.projectCode||"",
+      flagged:catEx,anomaly:isAnomaly,anomalyReasons:[...reasons,...(Object.keys(form.manualEdits||{}).length>0?[`Fields manually edited after OCR scan: ${Object.keys(form.manualEdits||{}).join(", ")}`]:[])],manualEdits:form.manualEdits||{},comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||"",projectCode:form.projectCode||selectedTrip?.projectCode||"",
       gstAmount:parseFloat(form.gstAmount)||0,gstItc:null};
 
     if(!online){
@@ -2499,7 +2499,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   const exportClaimsPDF=async(claimsToExport,title,subtitle)=>{
     try{
-      const {jsPDF}=await import("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js").then(m=>m.default||m);
+      // jsPDF loaded from npm package
       const doc=new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
       const W=297,M=14;let y=M;
 
@@ -2732,6 +2732,15 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               if(patch.employeeBudgets!==undefined)dbPatch.employee_budgets=patch.employeeBudgets;
               const{error}=await supabase.from("trips").update(dbPatch).eq("id",tripId);
               if(error)throw new Error(error.message);
+              // Handle assignedTo changes via trip_assignments table
+              if(patch.assignedTo!==undefined){
+                await supabase.from("trip_assignments").delete().eq("trip_id",tripId);
+                if(patch.assignedTo.length>0){
+                  await supabase.from("trip_assignments").insert(
+                    patch.assignedTo.map(uid=>({trip_id:tripId,user_id:uid}))
+                  );
+                }
+              }
               await loadFromSB();
             } else {
               setTrips(p=>p.map(t=>t.id===tripId?{...t,...patch}:t));
@@ -2745,7 +2754,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             <EditRequestsPanel editRequests={editRequests} claims={co.claims} getUser={getUser} cid={cid} toast={toast} sbEnabled={SB_ENABLED} onApprove={approveEditRequest} onReject={rejectEditRequest}/>
           </Card>}
         </>}
-        {tab==="topup"&&!canApprove&&<TopupTab user={user} topups={co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} sbCreateTopup={async(req)=>{if(SB_ENABLED){await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending"});await loadFromSB();}}}/>}
+        {tab==="topup"&&!canApprove&&<TopupTab user={user} topups={co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} trips={co.trips} sbCreateTopup={async(req)=>{if(SB_ENABLED){await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});await loadFromSB();}else{setTopups(p=>[...p,req]);}}}/>}
         {tab==="analytics"&&<Analytics
           claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept;}):co.claims.filter(c=>c.empId===user.id)}
           trips={isAdmin?co.trips:isManager?co.trips.filter(t=>{const assigned=(t.assignedTo||[]);return assigned.some(id=>{const u=getUser(id);return u?.dept===myUser?.dept;})||t.createdBy===user.id;}):co.trips.filter(t=>(t.assignedTo||[]).includes(user.id)||t.createdBy===user.id)}
@@ -2966,6 +2975,7 @@ function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin}){
   const[form,setForm]=useState({
     name:trip.name,startDate:trip.startDate,endDate:trip.endDate,
     projectCode:trip.projectCode||"",currency:trip.currency||"INR",
+    assignedTo:[...(trip.assignedTo||[])],
   });
   const[busy,setBusy]=useState(false);
   const inpS={width:"100%",padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB};
@@ -2973,7 +2983,7 @@ function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin}){
     if(!form.name?.trim()||!form.endDate){alert("Name and end date required");return;}
     setBusy(true);
     try{
-      await onSave(trip.id,{name:form.name,startDate:form.startDate,endDate:form.endDate,projectCode:form.projectCode,currency:form.currency});
+      await onSave(trip.id,{name:form.name,startDate:form.startDate,endDate:form.endDate,projectCode:form.projectCode,currency:form.currency,assignedTo:form.assignedTo});
       onClose();
     }catch(e){alert("Update failed: "+e.message);}
     finally{setBusy(false);}
@@ -2998,6 +3008,23 @@ function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin}){
               {["INR","USD","EUR","GBP","AED","SGD","JPY","CHF","CAD","AUD"].map(c=><option key={c}>{c}</option>)}
             </select></div>
         </div>
+        <div style={{marginBottom:16}}>
+          <label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:6,textTransform:"uppercase"}}>Assigned Employees</label>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+            {users.filter(u=>["employee","finance"].includes(u.role)).map(u=>{
+              const isAssigned=(trip.assignedTo||[]).includes(u.id);
+              return(
+                <div key={u.id} onClick={()=>setForm(f=>{
+                  const cur=f.assignedTo||[...trip.assignedTo];
+                  return{...f,assignedTo:cur.includes(u.id)?cur.filter(x=>x!==u.id):[...cur,u.id]};
+                })} style={{padding:"5px 11px",borderRadius:14,border:`1.5px solid ${isAssigned?G:BDR}`,background:isAssigned?G:"transparent",color:isAssigned?"#fff":INK,fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
+                  <span style={{width:18,height:18,borderRadius:"50%",background:isAssigned?"rgba(255,255,255,.3)":GL,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700}}>{u.avatar||inits(u.name)}</span>
+                  {u.name.split(" ")[0]}
+                </div>
+              );
+            })}
+          </div>
+        </div>
         <div style={{display:"flex",gap:9,justifyContent:"flex-end"}}>
           <button onClick={onClose} style={{padding:"9px 16px",borderRadius:8,border:`1px solid ${BDR}`,background:"transparent",color:MUTED,cursor:"pointer",fontSize:13}}>Cancel</button>
           <Btn onClick={save} disabled={busy} style={{padding:"9px 22px",fontSize:13}}>{busy?"Saving…":"Save Changes"}</Btn>
@@ -3007,7 +3034,6 @@ function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin}){
   );
 }
 
-// ─── TRIP BUDGET MODAL (per-employee budgets) ─────────────────────────────────
 function TripBudgetModal({trip,users,claims,getUser,onClose,onSave,sbCreateTopup}){
   const assigned=(trip.assignedTo||[]).map(id=>users.find(u=>u.id===id)).filter(Boolean);
   const empBudgets=trip.employeeBudgets||{};
@@ -3192,7 +3218,7 @@ function InlineTripModal({user,co,sbCreateTrip,onClose}){
 // ─── SUBMIT TAB (OCR fixed — no stale closures) ───────────────────────────────
 function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCategories,onCreateTrip,sbCreateTrip}){
   const cats=companyCategories||DEFAULT_CATS;
-  const blankForm=()=>({id:uid(),date:today(),category:"",desc:"",amount:"",origAmount:"",currency:"INR",tripId:"",notes:"",vendor:"",receipts:[],ocrState:"idle",ocrData:null,scanning:false,gstAmount:"",projectCode:""});
+  const blankForm=()=>({id:uid(),date:today(),category:"",desc:"",amount:"",origAmount:"",currency:"INR",tripId:"",notes:"",vendor:"",receipts:[],ocrState:"idle",ocrData:null,scanning:false,gstAmount:"",projectCode:"",manualEdits:{}});
   const [forms,setForms]=useState(()=>{
     try{
       const d=localStorage.getItem("claimx_draft_v1");
@@ -3476,8 +3502,13 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
             </div>}
           </div>}
         </div>
-        {/* Draft saved indicator */}
-        {(fm.category||fm.desc||fm.amount)&&<div style={{fontSize:9,color:MUTED,marginBottom:4,textAlign:"right"}}>💾 Draft auto-saved</div>}
+        {/* Draft save buttons */}
+        <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:4}}>
+          {(fm.category||fm.desc||fm.amount)&&<>
+            <button onClick={()=>{try{localStorage.setItem("claimx_draft_v1",JSON.stringify(forms));toast("✓ Draft saved");}catch{toast("Save failed","error");}}} style={{padding:"4px 10px",background:"none",border:`1px solid ${BDR}`,borderRadius:6,cursor:"pointer",fontSize:10,color:MUTED}}>💾 Save Draft</button>
+            <button onClick={()=>{try{localStorage.removeItem("claimx_draft_v1");setForms([blankForm()]);setIdx(0);toast("Draft cleared");}catch{}}} style={{padding:"4px 10px",background:"none",border:"1px solid #fee2e2",borderRadius:6,cursor:"pointer",fontSize:10,color:"#dc2626"}}>✕ Clear Draft</button>
+          </>}
+        </div>
         <div style={{display:"flex",gap:9}}>
           <Btn onClick={async()=>{
             if(!fm.category){alert("Please select a category");return;}
@@ -3489,14 +3520,16 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
             const tripId=resolvedTripId;
             try{
               await submitClaim({...fm,tripId});
-              // Clear this form after successful submission
+              // Only clear form on TRUE success (submitClaim didn't throw)
               const newForms=forms.map((x,i)=>i===idx?blankForm():x);
               setForms(newForms);
               setIdx(0);
-              // Clear draft if all forms blank
               if(newForms.every(f=>!f.category&&!f.desc&&!f.amount))
                 try{localStorage.removeItem("claimx_draft_v1");}catch{}
-            }catch(e){alert("Submission failed: "+(e?.message||e));}
+            }catch(e){
+              // Do NOT clear form — show error and let user fix it
+              alert("Submission failed: "+(e?.message||String(e)));
+            }
           }} style={{flex:1,padding:11}}>
             {amt>0&&amt<=policy.autoApproveLimit?"⚡ Submit & Auto-Approve":"Submit Claim →"}
           </Btn>
@@ -3817,20 +3850,40 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
 }
 
 // ─── TOPUP TAB ────────────────────────────────────────────────────────────────
-function TopupTab({user,topups,setTopups,toast,sbCreateTopup}){
-  const [form,setForm]=useState({amount:"",reason:""});
+function TopupTab({user,topups,setTopups,toast,sbCreateTopup,trips}){
+  const myTrips=(trips||[]).filter(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(user.id)));
+  const [form,setForm]=useState({amount:"",reason:"",tripId:""});
   const inpS={width:"100%",padding:"10px 12px",border:`1.5px solid ${BDR}`,borderRadius:9,fontSize:13,background:"var(--input-bg,#fafff8)"};
-  const submit=async()=>{if(!form.amount||!form.reason){toast("Fill all fields","error");return;}const req={id:"TUP-"+uid(),empId:user.id,amount:parseFloat(form.amount),reason:form.reason,date:today(),status:"Pending"};if(sbCreateTopup){await sbCreateTopup(req);}else{setTopups(p=>[...p,req]);}setForm({amount:"",reason:""});toast("Request sent to manager");};
+  const submit=async()=>{
+    if(!form.amount||!form.reason){toast("Fill amount and reason","error");return;}
+    const tripId=form.tripId||myTrips[0]?.id;
+    if(!tripId){toast("Please select a trip for this top-up request","error");return;}
+    const req={id:"TUP-"+uid(),empId:user.id,amount:parseFloat(form.amount),reason:form.reason,date:today(),status:"Pending",tripId};
+    if(sbCreateTopup){await sbCreateTopup(req);}else{setTopups(p=>[...p,req]);}
+    setForm({amount:"",reason:"",tripId:""});
+    toast("✓ Top-up request sent to manager");
+  };
   return(
     <div style={{maxWidth:480}}>
       <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:4}}>Request Balance Top-Up</h1>
-      <p style={{color:MUTED,fontSize:12,marginBottom:16}}>Request additional funds from your manager</p>
+      <p style={{color:MUTED,fontSize:12,marginBottom:16}}>Request additional funds from your manager for a specific trip</p>
       <Card style={{padding:20,marginBottom:12}}>
+        {/* Trip selection — mandatory */}
+        <div style={{marginBottom:12}}>
+          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Trip *</label>
+          {myTrips.length===0?(
+            <div style={{padding:"10px",background:"#fef3c7",borderRadius:7,fontSize:12,color:"#92400e"}}>⚠ No active trips. Top-up requires an active trip.</div>
+          ):(
+            <select value={form.tripId||myTrips[0]?.id||""} onChange={e=>setForm({...form,tripId:e.target.value})} style={{...inpS,appearance:"none"}}>
+              {myTrips.map(t=><option key={t.id} value={t.id}>{t.name} ({t.currency||"INR"})</option>)}
+            </select>
+          )}
+        </div>
         <div style={{marginBottom:12}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Amount (₹) *</label><input type="number" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} placeholder="e.g. 10000" style={inpS}/></div>
         <div style={{marginBottom:16}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Reason *</label><textarea value={form.reason} onChange={e=>setForm({...form,reason:e.target.value})} rows={3} placeholder="Why do you need additional funds?" style={{...inpS,resize:"vertical"}}/></div>
-        <Btn onClick={submit} style={{width:"100%",padding:11}}>Send Request</Btn>
+        <Btn onClick={submit} disabled={myTrips.length===0} style={{width:"100%",padding:11}}>Send Request</Btn>
       </Card>
-      {topups.length>0&&<Card>{topups.map(t=><div key={t.id} style={{padding:"10px 14px",borderBottom:`1px solid #f8faf6`,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:600,fontSize:12}}>{fmt(t.amount)}</div><div style={{fontSize:10,color:MUTED}}>{t.reason} · {t.date}</div></div><Badge s={t.status} sm/></div>)}</Card>}
+      {topups.length>0&&<Card>{topups.map(t=>{const trip=myTrips.find(x=>x.id===t.tripId);return(<div key={t.id} style={{padding:"10px 14px",borderBottom:`1px solid #f8faf6`,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:600,fontSize:12}}>{fmt(t.amount)}{trip&&<span style={{fontSize:10,color:MUTED,marginLeft:6}}>{trip.name}</span>}</div><div style={{fontSize:10,color:MUTED}}>{t.reason} · {t.date}</div></div><Badge s={t.status} sm/></div>);})}</Card>}
     </div>
   );
 }
@@ -4638,7 +4691,7 @@ function MyHistoryTab({user,trips,claims,getUser,exportClaimsPDF}){
   const myTrips=trips.filter(t=>(t.assignedTo||[]).includes(user.id)||t.createdBy===user.id);
 
   const generateClientPDF=async(trip)=>{
-    const {jsPDF}=await import("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js").then(m=>m.default||m);
+    // jsPDF loaded from npm package
     const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
     const W=210,M=18;let y=M;
     doc.setFillColor(15,28,9);doc.rect(0,0,W,26,"F");
