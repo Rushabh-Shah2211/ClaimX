@@ -847,7 +847,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
     finally{setBusy(false);}
   };
 
-  const inp={width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:14,outline:"none",boxSizing:"border-box"};
+  const inp={width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.25)",background:"rgba(255,255,255,0.08)",color:"#ffffff",fontFamily:FB,fontSize:14,outline:"none",boxSizing:"border-box",WebkitTextFillColor:"#ffffff"};
 
   return(
     <div style={{minHeight:"100vh",background:`linear-gradient(145deg,${DARK} 0%,#162e0d 45%,#0c1f08 100%)`,display:"flex",fontFamily:FB,position:"relative",overflow:"hidden"}}>
@@ -2006,7 +2006,14 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       const al=co.policy.categoryPct[form.category]||100;
       return tot>0&&(nc/tot)*100>al;
     })();
-    const auto=!catEx&&!weekend&&!noRcpt&&amount<=co.policy.autoApproveLimit;
+    // Check if trip budget is exceeded (including pending claims)
+    const tripSpentIncludingPending=(()=>{
+      const trip=selectedTrip;
+      if(!trip)return 0;
+      return co.claims.filter(c=>c.tripId===tripId&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
+    })();
+    const tripBudgetExceeded=selectedTrip?.budget>0&&(tripSpentIncludingPending+amount)>selectedTrip.budget;
+    const auto=!catEx&&!weekend&&!noRcpt&&amount<=co.policy.autoApproveLimit&&!tripBudgetExceeded;
     const{isAnomaly,reasons}=detectAnomaly(form,amount);
     const claimId="EXP-"+uid();
 
@@ -2116,8 +2123,14 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     // - Admin can reject at any stage
     const isDualNeeded=needsDualApproval(claim.amount);
     let finalStatus=decision;
-    if(decision==="Approved"&&isDualNeeded&&!isAdmin&&user.role==="manager"){
-      finalStatus="Manager Approved"; // first leg of dual approval
+    if(decision==="Approved"&&isDualNeeded){
+      // Dual approval: manager goes first → "Manager Approved", then admin does final approval
+      if(user.role==="manager"&&claim.status==="Pending"){
+        finalStatus="Manager Approved"; // manager first leg
+      }
+      // Admin can give final approval only if manager already approved (or admin acts alone)
+      // If claim is still "Pending" and admin approves, treat as full approval
+      // If claim is "Manager Approved" and admin approves, that's full approval
     }
     const isFullyApproved=finalStatus==="Approved";
 
@@ -2547,7 +2560,9 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       doc.setFont("helvetica","normal");doc.setFontSize(7.5);doc.setTextColor(150,150,150);
       doc.text(`ClaimX by RB · ${activeMeta?.name||""} · Generated ${new Date().toLocaleDateString("en-IN")}`,W/2,200,{align:"center"});
 
-      doc.save(`ClaimX_${(title||"Export").replace(/\s+/g,"_")}_${today()}.pdf`);
+      // Open PDF in new tab instead of forcing download
+      const pdfUrl=doc.output("bloburl");
+      window.open(pdfUrl,"_blank");
       toast("✓ PDF downloaded");
     }catch(e){
       console.error("PDF error:",e);
@@ -2566,8 +2581,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
     {id:"trips",     icon:"🗂️", label:"Trips / Periods"},
     ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:pendingClaims.length+pendingTopups.length}]:[{id:"topup",icon:"💰",label:"Top-up"}]),
-    // Separate Trip Approvals tab - always visible for managers
-    ...(canApprove?[{id:"trip_approvals",icon:"🗺️",label:"Trip Approvals",badge:co.trips.filter(t=>t.status==="pending_approval").length}]:[]),
+    // Trip approvals merged into main Approvals tab - no separate tab
     ...(canApprove&&editRequests.filter(r=>r.status==="Pending").length>0?[{id:"editreqs",icon:"✏️",label:"Edit Requests",badge:editRequests.filter(r=>r.status==="Pending").length}]:[]),
     {id:"analytics", icon:"📊", label:"Analytics"},
     // Inbox moved to notification bell in top bar - not in sidebar
@@ -2747,7 +2761,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           }}
         />}
         {tab==="approvals"&&canApprove&&<>
-          <ApprovalsTab pendingClaims={pendingClaims} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip}/>
+          <ApprovalsTab pendingClaims={isAdmin?pendingClaims:pendingClaims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept;})} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users}/>
           {editRequests.length>0&&<Card style={{padding:16,marginTop:16}}>
             <div style={{fontFamily:FD,fontSize:14,fontWeight:700,color:INK,marginBottom:12}}>✏ Edit Requests {editRequests.filter(r=>r.status==="Pending").length>0&&<span style={{background:"#fef3c7",color:"#92400e",fontSize:11,padding:"1px 7px",borderRadius:10,marginLeft:7,fontFamily:FB}}>{editRequests.filter(r=>r.status==="Pending").length} pending</span>}</div>
             <EditRequestsPanel editRequests={editRequests} claims={co.claims} getUser={getUser} cid={cid} toast={toast} sbEnabled={SB_ENABLED} onApprove={approveEditRequest} onReject={rejectEditRequest}/>
@@ -3442,7 +3456,20 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
       </Card>
 
       {/* Alerts */}
-      {amt>0&&amt<=policy.autoApproveLimit&&<div style={{background:"#dbeafe",border:"1px solid #93c5fd",borderRadius:9,padding:"9px 13px",marginBottom:10,fontSize:12,color:"#1d4ed8",fontWeight:600}}>⚡ This will be auto-approved instantly (under {fmt(policy.autoApproveLimit)})</div>}
+{/* Budget warning when trip budget exceeded */}
+      {(()=>{
+        const trip=co.trips.find(t=>t.id===(fm.tripId||myTrips[0]?.id));
+        if(!trip?.budget||!fm.amount)return null;
+        const spent=co.claims.filter(c=>c.tripId===trip.id&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
+        const remaining=trip.budget-spent;
+        const thisAmt=parseFloat(fm.amount)||0;
+        if(thisAmt>remaining&&remaining>=0){
+          return<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:9,padding:"9px 13px",marginBottom:10,fontSize:12,color:"#92400e",fontWeight:600}}>
+            ⚠ This expense ({fmt(thisAmt)}) exceeds remaining trip budget ({fmt(remaining)}). It will require manager approval.
+          </div>;
+        }
+        return null;
+      })()}
       {fm.date&&isWknd(fm.date)&&policy.weekendRequiresApproval&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:9,padding:"9px 13px",marginBottom:10,fontSize:12,color:"#92400e"}}>📅 Weekend expense — requires manager approval per policy</div>}
       {amt>0&&policy.receiptMandatoryAbove>0&&amt>policy.receiptMandatoryAbove&&!fm.receipts.length&&<div style={{background:"#fee2e2",border:"1px solid #fca5a5",borderRadius:9,padding:"9px 13px",marginBottom:10,fontSize:12,color:"#dc2626"}}>📎 Receipt required for expenses above {fmt(policy.receiptMandatoryAbove)}</div>}
 
@@ -3504,8 +3531,8 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
         {/* Draft save buttons */}
         <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:4}}>
           {(fm.category||fm.desc||fm.amount)&&<>
-            <button onClick={()=>{try{localStorage.setItem("claimx_draft_v1",JSON.stringify(forms));toast("✓ Draft saved");}catch{toast("Save failed","error");}}} style={{padding:"4px 10px",background:"none",border:`1px solid ${BDR}`,borderRadius:6,cursor:"pointer",fontSize:10,color:MUTED}}>💾 Save Draft</button>
-            <button onClick={()=>{try{localStorage.removeItem("claimx_draft_v1");setForms([blankForm()]);setIdx(0);toast("Draft cleared");}catch{}}} style={{padding:"4px 10px",background:"none",border:"1px solid #fee2e2",borderRadius:6,cursor:"pointer",fontSize:10,color:"#dc2626"}}>✕ Clear Draft</button>
+            <button onClick={()=>{try{localStorage.setItem("claimx_draft_v1",JSON.stringify(forms));alert("✓ Draft saved successfully");}catch(e){alert("Save failed: "+e.message);}}} style={{padding:"4px 10px",background:"none",border:`1px solid ${BDR}`,borderRadius:6,cursor:"pointer",fontSize:10,color:MUTED}}>💾 Save Draft</button>
+            <button onClick={()=>{try{localStorage.removeItem("claimx_draft_v1");setForms([blankForm()]);setIdx(0);}catch{}}} style={{padding:"4px 10px",background:"none",border:"1px solid #fee2e2",borderRadius:6,cursor:"pointer",fontSize:10,color:"#dc2626"}}>✕ Clear Draft</button>
           </>}
         </div>
         <div style={{display:"flex",gap:9}}>
@@ -3530,7 +3557,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
               alert("Submission failed: "+(e?.message||String(e)));
             }
           }} style={{flex:1,padding:11}}>
-            {amt>0&&amt<=policy.autoApproveLimit?"⚡ Submit & Auto-Approve":"Submit Claim →"}
+            "Submit Claim →"
           </Btn>
           <Btn v="outline" onClick={()=>setForms(p=>p.map((x,i)=>i===idx?blankForm():x))}>Clear</Btn>
         </div>
@@ -3740,7 +3767,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
 }
 
 // ─── APPROVALS TAB ────────────────────────────────────────────────────────────
-function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip}){
+function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip,users,user}){
   const [filter,setFilter]=useState("All");
   const [selected,setSelected]=useState(new Set());
   const pendingTrips=(trips||[]).filter(t=>t.status==="pending_approval");
@@ -3834,7 +3861,12 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
                   <div style={{display:"flex",gap:5}}>
                     <Btn onClick={()=>setMdl({type:"approve",data:c})} style={{padding:"6px 11px",fontSize:11}}>✓ Approve</Btn>
                     <Btn v="danger" onClick={()=>setMdl({type:"reject",data:c})} style={{padding:"6px 9px",fontSize:11}}>✗</Btn>
-                    <button onClick={()=>{if(handleDecision)handleDecision(c.id,"Flagged","Marked as anomaly by manager");}} title="Flag anomaly" style={{padding:"5px 8px",background:c.anomaly?"#ede9fe":"#f3f4f6",border:"none",borderRadius:6,cursor:"pointer",fontSize:12}}>🔍</button>
+                    {isAdmin&&c.status==="Manager Approved"&&<Btn onClick={()=>setMdl({type:"approve",data:{...c,_adminOverride:true}})} style={{padding:"6px 9px",fontSize:10,background:"#7c3aed",color:"#fff"}}>⚡ Final</Btn>}
+                    <button onClick={async()=>{
+                      const newAnomaly=!c.anomaly;
+                      if(SB_ENABLED){await supabase.from("claims").update({anomaly:newAnomaly,anomaly_reasons:newAnomaly?[...((c.anomalyReasons||[]).filter(r=>!r.includes("Manager flagged"))),"Manager flagged as anomaly"]:[]}).eq("id",c.id);await loadFromSB();}
+                      else setClaims(p=>p.map(x=>x.id===c.id?{...x,anomaly:newAnomaly}:x));
+                    }} title={c.anomaly?"Remove anomaly flag":"Flag as anomaly"} style={{padding:"5px 8px",background:c.anomaly?"#ede9fe":"#f3f4f6",border:c.anomaly?"1px solid #c4b5fd":"none",borderRadius:6,cursor:"pointer",fontSize:12}}>🔍</button>
                   </div>
                 </div>
               </div>
@@ -4444,7 +4476,7 @@ function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
         {/* Core */}
         <Card style={{padding:18}}>
           <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Core Policy</div>
-          {[["Auto-Approve Limit (₹)","autoApproveLimit"],["Receipt Mandatory Above (₹)","receiptMandatoryAbove"],["Dual Approval Required Above (₹)","dualApproveAbove"]].map(([l,k])=>(
+          {[["Auto-Approve Limit (₹)","autoApproveLimit"],["Receipt Mandatory Above (₹)","receiptMandatoryAbove"],["Dual Approval Required Above (₹) — 0 to disable","dualApproveAbove"]].map(([l,k])=>(
             <div key={k} style={{marginBottom:12}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>{l}</label><input type="number" value={policy[k]||0} onChange={e=>setPolicy({...policy,[k]:parseFloat(e.target.value)||0})} style={inpS}/>
               {k==="dualApproveAbove"&&<div style={{fontSize:10,color:MUTED,marginTop:2}}>Manager + Admin both must approve</div>}
             </div>
@@ -5617,6 +5649,11 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
           <Badge s={c.status==="Approved"||c.status==="Auto-Approved"?"Approved":c.status}/>
           <div style={{display:"flex",gap:7}}>
             {/* Edit request: only for own approved claims, no auto-approved reveal */}
+            {/* Pending claims - employee can edit directly */}
+            {c.status==="Pending"&&c.empId===userId&&(
+              <Btn v="outline" onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Edit</Btn>
+            )}
+            {/* Approved claims - must request edit */}
             {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&onEditRequest&&(
               <Btn v="warning" onClick={()=>setMdl({type:"editRequest",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Request Edit</Btn>
             )}
