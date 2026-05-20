@@ -750,41 +750,18 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
       if(!trimmed||!pw){setErr("Please enter your username and password.");setBusy(false);return;}
 
       if(SB_ENABLED){
-        // Try /api/auth (JWT mode — proper RLS via auth.uid())
+        // Direct RPC login (simple, no JWT complexity for beta)
         let customResult=null;
         try{
-          const apiRes=await Promise.race([
-            fetch("/api/auth",{method:"POST",headers:{"Content-Type":"application/json"},
-              body:JSON.stringify({login:trimmed,password:pw})}),
-            new Promise((_,rej)=>setTimeout(()=>rej(new Error("Login timed out")),12000))
+          const{data,error:rpcErr}=await Promise.race([
+            supabase.rpc("authenticate_user",{p_login:trimmed,p_password:pw}),
+            new Promise((_,rej)=>setTimeout(()=>rej(new Error("Login timed out after 12s")),12000))
           ]);
-          if(!apiRes.ok&&apiRes.status!==401){throw new Error("API error "+apiRes.status);}
-          const apiData=await apiRes.json();
-          if(apiData.error){throw new Error(apiData.error);}
-          customResult=apiData;
-          // JWT mode: set Supabase session so auth.uid() works for RLS
-          if(customResult.jwt_mode&&customResult.access_token){
-            await setSupabaseJWT(customResult.access_token,customResult.refresh_token);
-          }
-        }catch(apiErr){
-          if(apiErr.message.includes("timed out")||apiErr.message.includes("Login")||apiErr.message.includes("User not")||apiErr.message.includes("Incorrect")){
-            throw apiErr;
-          }
-          // /api/auth not available (local dev or Vercel not deployed) — fall back to RPC
-          console.warn("/api/auth unavailable, using RPC:",apiErr.message);
-          try{
-            const{data,error:rpcErr}=await supabase.rpc("authenticate_user",{p_login:trimmed,p_password:pw});
-            if(rpcErr)throw new Error(rpcErr.message);
-            if(data?.error)throw new Error(data.error);
-            customResult=data;
-          }catch(rpcErr2){
-            throw new Error(rpcErr2.message||"Login failed");
-          }
-        }
+          if(rpcErr)throw new Error(rpcErr.message);
+          customResult=data;
+        }catch(e){throw new Error(e.message||"Connection failed");}
 
         if(customResult&&!customResult.error){
-          // Set RLS context (fallback for non-JWT mode)
-          if(!customResult.jwt_mode)await setRLSContext(customResult.id);
           onLogin({
             id:customResult.id,name:customResult.name,email:customResult.email||"",
             username:customResult.username||"",mobile:customResult.mobile||"",
@@ -792,11 +769,11 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
             balance:customResult.balance,reimbursable:customResult.reimbursable,
             delegateTo:customResult.delegate_to,isSuspended:false,
             authType:"custom",cid:customResult.company_id,companyId:customResult.company_id,
-            jwtMode:customResult.jwt_mode||false,
           },{id:customResult.company_id,name:customResult.company_name});
           return;
         }
-        throw new Error(customResult?.error||"Login failed. Check your credentials.");
+        throw new Error(customResult?.error||"Incorrect username or password.");
+
 
       }else{
         await new Promise(r=>setTimeout(r,400));
@@ -1791,7 +1768,10 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const myUser=co.users.find(u=>u.id===user.id);
   const myNotifs=(co.notifications||[]).filter(n=>n.userId===user.id&&!n.read);
   // Admin + manager see pending; finance sees approved only
-  const pendingClaims=co.claims.filter(c=>c.status==="Pending"||(c.status==="Manager Approved"&&isAdmin));
+  const pendingClaims=co.claims.filter(c=>
+    c.status==="Pending" ||
+    (c.status==="Manager Approved"&&isAdmin) // admin sees manager-approved for final sign-off
+  );
   const pendingTopups=co.topups.filter(t=>t.status==="Pending");
 
   // ── sbCreateTrip — defined once, used by both TripsTab and SubmitTab ─────────
@@ -2305,7 +2285,27 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   const savePolicyToSB=async(newPolicy)=>{
     if(SB_ENABLED){
-      await supabase.from("policy").upsert({company_id:cid,auto_approve_limit:newPolicy.autoApproveLimit,reimbursement_mode:newPolicy.reimbursementMode,receipt_mandatory_above:newPolicy.receiptMandatoryAbove,weekend_requires_approval:newPolicy.weekendRequiresApproval,multi_level_approval:newPolicy.multiLevelApproval,approval_levels:newPolicy.approvalLevels,vendor_whitelist:newPolicy.vendorWhitelist,vendor_blacklist:newPolicy.vendorBlacklist,department_budgets:newPolicy.departmentBudgets,category_pct:newPolicy.categoryPct,scheduled_reports:newPolicy.scheduledReports});
+      await supabase.from("policy").upsert({
+        company_id:cid,
+        auto_approve_limit:newPolicy.autoApproveLimit,
+        reimbursement_mode:newPolicy.reimbursementMode,
+        receipt_mandatory_above:newPolicy.receiptMandatoryAbove,
+        weekend_requires_approval:newPolicy.weekendRequiresApproval,
+        multi_level_approval:newPolicy.multiLevelApproval,
+        approval_levels:newPolicy.approvalLevels,
+        vendor_whitelist:newPolicy.vendorWhitelist,
+        vendor_blacklist:newPolicy.vendorBlacklist,
+        department_budgets:newPolicy.departmentBudgets,
+        category_pct:newPolicy.categoryPct,
+        scheduled_reports:newPolicy.scheduledReports,
+        dual_approve_above:newPolicy.dualApproveAbove||0,
+        notify_email_on_approve:newPolicy.notifyEmailOnApprove,
+        notify_email_on_reject:newPolicy.notifyEmailOnReject,
+        notify_wa_on_approve:newPolicy.notifyWaOnApprove,
+        notify_wa_on_reject:newPolicy.notifyWaOnReject,
+        categories:newPolicy.categories,
+        departments:newPolicy.departments,
+      });
       await loadFromSB();
     }
   };
@@ -2597,7 +2597,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     {id:"trips",     icon:"🗂️", label:"Trips / Periods"},
     ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:pendingClaims.length+pendingTopups.length}]:[{id:"topup",icon:"💰",label:"Top-up"}]),
     // Trip approvals merged into main Approvals tab - no separate tab
-    ...(canApprove&&editRequests.filter(r=>r.status==="Pending").length>0?[{id:"editreqs",icon:"✏️",label:"Edit Requests",badge:editRequests.filter(r=>r.status==="Pending").length}]:[]),
+    ...(canApprove?[{id:"editreqs",icon:"✏️",label:"Edit Requests",badge:editRequests.filter(r=>r.status==="Pending").length||undefined}]:[]),
     {id:"analytics", icon:"📊", label:"Analytics"},
     // Inbox moved to notification bell in top bar - not in sidebar
     ...(canApprove||isFinance?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
@@ -3876,7 +3876,13 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
                   <div style={{display:"flex",gap:5}}>
                     <Btn onClick={()=>setMdl({type:"approve",data:c})} style={{padding:"6px 11px",fontSize:11}}>✓ Approve</Btn>
                     <Btn v="danger" onClick={()=>setMdl({type:"reject",data:c})} style={{padding:"6px 9px",fontSize:11}}>✗</Btn>
-                    {isAdmin&&c.status==="Manager Approved"&&<Btn onClick={()=>setMdl({type:"approve",data:{...c,_adminOverride:true}})} style={{padding:"6px 9px",fontSize:10,background:"#7c3aed",color:"#fff"}}>⚡ Final</Btn>}
+                    {/* Admin override — visible for Pending (bypass manager) AND Manager Approved (final approval) */}
+                    {isAdmin&&c.status==="Manager Approved"&&(
+                      <Btn onClick={()=>handleDecision(c.id,"Approved","Admin final approval")} style={{padding:"6px 9px",fontSize:10,background:"#7c3aed",color:"#fff"}}>⚡ Final Approve</Btn>
+                    )}
+                    {isAdmin&&c.status==="Pending"&&(
+                      <Btn onClick={()=>handleDecision(c.id,"Approved","Admin override — direct approval")} style={{padding:"6px 9px",fontSize:10,background:"#0369a1",color:"#fff"}}>↯ Override</Btn>
+                    )}
                     <button onClick={async()=>{
                       const newAnomaly=!c.anomaly;
                       if(SB_ENABLED){await supabase.from("claims").update({anomaly:newAnomaly,anomaly_reasons:newAnomaly?[...((c.anomalyReasons||[]).filter(r=>!r.includes("Manager flagged"))),"Manager flagged as anomaly"]:[]}).eq("id",c.id);await loadFromSB();}
@@ -4506,7 +4512,7 @@ function Policy({policy,setPolicy,savePolicy,toast,users,sbEnabled}){
                 <span style={{color:MUTED,minWidth:18}}>L{i+1}</span><span style={{color:MUTED}}>Up to</span>
                 <input type="number" value={lv.upTo} onChange={e=>{const a=[...policy.approvalLevels];a[i]={...a[i],upTo:parseFloat(e.target.value)||0};setPolicy({...policy,approvalLevels:a});}} style={{width:80,padding:"4px 7px",border:`1.5px solid ${BDR}`,borderRadius:5,fontSize:11}}/>
                 <select value={lv.role} onChange={e=>{const a=[...policy.approvalLevels];a[i]={...a[i],role:e.target.value};setPolicy({...policy,approvalLevels:a});}} style={{padding:"4px 7px",border:`1.5px solid ${BDR}`,borderRadius:5,fontSize:11,appearance:"none"}}>
-                  {ROLES.filter(r=>["manager","approver","finance"].includes(r.id)).map(r=><option key={r.id} value={r.id}>{r.label}</option>)}
+                  {ROLES.filter(r=>["manager","admin","approver","finance"].includes(r.id)).map(r=><option key={r.id} value={r.id}>{r.label}</option>)}
                 </select>
               </div>
             ))}
@@ -5715,8 +5721,6 @@ export default function Root(){
       customAuthRef.current=true;
       setSession(saved);
       setLoading(false); // immediate — no waiting
-      // Re-establish RLS context after page refresh
-      if(saved.sbUser?.id)setRLSContext(saved.sbUser.id).catch(()=>{});
       // Minimal listener — only for password recovery
       const{data:{subscription}}=supabase.auth.onAuthStateChange((event)=>{
         if(event==="PASSWORD_RECOVERY"){setIsReset(true);setSession(null);setLoading(false);}
