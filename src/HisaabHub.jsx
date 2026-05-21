@@ -1111,15 +1111,6 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
   const allCo=SB_ENABLED?(sbCoList||[]):Object.values(DB);
   const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB,width:"100%"};
 
-  // Reload fresh data whenever approvals tab is opened
-  useEffect(()=>{
-    if(tab==="approvals"&&SB_ENABLED&&loadFromSB){
-      loadFromSB();
-      if(typeof loadEditRequests==="function")loadEditRequests();
-    }
-  // eslint-disable-next-line
-  },[tab]);
-
   useEffect(()=>{
     if(!SB_ENABLED)return;
     setLoading(true);
@@ -2061,6 +2052,14 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       })));
     }catch(e){console.warn("loadEditRequests:",e.message);}
   };
+
+  // Reload edit requests + all data when switching to approvals tab
+  useEffect(()=>{
+    if(tab==="approvals"&&SB_ENABLED){
+      loadFromSB();
+      loadEditRequests();
+    }
+  },[tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submitEditRequest=async(claim,reason)=>{
     const reqId=uid();
@@ -3030,8 +3029,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
         {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={isAdmin?(co.auditLog||[]):(co.auditLog||[]).filter(e=>{const u=getUser(e.userId||e.by);return u?.dept===myUser?.dept;})} claims={co.claims} getUser={getUser}/>}
         {tab==="my_history"&&!isManager&&!isAdmin&&<MyHistoryTab user={user} trips={co.trips} claims={co.claims} getUser={getUser} exportClaimsPDF={exportClaimsPDF}/>}
-        {tab==="balances"&&canApprove&&<BalancesTab trips={co.trips} claims={co.claims} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept)} getUser={getUser} isAdmin={isAdmin} fmt={fmt}/>}
-        {tab==="settlements"&&canApprove&&<SettlementsTab trips={co.trips} claims={co.claims} users={co.users} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} cid={cid} sbEnabled={SB_ENABLED}/>}
+        {tab==="balances"&&canApprove&&<BalancesTab trips={co.trips} claims={co.claims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept)} getUser={getUser} isAdmin={isAdmin} fmt={fmt}/>}
+        {tab==="settlements"&&canApprove&&<SettlementsTab trips={co.trips} claims={co.claims} topups={co.topups} users={co.users} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} cid={cid} sbEnabled={SB_ENABLED}/>}
         {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}/>}
         {tab==="trip_approvals"&&canApprove&&<TripApprovalsTab trips={co.trips} getUser={getUser} approveTrip={approveTrip} rejectTrip={rejectTrip} isAdmin={isAdmin}/>}
         {tab==="editreqs"&&canApprove&&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id} reload={loadEditRequests}/>}
@@ -5266,7 +5265,7 @@ function TravelCalendar({trips,users,isAdmin,myDept}){
 }
 
 // ─── BALANCES TAB ─────────────────────────────────────────────────────────────
-function BalancesTab({trips,claims,users,getUser,isAdmin,fmt:fmtFn}){
+function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn}){
   const f=fmtFn||fmt;
   const[expandedEmp,setExpandedEmp]=useState(null);
   const[expandedTrip,setExpandedTrip]=useState(null);
@@ -5281,11 +5280,15 @@ function BalancesTab({trips,claims,users,getUser,isAdmin,fmt:fmtFn}){
       const rejected=tc.filter(c=>c.status==="Rejected");
       const pending=tc.filter(c=>c.status==="Pending");
       const spent=approved.reduce((s,c)=>s+c.amount,0);
-      const empBudget=(t.employeeBudgets?.[u.id]?.allocated||0)+(t.employeeBudgets?.[u.id]?.topups||0)||0;
+      // Approved topup requests for this employee on this trip
+      const approvedTopups=(topups||[]).filter(tp=>tp.empId===u.id&&tp.tripId===t.id&&tp.status==="Approved").reduce((s,tp)=>s+tp.amount,0);
+      const empAllocated=(t.employeeBudgets?.[u.id]?.allocated||0)+(t.employeeBudgets?.[u.id]?.topups||0)||0;
       const tripBudgetShare=t.budget>0&&(t.assignedTo||[]).length>0?t.budget/(t.assignedTo||[1]).length:0;
-      const budget=empBudget||tripBudgetShare;
-      const balance=t.tripMode!=="reimbursement"?(budget-spent):-spent;
-      return{trip:t,approved,rejected,pending,spent,budget,balance,tc};
+      // Total available = allocated budget + approved topup requests
+      const totalAvailable=(empAllocated||tripBudgetShare)+approvedTopups;
+      // Net balance: what's left after spending (negative = company owes employee, positive = employee owes company)
+      const balance=t.tripMode!=="reimbursement"?(totalAvailable-spent):-spent;
+      return{trip:t,approved,rejected,pending,spent,budget:totalAvailable,approvedTopups,balance,tc};
     }).filter(td=>td.tc.length>0||td.budget>0);
 
     const netBalance=tripBreakdown.reduce((s,td)=>s+td.balance,0);
@@ -5370,10 +5373,13 @@ function BalancesTab({trips,claims,users,getUser,isAdmin,fmt:fmtFn}){
 
                 {/* Invoice drill-down */}
                 {expandedTrip===t.id+u.id&&<div style={{padding:"8px 18px 12px 36px"}}>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10,fontSize:11}}>
-                    <div style={{padding:"6px 10px",background:"#dcfce7",borderRadius:6}}>✅ Approved: <strong>{f(approved.reduce((s,c)=>s+c.amount,0))}</strong> ({approved.length})</div>
-                    <div style={{padding:"6px 10px",background:"#fee2e2",borderRadius:6}}>✗ Rejected: <strong>{f(rejected.reduce((s,c)=>s+c.amount,0))}</strong> ({rejected.length})</div>
-                    <div style={{padding:"6px 10px",background:"#fef3c7",borderRadius:6}}>⏳ Pending: <strong>{f(pending.reduce((s,c)=>s+c.amount,0))}</strong> ({pending.length})</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,marginBottom:10,fontSize:11}}>
+                    <div style={{padding:"6px 10px",background:"#dbeafe",borderRadius:6}}>💼 Budget: <strong>{f((budget||0)-(approvedTopups||0))}</strong></div>
+                    <div style={{padding:"6px 10px",background:"#dcfce7",borderRadius:6}}>➕ Top-ups: <strong>{f(approvedTopups||0)}</strong></div>
+                    <div style={{padding:"6px 10px",background:"#fee2e2",borderRadius:6}}>✗ Rejected: <strong>{f(rejected.reduce((s,c)=>s+c.amount,0))}</strong></div>
+                    <div style={{padding:"6px 10px",background:balance>0?"#fee2e2":balance<0?"#dcfce7":"#f3f4f6",borderRadius:6,fontWeight:700}}>
+                      {balance>0?`↩ ${f(balance)}`:balance<0?`↪ ${f(-balance)}`:"✓ Settled"}
+                    </div>
                   </div>
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                     <thead><tr>
@@ -5407,7 +5413,7 @@ function BalancesTab({trips,claims,users,getUser,isAdmin,fmt:fmtFn}){
 }
 
 
-function SettlementsTab({trips,claims,users,getUser,isAdmin,myDept,cid,sbEnabled}){
+function SettlementsTab({trips,claims,topups,users,getUser,isAdmin,myDept,cid,sbEnabled}){
   const[expandedEmp,setExpandedEmp]=useState(null);
   const[expandedTrip,setExpandedTrip]=useState(null);
   const[settling,setSettling]=useState(null); // tripId being settled
@@ -5449,12 +5455,15 @@ function SettlementsTab({trips,claims,users,getUser,isAdmin,myDept,cid,sbEnabled
       const tripData=empTrips.map(t=>{
         const tripClaims=claims.filter(c=>c.empId===u.id&&c.tripId===t.id&&c.status==="Approved");
         const spent=tripClaims.reduce((s,c)=>s+c.amount,0);
-        const topups=t.topupsTotal||0;
-        const openBal=t.openingBalance||t.budget||0;
+        // Approved topup requests from the topups table for this emp+trip
+        const approvedTopupsAmt=(topups||[]).filter(tp=>tp.empId===u.id&&tp.tripId===t.id&&tp.status==="Approved").reduce((s,tp)=>s+tp.amount,0);
+        const empAllocated=(t.employeeBudgets?.[u.id]?.allocated||0)+(t.employeeBudgets?.[u.id]?.topups||0);
+        const openBal=empAllocated||t.openingBalance||t.budget||0;
         const isBalance=t.tripMode!=="reimbursement";
-        const settlement=isBalance?(openBal+topups-spent):(-spent);
-        return{trip:t,claims:tripClaims,spent,openBal,topups,settlement,isBalance};
-      }).filter(td=>td.trip.status==="closed"||td.spent>0);
+        // Net: budget + topups given - expenses claimed
+        const settlement=isBalance?(openBal+approvedTopupsAmt-spent):-spent;
+        return{trip:t,claims:tripClaims,spent,openBal,approvedTopupsAmt,settlement,isBalance};
+      }).filter(td=>td.trip.status==="closed"||td.trip.status==="fully_closed"||td.spent>0);
       const totalRecoverable=tripData.reduce((s,td)=>s+(td.settlement>0?td.settlement:0),0);
       const totalPayable=tripData.reduce((s,td)=>s+(td.settlement<0?-td.settlement:0),0);
       return{user:u,trips:tripData,totalRecoverable,totalPayable};
@@ -5501,7 +5510,7 @@ function SettlementsTab({trips,claims,users,getUser,isAdmin,myDept,cid,sbEnabled
 
           {/* Trip breakdown */}
           {expandedEmp===u.id&&<div style={{borderTop:`1px solid ${BDR}`,background:"var(--input-bg,#fafff8)"}}>
-            {tripData.map(({trip:t,claims:tc,spent,openBal,topups,settlement,isBalance})=>(
+            {tripData.map(({trip:t,claims:tc,spent,openBal,approvedTopupsAmt,settlement,isBalance})=>(
               <div key={t.id} style={{borderBottom:`1px solid ${BDR}`}}>
                 <div onClick={()=>setExpandedTrip(expandedTrip===t.id?null:t.id)}
                   style={{display:"flex",alignItems:"center",gap:10,padding:"10px 18px 10px 28px",cursor:"pointer"}}>
@@ -5515,9 +5524,8 @@ function SettlementsTab({trips,claims,users,getUser,isAdmin,myDept,cid,sbEnabled
                     </div>
                     <div style={{fontSize:9,color:MUTED}}>{tc.length} expenses · {fmt(spent)} spent</div>
                   </div>
-                  {/* Mark settled button — only for closed, unsettled trips with non-zero balance */}
                   {t.status==="closed"&&!t.settled_at&&settlement!==0&&(
-                    <button onClick={e=>{e.stopPropagation();if(window.confirm(`Mark trip "${t.name}" as settled? This records that the balance of ${fmt(Math.abs(settlement))} has been ${settlement>0?"recovered from":"paid to"} the employee.`))markSettled(t,u.id);}}
+                    <button onClick={e=>{e.stopPropagation();if(window.confirm(`Mark trip "${t.name}" as settled? Balance of ${fmt(Math.abs(settlement))} ${settlement>0?"recovered from":"paid to"} employee.`))markSettled(t,u.id);}}
                       style={{marginLeft:6,padding:"4px 10px",background:"#16a34a",color:"#fff",border:"none",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0}}>
                       {settling===t.id?"…":"✓ Settle"}
                     </button>
@@ -5525,13 +5533,14 @@ function SettlementsTab({trips,claims,users,getUser,isAdmin,myDept,cid,sbEnabled
                   <span style={{color:MUTED,fontSize:11,marginLeft:4}}>{expandedTrip===t.id?"▲":"▼"}</span>
                 </div>
 
-                {/* Claim list */}
                 {expandedTrip===t.id&&<div style={{padding:"0 18px 12px 36px"}}>
-                  {isBalance&&<div style={{display:"flex",gap:14,fontSize:11,color:MUTED,marginBottom:8}}>
-                    <span>Opening: <strong>{fmt(openBal)}</strong></span>
-                    {topups>0&&<span>Top-ups: <strong>+{fmt(topups)}</strong></span>}
+                  {isBalance&&<div style={{display:"flex",gap:14,fontSize:11,color:MUTED,marginBottom:8,flexWrap:"wrap"}}>
+                    <span>Budget: <strong>{fmt(openBal)}</strong></span>
+                    {approvedTopupsAmt>0&&<span style={{color:"#16a34a"}}>➕ Top-ups approved: <strong>+{fmt(approvedTopupsAmt)}</strong></span>}
                     <span>Spent: <strong>{fmt(spent)}</strong></span>
-                    <span style={{color:settlement>0?"#dc2626":"#16a34a",fontWeight:700}}>Net: {settlement>0?`↩${fmt(settlement)}`:`↪${fmt(-settlement)}`}</span>
+                    <span style={{color:settlement>0?"#dc2626":"#16a34a",fontWeight:700}}>
+                      Net: {settlement>0?`↩ ${fmt(settlement)} (recover)`:settlement<0?`↪ ${fmt(-settlement)} (pay)`:"Settled"}
+                    </span>
                   </div>}
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                     <thead><tr><th style={{textAlign:"left",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase"}}>Date</th><th style={{textAlign:"left",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase"}}>Description</th><th style={{textAlign:"left",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase"}}>Category</th><th style={{textAlign:"right",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase"}}>Amount</th></tr></thead>
