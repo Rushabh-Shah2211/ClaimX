@@ -4147,11 +4147,10 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
   const shown=filter==="All"?pendingClaims:filter==="Anomaly"?pendingClaims.filter(c=>c.anomaly):filter==="High Value"?pendingClaims.filter(c=>needsDualApproval&&needsDualApproval(c.amount)):pendingClaims.filter(c=>c.flagged||c.weekendFlag);
   const totalPending=pendingClaims.length+pendingTopups.length+pendingTrips.length+pendingEdits.length;
 
-  // Reload fresh data on mount — no hooks needed in parent, no TDZ risk
-  useEffect(()=>{
+  const handleRefresh=()=>{
     if(onReload)onReload();
     if(onReloadEditRequests)onReloadEditRequests();
-  },[]); // eslint-disable-line react-hooks/exhaustive-deps
+  };
 
   const toggleSel=(id)=>setSelected(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n;});
   const toggleAll=()=>setSelected(p=>p.size===shown.length?new Set():new Set(shown.map(c=>c.id)));
@@ -4161,7 +4160,7 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
         <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Approvals</h1>
-        {onReload&&<button onClick={onReload} style={{padding:"5px 12px",background:"none",border:`1px solid ${BDR}`,borderRadius:7,cursor:"pointer",fontSize:11,color:MUTED}}>🔄 Refresh</button>}
+        {onReload&&<button onClick={handleRefresh} style={{padding:"5px 12px",background:"none",border:`1px solid ${BDR}`,borderRadius:7,cursor:"pointer",fontSize:11,color:MUTED}}>🔄 Refresh</button>}
       </div>
       <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
         {[["📋 Claims",pendingClaims.length,"#3b82f6"],["💰 Top-ups",pendingTopups.length,"#f59e0b"],["🗂 Trips",pendingTrips.length,"#7c3aed"],["✏ Edits",pendingEdits.length,"#f97316"]].map(([label,count,color])=>(
