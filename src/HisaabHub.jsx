@@ -5341,7 +5341,6 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
   };
 
   const exportLedgerPDF=async(t,rows)=>{
-    const{jsPDF}=await import("jspdf").catch(()=>({jsPDF:window.jsPDF}));
     const doc=new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
     const W=297,ML=12,CW=W-2*ML;
     let y=10;
