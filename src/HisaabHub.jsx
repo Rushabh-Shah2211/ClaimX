@@ -1668,6 +1668,18 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const[loadingData,setLoadingData]=useState(SB_ENABLED&&!!cid);
   const[sbError,setSbError]=useState(null);
 
+  // Refs for approvals reload useEffect (declared before loadFromSB to avoid TDZ)
+  const loadFromSBRef=useRef(null);
+  const loadEditRequestsRef=useRef(null);
+
+  // Reload approvals data when switching to approvals tab
+  useEffect(()=>{
+    if(tab==="approvals"&&SB_ENABLED){
+      if(loadFromSBRef.current)loadFromSBRef.current();
+      if(loadEditRequestsRef.current)loadEditRequestsRef.current();
+    }
+  },[tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const loadFromSB=useCallback(async()=>{
     if(!SB_ENABLED||!cid)return;
     try{
@@ -1688,7 +1700,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     }catch(e){setSbError(e.message);}
     finally{setLoadingData(false);}
   },[cid]);
-  loadFromSBRef.current=loadFromSB;
+  loadFromSBRef.current=loadFromSB; // keep ref current
 
   useEffect(()=>{
     if(!cid){setSbError("No company assigned to your account.");setLoadingData(false);return;}
@@ -1799,16 +1811,6 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     if(n>0&&canApproveCheck)sendPush("ClaimX",`${n} claim${n!==1?"s":""} await your approval`);
   },[!!coData]);
 
-  // Reload approvals data when switching to approvals tab
-  // Use refs to avoid stale closure issues (loadFromSB/loadEditRequests defined later)
-  const loadFromSBRef=useRef(null);
-  const loadEditRequestsRef=useRef(null);
-  useEffect(()=>{
-    if(tab==="approvals"&&SB_ENABLED){
-      if(loadFromSBRef.current)loadFromSBRef.current();
-      if(loadEditRequestsRef.current)loadEditRequestsRef.current();
-    }
-  },[tab]); // eslint-disable-line
 
   // ── ALL hooks above this line — early return is safe below ───────────────
   const co=coData;
@@ -2064,7 +2066,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       })));
     }catch(e){console.warn("loadEditRequests:",e.message);}
   };
-  loadEditRequestsRef.current=loadEditRequests;
+  loadEditRequestsRef.current=loadEditRequests; // keep ref current
 
   const submitEditRequest=async(claim,reason)=>{
     const reqId=uid();
