@@ -1773,27 +1773,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   );
 
   // Claims this specific manager/admin should approve (respects delegation)
-  // Used for badge count — only show MY pending, not all company pending
-  const myPendingClaims=useMemo(()=>{
-    if(isAdmin)return pendingClaims; // admin sees all
-    if(!isManager)return [];
-    return pendingClaims.filter(c=>{
-      const emp=getUser(c.empId);
-      if(!emp)return false;
-      // Claims in my dept
-      const inMyDept=emp.dept===myUser?.dept;
-      // Claims delegated TO me (some other manager delegated to me)
-      const delegatedToMe=co.users.some(u=>
-        u.role==="manager"&&u.delegateTo===user.id&&
-        (!u.delegateUntil||u.delegateUntil>=today())&&
-        emp.dept===u.dept
-      );
-      return inMyDept||delegatedToMe;
-    });
-  },[pendingClaims,isAdmin,isManager,co.users,user.id,myUser?.dept]);
-
-  // Claims to show in ApprovalsTab for this user (includes delegated claims)
-  const approvableClaimsForMe=useMemo(()=>{
+  // Plain filter - no useMemo needed, and avoids hooks-after-early-return error
+  const myPendingClaims=(()=>{
     if(isAdmin)return pendingClaims;
     if(!isManager)return [];
     return pendingClaims.filter(c=>{
@@ -1807,7 +1788,24 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       );
       return inMyDept||delegatedToMe;
     });
-  },[pendingClaims,co.users,user.id,myUser?.dept,isAdmin,isManager]);
+  })();
+
+  // Claims to show in ApprovalsTab (includes claims delegated to this manager)
+  const approvableClaimsForMe=(()=>{
+    if(isAdmin)return pendingClaims;
+    if(!isManager)return [];
+    return pendingClaims.filter(c=>{
+      const emp=getUser(c.empId);
+      if(!emp)return false;
+      const inMyDept=emp.dept===myUser?.dept;
+      const delegatedToMe=co.users.some(u=>
+        u.role==="manager"&&u.delegateTo===user.id&&
+        (!u.delegateUntil||u.delegateUntil>=today())&&
+        emp.dept===u.dept
+      );
+      return inMyDept||delegatedToMe;
+    });
+  })();
   const pendingTopups=co.topups.filter(t=>t.status==="Pending");
 
   // ── sbCreateTrip — defined once, used by both TripsTab and SubmitTab ─────────
