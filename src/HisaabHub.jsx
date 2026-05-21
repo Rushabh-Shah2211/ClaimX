@@ -1668,18 +1668,6 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const[loadingData,setLoadingData]=useState(SB_ENABLED&&!!cid);
   const[sbError,setSbError]=useState(null);
 
-  // Refs for approvals reload useEffect (declared before loadFromSB to avoid TDZ)
-  const loadFromSBRef=useRef(null);
-  const loadEditRequestsRef=useRef(null);
-
-  // Reload approvals data when switching to approvals tab
-  useEffect(()=>{
-    if(tab==="approvals"&&SB_ENABLED){
-      if(loadFromSBRef.current)loadFromSBRef.current();
-      if(loadEditRequestsRef.current)loadEditRequestsRef.current();
-    }
-  },[tab]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const loadFromSB=useCallback(async()=>{
     if(!SB_ENABLED||!cid)return;
     try{
@@ -1700,7 +1688,6 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     }catch(e){setSbError(e.message);}
     finally{setLoadingData(false);}
   },[cid]);
-  loadFromSBRef.current=loadFromSB; // keep ref current
 
   useEffect(()=>{
     if(!cid){setSbError("No company assigned to your account.");setLoadingData(false);return;}
@@ -2066,7 +2053,6 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       })));
     }catch(e){console.warn("loadEditRequests:",e.message);}
   };
-  loadEditRequestsRef.current=loadEditRequests; // keep ref current
 
   const submitEditRequest=async(claim,reason)=>{
     const reqId=uid();
@@ -3024,7 +3010,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           }}
         />}
         {tab==="approvals"&&canApprove&&<>
-          <ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} onReload={loadFromSB}/>
+          <ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} onReload={loadFromSB} onReloadEditRequests={loadEditRequests}/>
           {editRequests.length>0&&<Card style={{padding:16,marginTop:16}}>
             <div style={{fontFamily:FD,fontSize:14,fontWeight:700,color:INK,marginBottom:12}}>✏ Edit Requests {editRequests.filter(r=>r.status==="Pending").length>0&&<span style={{background:"#fef3c7",color:"#92400e",fontSize:11,padding:"1px 7px",borderRadius:10,marginLeft:7,fontFamily:FB}}>{editRequests.filter(r=>r.status==="Pending").length} pending</span>}</div>
             <EditRequestsPanel editRequests={editRequests} claims={co.claims} getUser={getUser} cid={cid} toast={toast} sbEnabled={SB_ENABLED} onApprove={approveEditRequest} onReject={rejectEditRequest}/>
@@ -4153,13 +4139,19 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
 }
 
 // ─── APPROVALS TAB ────────────────────────────────────────────────────────────
-function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip,users,user,editRequests,approveEditRequest,rejectEditRequest,onReload}){
+function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip,users,user,editRequests,approveEditRequest,rejectEditRequest,onReload,onReloadEditRequests}){
   const [filter,setFilter]=useState("All");
   const [selected,setSelected]=useState(new Set());
   const pendingTrips=(trips||[]).filter(t=>t.status==="pending_approval");
   const pendingEdits=(editRequests||[]).filter(r=>r.status==="Pending");
   const shown=filter==="All"?pendingClaims:filter==="Anomaly"?pendingClaims.filter(c=>c.anomaly):filter==="High Value"?pendingClaims.filter(c=>needsDualApproval&&needsDualApproval(c.amount)):pendingClaims.filter(c=>c.flagged||c.weekendFlag);
   const totalPending=pendingClaims.length+pendingTopups.length+pendingTrips.length+pendingEdits.length;
+
+  // Reload fresh data on mount — no hooks needed in parent, no TDZ risk
+  useEffect(()=>{
+    if(onReload)onReload();
+    if(onReloadEditRequests)onReloadEditRequests();
+  },[]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleSel=(id)=>setSelected(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n;});
   const toggleAll=()=>setSelected(p=>p.size===shown.length?new Set():new Set(shown.map(c=>c.id)));
@@ -4820,8 +4812,6 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
 
 // ─── EDIT REQUESTS TAB ────────────────────────────────────────────────────────
 function EditRequestsTab({editRequests,claims,getUser,isManager,approveEditRequest,rejectEditRequest,hasEditWindow,userId,reload}){
-  // Reload on mount to always show fresh data
-  useEffect(()=>{if(reload)reload();},[]);
   const pending=editRequests.filter(r=>r.status==="Pending");
   const resolved=editRequests.filter(r=>r.status!=="Pending");
 
