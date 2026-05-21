@@ -7,7 +7,7 @@ const SUPA_URL  = import.meta.env.VITE_SUPABASE_URL  || "";
 const SUPA_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 const supabase  = (SUPA_URL && SUPA_ANON)
   ? createClient(SUPA_URL, SUPA_ANON, {
-      auth:{ persistSession:true, autoRefreshToken:true, storageKey:'claimx_sb_auth' }
+      auth:{ persistSession:true, autoRefreshToken:true, storageKey:'xpensr_sb_auth' }
     })
   : null;
 
@@ -267,8 +267,8 @@ const mkPolicy=()=>({
 
 // ─── DEMO DATA (localStorage fallback when Supabase not configured) ───────────
 const SA={id:"sa1",name:"Super Admin",email:"rushabh@rbshah.co.in",password:"superadmin@123",role:"superadmin",avatar:"SA"};
-const STORAGE_KEY="claimx_v1_db";
-const SESSION_KEY="claimx_v1_sess";
+const STORAGE_KEY="xpensr_v1_db";
+const SESSION_KEY="xpensr_v1_sess";
 const loadDB=()=>{try{const r=localStorage.getItem(STORAGE_KEY);return r?JSON.parse(r):null;}catch{return null;}};
 const saveDB=d=>{try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d));}catch(e){}};
 const loadSess=()=>{try{const s=localStorage.getItem(SESSION_KEY);return s?JSON.parse(s):null;}catch{return null;}};
@@ -336,12 +336,12 @@ const emailAlert=async(to,subject,body,htmlBody)=>{
       body:JSON.stringify({to,subject,html:htmlBody||
         `<div style="font-family:sans-serif;padding:24px;max-width:560px;margin:0 auto">
         <div style="background:#0f1c09;padding:16px 22px;border-radius:10px 10px 0 0">
-          <span style="color:#7ED957;font-weight:800;font-size:18px">ClaimX</span>
+          <span style="color:#7ED957;font-weight:800;font-size:18px">XpensR</span>
           <span style="color:rgba(255,255,255,.4);font-size:11px;margin-left:8px">by RB</span>
         </div>
         <div style="background:#f8faf6;padding:22px;border:1px solid #e8f0e5;border-top:none;border-radius:0 0 10px 10px">
           <p style="color:#1a2e12;font-size:14px;line-height:1.7;margin:0 0 16px">${body}</p>
-          <div style="font-size:11px;color:#9ca3af;padding-top:12px;border-top:1px solid #e8f0e5">ClaimX by RB · claim-x-beta.vercel.app</div>
+          <div style="font-size:11px;color:#9ca3af;padding-top:12px;border-top:1px solid #e8f0e5">XpensR by RB · claim-x-beta.vercel.app</div>
         </div></div>`
       })});
   }catch(e){console.warn("Email:",e.message);}
@@ -356,12 +356,12 @@ const whatsappAlert=async(phone,templateName,params=[])=>{
 const claimEmailHtml=(action,claim,remarks,companyName)=>{
   const rows=[["Claim ID",claim.id],["Amount","\u20b9"+(claim.amount||0).toLocaleString("en-IN")],["Date",claim.date||""],["Category",claim.category||""],["Description",claim.desc||""],...(remarks?[["Remarks",remarks]]:[])];
   return `<div style="font-family:sans-serif;max-width:560px;margin:0 auto">
-  <div style="background:#0f1c09;padding:18px 26px;border-radius:12px 12px 0 0"><span style="color:#7ED957;font-size:18px;font-weight:800">ClaimX</span><span style="color:rgba(255,255,255,.4);font-size:11px;margin-left:8px">${companyName||""}</span></div>
+  <div style="background:#0f1c09;padding:18px 26px;border-radius:12px 12px 0 0"><span style="color:#7ED957;font-size:18px;font-weight:800">XpensR</span><span style="color:rgba(255,255,255,.4);font-size:11px;margin-left:8px">${companyName||""}</span></div>
   <div style="background:#fff;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px">
     <h2 style="color:${action==="Approved"?"#15803d":"#dc2626"};font-size:16px;margin:0 0 14px">${action==="Approved"?"\u2713 Claim Approved":"\u2717 Claim Rejected"}</h2>
     <table style="font-size:13px;width:100%;border-collapse:collapse">${rows.map(([l,v])=>`<tr><td style="padding:6px 0;color:#6b7280;width:38%">${l}</td><td style="padding:6px 0;font-weight:600;color:#111">${v}</td></tr>`).join("")}</table>
     <div style="margin-top:16px;padding:10px 14px;background:${action==="Approved"?"#f0fde9":"#fef2f2"};border-radius:7px;font-size:12px;color:${action==="Approved"?"#15803d":"#dc2626"}">${action==="Approved"?"Amount will be settled as per company policy.":"Please contact your manager for details."}</div>
-    <div style="margin-top:18px;font-size:10px;color:#9ca3af">ClaimX by RB · ${new Date().toLocaleDateString("en-IN")}</div>
+    <div style="margin-top:18px;font-size:10px;color:#9ca3af">XpensR by RB · ${new Date().toLocaleDateString("en-IN")}</div>
   </div></div>`;
 };
 
@@ -377,7 +377,7 @@ const generateSettlementPDF=async(trip,claims,getUser,companyName)=>{
   // ── Header ────────────────────────────────────────────────
   doc.setFillColor(15,28,9);doc.rect(0,0,W,22,"F");
   doc.setFont("helvetica","bold");doc.setFontSize(13);doc.setTextColor(126,217,87);
-  doc.text("ClaimX",ML,14);
+  doc.text("XpensR",ML,14);
   doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(180,200,170);
   doc.text("by RB — Trip Settlement Statement",ML+22,14);
   doc.setTextColor(130,130,130);
@@ -529,14 +529,14 @@ const generateSettlementPDF=async(trip,claims,getUser,companyName)=>{
   for(let p=1;p<=totalPages;p++){
     doc.setPage(p);
     doc.setFontSize(7);doc.setTextColor(170,170,170);doc.setFont("helvetica","normal");
-    doc.text(`ClaimX by RB · ${companyName||""} · Generated ${new Date().toLocaleDateString("en-IN")} · Page ${p}/${totalPages}`,W/2,290,{align:"center"});
+    doc.text(`XpensR by RB · ${companyName||""} · Generated ${new Date().toLocaleDateString("en-IN")} · Page ${p}/${totalPages}`,W/2,290,{align:"center"});
   }
   return doc;
 };
 
 
 // ─── USER PREFERENCES (dark mode, font size) ─────────────────────────────────
-const PREFS_KEY="claimx_prefs_v1";
+const PREFS_KEY="xpensr_prefs_v1";
 const loadPrefs=()=>{try{const p=localStorage.getItem(PREFS_KEY);return p?JSON.parse(p):{darkMode:false,fontSize:13};}catch{return{darkMode:false,fontSize:13};}};
 const savePrefs=p=>{try{localStorage.setItem(PREFS_KEY,JSON.stringify(p));}catch{}};
 const PrefsContext=createContext([{darkMode:false,fontSize:13},()=>{}]);
@@ -633,7 +633,7 @@ function useOffline(){
 class ErrorBoundary extends Component{
   constructor(p){super(p);this.state={error:null};}
   static getDerivedStateFromError(e){return{error:e};}
-  componentDidCatch(e,i){console.error("ClaimX Error:",e,i);}
+  componentDidCatch(e,i){console.error("XpensR Error:",e,i);}
   render(){
     if(this.state.error){return(
       <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f5faf3",fontFamily:FB,padding:24}}>
@@ -688,7 +688,7 @@ const Logo=({width=200,dark=false})=>(
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 // ─── LEGAL CONTENT ────────────────────────────────────────────────────────────
-const PRIVACY_POLICY=`**RB Finsol Private Limited** ("we") operates ClaimX by RB. This policy explains how we collect, use, and protect your data.
+const PRIVACY_POLICY=`**RB Finsol Private Limited** ("we") operates XpensR by RB. This policy explains how we collect, use, and protect your data.
 
 **Data we collect:** Name, email, username, mobile, expense claims, invoice images, trip details, GST data, usage logs, and authentication tokens.
 
@@ -714,7 +714,7 @@ const PRIVACY_POLICY=`**RB Finsol Private Limited** ("we") operates ClaimX by RB
 
 *Last updated: May 2026. Material changes notified 30 days in advance.*`;
 
-const TERMS_OF_SERVICE=`**Agreement:** By using ClaimX by RB, you agree to these Terms with RB Finsol Private Limited.
+const TERMS_OF_SERVICE=`**Agreement:** By using XpensR by RB, you agree to these Terms with RB Finsol Private Limited.
 
 **The Service:** Cloud-based expense management — submit, approve, track expenses; manage trips; AI invoice OCR; generate accounting exports.
 
@@ -746,17 +746,17 @@ const TERMS_OF_SERVICE=`**Agreement:** By using ClaimX by RB, you agree to these
 
 *Last updated: May 2026.*`;
 
-const COOKIE_POLICY=`**Cookies and similar technologies** (localStorage, sessionStorage) store small files on your device to help ClaimX by RB function and remember your preferences.
+const COOKIE_POLICY=`**Cookies and similar technologies** (localStorage, sessionStorage) store small files on your device to help XpensR by RB function and remember your preferences.
 
 **Strictly Necessary (cannot be disabled):**
-- \`claimx_session\` — Keeps you logged in (session / 30 days)
-- \`claimx_logout\` — Prevents session restore during sign-out (session only)
+- \`xpensr_session\` — Keeps you logged in (session / 30 days)
+- \`xpensr_logout\` — Prevents session restore during sign-out (session only)
 - \`sb-*\` — Supabase authentication tokens (session / 7 days)
 
 **Functional (can be declined — functionality reduced):**
-- \`claimx_prefs_v1\` — Display preferences: dark mode, font size (1 year)
+- \`xpensr_prefs_v1\` — Display preferences: dark mode, font size (1 year)
 - \`claimx_offline_queue\` — Queues claims when offline (temporary, until synced)
-- \`claimx_db\` — Offline data cache (session)
+- \`xpensr_db\` — Offline data cache (session)
 
 **Analytics:** None currently.
 
@@ -810,14 +810,14 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
   const[view,   setView]  =useState(isPasswordRecovery?"reset":"login");
   const[legalModal,setLegalModal]=useState(null);
   const[cookieConsent,setCookieConsentState]=useState(()=>{
-    try{return localStorage.getItem("claimx_cookie_consent");}catch{return null;}
+    try{return localStorage.getItem("xpensr_cookie_consent");}catch{return null;}
   });
   const acceptCookies=()=>{
-    try{localStorage.setItem("claimx_cookie_consent","accepted_"+(new Date().toISOString().slice(0,10)));}catch{}
+    try{localStorage.setItem("xpensr_cookie_consent","accepted_"+(new Date().toISOString().slice(0,10)));}catch{}
     setCookieConsentState("accepted");
   };
   const declineCookies=()=>{
-    try{localStorage.setItem("claimx_cookie_consent","functional_only");}catch{}
+    try{localStorage.setItem("xpensr_cookie_consent","functional_only");}catch{}
     setCookieConsentState("functional_only");
   };
 
@@ -919,155 +919,256 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
 
   const inp={width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.25)",background:"rgba(255,255,255,0.08)",color:"#ffffff",fontFamily:FB,fontSize:14,outline:"none",boxSizing:"border-box",WebkitTextFillColor:"#ffffff"};
 
-  return(
-    <div style={{minHeight:"100vh",background:`linear-gradient(145deg,${DARK} 0%,#162e0d 45%,#0c1f08 100%)`,display:"flex",fontFamily:FB,position:"relative",overflow:"hidden"}}>
-      <style>{GLSTYLE+`.login-inp::placeholder{color:rgba(255,255,255,0.28)!important;font-weight:300}.login-inp::-webkit-input-placeholder{color:rgba(255,255,255,0.28)!important}`}</style>
-      <div style={{position:"absolute",inset:0,backgroundImage:"linear-gradient(rgba(126,217,87,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(126,217,87,.025) 1px,transparent 1px)",backgroundSize:"44px 44px"}}/>
+  const[showLogin,setShowLogin]=useState(isPasswordRecovery||false);
+  const[showTiers,setShowTiers]=useState(false);
+  const[reqForm,setReqForm]=useState({name:"",company:"",email:"",phone:"",message:""});
+  const[reqSent,setReqSent]=useState(false);
+  const[reqBusy,setReqBusy]=useState(false);
 
-      {/* Cookie Consent Banner */}
-      {!cookieConsent&&(
-        <div style={{position:"fixed",bottom:0,left:0,right:0,background:"#1a2e12",borderTop:"2px solid #7ED957",padding:"14px 20px",zIndex:1000,display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
-          <div style={{flex:1,minWidth:240}}>
-            <div style={{color:"#fff",fontWeight:700,fontSize:13,marginBottom:3}}>🍪 We use cookies</div>
-            <div style={{color:"rgba(255,255,255,.6)",fontSize:11}}>
-              We use essential cookies for login and functional cookies for your display preferences. No advertising or tracking cookies.{" "}
-              <span onClick={()=>setLegalModal("cookies")} style={{color:"#7ED957",cursor:"pointer",textDecoration:"underline"}}>Cookie Policy</span>
-              {" · "}
-              <span onClick={()=>setLegalModal("privacy")} style={{color:"#7ED957",cursor:"pointer",textDecoration:"underline"}}>Privacy Policy</span>
-            </div>
-          </div>
-          <div style={{display:"flex",gap:8,flexShrink:0}}>
-            <button onClick={declineCookies} style={{padding:"7px 14px",background:"transparent",border:"1px solid rgba(255,255,255,.3)",borderRadius:7,color:"rgba(255,255,255,.6)",cursor:"pointer",fontSize:11}}>Essential Only</button>
-            <button onClick={acceptCookies} style={{padding:"7px 18px",background:"#7ED957",border:"none",borderRadius:7,color:"#fff",cursor:"pointer",fontSize:12,fontWeight:700}}>Accept All</button>
-          </div>
-        </div>
-      )}
+  const sendRequest=async()=>{
+    if(!reqForm.name||!reqForm.email){alert("Name and email are required");return;}
+    setReqBusy(true);
+    try{
+      await emailAlert(reqForm.email,"XpensR Demo Request from "+reqForm.name,
+        `Name: ${reqForm.name}\nCompany: ${reqForm.company}\nEmail: ${reqForm.email}\nPhone: ${reqForm.phone}\nMessage: ${reqForm.message}`,
+        `<h2>XpensR Demo Request</h2><p><b>Name:</b> ${reqForm.name}</p><p><b>Company:</b> ${reqForm.company}</p><p><b>Email:</b> ${reqForm.email}</p><p><b>Phone:</b> ${reqForm.phone}</p><p><b>Message:</b> ${reqForm.message}</p>`
+      );
+      setReqSent(true);
+    }catch(e){
+      // Email may fail — still show success to user
+      setReqSent(true);
+    }
+    setReqBusy(false);
+  };
 
-      {/* Legal Document Modal */}
-      {legalModal&&(
-        <div style={{position:"fixed",inset:0,background:"#00000080",zIndex:1001,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(4px)"}} onClick={()=>setLegalModal(null)}>
-          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,width:"min(720px,95vw)",maxHeight:"85vh",display:"flex",flexDirection:"column",overflow:"hidden",boxShadow:"0 24px 60px #0006"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 24px",borderBottom:"1px solid #e5e7eb",background:"#f8faf6"}}>
-              <div style={{fontFamily:FD,fontSize:16,fontWeight:700,color:"#1a2e12"}}>
-                {legalModal==="privacy"?"Privacy Policy":legalModal==="terms"?"Terms of Service":"Cookie Policy"}
-              </div>
-              <div style={{display:"flex",gap:8}}>
-                {["privacy","terms","cookies"].map(t=>(
-                  <button key={t} onClick={()=>setLegalModal(t)} style={{padding:"4px 10px",borderRadius:5,border:"none",background:legalModal===t?"#7ED957":"#e5e7eb",color:legalModal===t?"#fff":"#6b7280",fontSize:10,fontWeight:600,cursor:"pointer",textTransform:"capitalize"}}>{t==="privacy"?"Privacy":t==="terms"?"Terms":"Cookies"}</button>
-                ))}
-                <button onClick={()=>setLegalModal(null)} style={{padding:"4px 10px",borderRadius:5,border:"none",background:"#f3f4f6",color:"#6b7280",fontSize:12,cursor:"pointer"}}>✕</button>
-              </div>
-            </div>
-            <div style={{overflow:"auto",padding:"24px",flex:1,fontSize:13,lineHeight:1.7,color:"#374151"}}>
-              <LegalContent type={legalModal}/>
-            </div>
-            <div style={{padding:"12px 24px",borderTop:"1px solid #e5e7eb",display:"flex",justifyContent:"space-between",alignItems:"center",background:"#f8faf6"}}>
-              <div style={{fontSize:10,color:"#9ca3af"}}>Last updated: May 2026 · RB Finsol Private Limited</div>
-              <button onClick={()=>setLegalModal(null)} style={{padding:"7px 18px",background:"#7ED957",border:"none",borderRadius:7,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>Close</button>
-            </div>
-          </div>
+  const features=[
+    {icon:"📤",title:"Smart Submission",desc:"AI-powered OCR, camera scan, multi-invoice, auto-draft save"},
+    {icon:"✓",title:"Approval Workflows",desc:"Multi-level, dual approval, admin override, delegation"},
+    {icon:"📒",title:"Trip Ledger",desc:"Employee-wise fund flow, balances, and settlement tracking"},
+    {icon:"📊",title:"Analytics & Reports",desc:"CSV, Tally, GSTR, Zoho exports, settlement PDFs"},
+    {icon:"⚖️",title:"Balance Management",desc:"Wallet top-ups, recovery tracking, net positions"},
+    {icon:"🔒",title:"Secure & Compliant",desc:"Role-based access, anomaly detection, full audit log"},
+  ];
+
+  const tiers=[
+    {name:"Starter",users:"1–5 users",price:"₹299/user/month",color:"#3b82f6",features:["All core features","Email notifications","CSV/Tally exports","3 trips at a time"]},
+    {name:"Growth",users:"6–20 users",price:"₹249/user/month",color:"#7ED957",features:["Everything in Starter","WhatsApp notifications","Multi-level approvals","Trip ledger & balances","Priority support"],popular:true},
+    {name:"Scale",users:"21–50 users",price:"₹199/user/month",color:"#7c3aed",features:["Everything in Growth","Advanced analytics","Delegation workflows","Custom policy rules","Dedicated support"]},
+    {name:"Enterprise",users:"50+ users",price:"₹149/user/month",color:"#f59e0b",features:["Everything in Scale","Custom integrations","SLA guarantee","On-premise option","Account manager"]},
+  ];
+
+  if(isPasswordRecovery){
+    // Password recovery mode — show directly
+    return(
+      <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(145deg,${DARK},#162e0d)`,fontFamily:FB}}>
+        <div style={{background:"rgba(255,255,255,.06)",borderRadius:18,padding:36,width:"min(420px,96vw)",backdropFilter:"blur(20px)",border:"1px solid rgba(255,255,255,.1)"}}>
+          <div style={{fontFamily:FD,fontSize:22,color:"#7ED957",marginBottom:20,textAlign:"center"}}>Reset Password</div>
+          {/* password recovery form would go here */}
+          <p style={{color:"rgba(255,255,255,.5)",textAlign:"center",fontSize:13}}>Enter your new password below.</p>
         </div>
-      )}
-      <div className="mob-hide" style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",padding:"60px 64px",position:"relative",zIndex:1}}>
-        <div style={{marginBottom:40}}><Logo width={240} dark/></div>
-        <h2 style={{fontFamily:FD,fontSize:28,fontWeight:700,color:"#fff",lineHeight:1.3,marginBottom:12}}>Smarter expense<br/>management for<br/>growing Indian teams.</h2>
-        <p style={{color:"rgba(255,255,255,0.4)",fontSize:13,lineHeight:1.8,maxWidth:320,marginBottom:24}}>AI-powered invoice scanning, real-time approvals, trip-wise tracking, and one-click accounting exports.</p>
-        {["⚡  Auto-approve within policy limits","🤖  Batch OCR · camera · handwritten bills","📊  Tally XML · Zoho Books · GSTR-2A","🌐  Multi-company, isolated data","📴  Offline mode — syncs on reconnect"].map(f=>(
-          <div key={f} style={{display:"flex",alignItems:"center",gap:8,color:"rgba(255,255,255,0.5)",fontSize:13,marginBottom:8}}><span style={{color:G}}>{f.slice(0,2)}</span>{f.slice(4)}</div>
-        ))}
-        {SB_ENABLED
-          ?null
-          :null
-        }
       </div>
+    );
+  }
 
-      {/* Right form — full width on mobile */}
-      <div style={{width:"min(460px,96vw)",display:"flex",flexDirection:"column",justifyContent:"center",padding:40,position:"relative",zIndex:1,flexShrink:0}} className="mob-login-panel">
-        <div style={{background:"rgba(255,255,255,0.04)",backdropFilter:"blur(24px)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:18,padding:"36px 32px",animation:"fadeUp .4s ease"}}>
+  return(
+    <div style={{minHeight:"100vh",fontFamily:FB,background:"#f8fffe",color:"#1a2e12"}}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap');
+        .xr-btn{transition:all .2s;} .xr-btn:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(0,0,0,.12);}
+        .xr-card{transition:all .25s;} .xr-card:hover{transform:translateY(-3px);box-shadow:0 16px 40px rgba(0,0,0,.1);}
+        .xr-feat:hover{background:#f0fde9!important;}
+        @keyframes fadein{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+        .xr-anim{animation:fadein .6s ease forwards;}
+      `}</style>
 
-          {/* ── RESET VIEW ── */}
-          {view==="reset"&&(<>
-            <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",fontWeight:700,letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>Set New Password</div>
-            <p style={{color:"rgba(255,255,255,0.45)",fontSize:12,marginBottom:18,lineHeight:1.5}}>Choose a strong password for your account.</p>
-            {[["New Password",newPw,setNewPw],["Confirm Password",cfPw,setCfPw]].map(([l,v,fn])=>(
-              <div key={l} style={{marginBottom:12}}><label style={{display:"block",fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.4)",letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>{l}</label><input type="password" value={v} onChange={e=>{fn(e.target.value);setErr("");}} placeholder="Min 6 characters" style={inp}/></div>
+      {/* ── TOP NAV ── */}
+      <nav style={{position:"sticky",top:0,zIndex:100,background:"rgba(248,255,254,0.92)",backdropFilter:"blur(12px)",borderBottom:"1px solid rgba(126,217,87,0.15)",padding:"0 max(24px,5vw)"}}>
+        <div style={{maxWidth:1180,margin:"0 auto",height:64,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:800,color:"#5CB83A",letterSpacing:-0.5}}>XpensR</div>
+            <div style={{fontSize:10,color:"#999",letterSpacing:2,textTransform:"uppercase",marginTop:2}}>by RB</div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:16}}>
+            <button onClick={()=>setShowTiers(p=>!p)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#5CB83A",fontFamily:FB,fontWeight:600,padding:"6px 12px"}}>Pricing</button>
+            <a href="#contact" style={{fontSize:13,color:"#666",textDecoration:"none",fontFamily:FB,padding:"6px 12px"}}>Contact</a>
+            <button onClick={()=>setShowLogin(true)} className="xr-btn" style={{background:"#5CB83A",color:"#fff",border:"none",borderRadius:10,padding:"9px 22px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:FB,letterSpacing:.3}}>
+              Sign In →
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      {/* ── HERO ── */}
+      <section style={{maxWidth:1180,margin:"0 auto",padding:"80px max(24px,5vw) 60px",textAlign:"center"}} className="xr-anim">
+        <div style={{display:"inline-block",background:"#f0fde9",border:"1px solid #bbf7d0",borderRadius:20,padding:"5px 14px",fontSize:11,fontWeight:700,color:"#16a34a",letterSpacing:1,textTransform:"uppercase",marginBottom:20}}>🚀 Now in Beta — Limited Access</div>
+        <h1 style={{fontFamily:"'Playfair Display',serif",fontSize:"clamp(36px,6vw,68px)",fontWeight:800,color:"#0f1c09",lineHeight:1.1,marginBottom:20,letterSpacing:-1}}>
+          Expense Management<br/><span style={{color:"#5CB83A"}}>Built for Growing Teams</span>
+        </h1>
+        <p style={{fontSize:"clamp(15px,2vw,19px)",color:"#4a6741",lineHeight:1.7,maxWidth:600,margin:"0 auto 36px",fontWeight:400}}>
+          AI-powered claim submission, smart approval workflows, real-time balances and settlement tracking — all in one beautifully simple app.
+        </p>
+        <div style={{display:"flex",gap:14,justifyContent:"center",flexWrap:"wrap"}}>
+          <button onClick={()=>setShowLogin(true)} className="xr-btn" style={{background:"#5CB83A",color:"#fff",border:"none",borderRadius:12,padding:"14px 32px",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:FB}}>
+            Get Started Free →
+          </button>
+          <button onClick={()=>document.getElementById("request").scrollIntoView({behavior:"smooth"})} className="xr-btn" style={{background:"#fff",color:"#5CB83A",border:"2px solid #5CB83A",borderRadius:12,padding:"14px 28px",fontSize:15,fontWeight:600,cursor:"pointer",fontFamily:FB}}>
+            Request Demo
+          </button>
+        </div>
+        {/* Stats bar */}
+        <div style={{display:"flex",gap:32,justifyContent:"center",marginTop:52,flexWrap:"wrap"}}>
+          {[["AI OCR","Invoice scanning"],["24hr","Edit windows"],["4 Roles","Admin, Manager, Finance, Employee"],["Real-time","Balances & settlements"]].map(([stat,desc])=>(
+            <div key={stat} style={{textAlign:"center"}}>
+              <div style={{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:800,color:"#0f1c09"}}>{stat}</div>
+              <div style={{fontSize:11,color:"#888",marginTop:2}}>{desc}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ── FEATURES ── */}
+      <section style={{background:"#fff",padding:"60px max(24px,5vw)"}}>
+        <div style={{maxWidth:1180,margin:"0 auto"}}>
+          <div style={{textAlign:"center",marginBottom:44}}>
+            <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:"clamp(26px,4vw,40px)",fontWeight:800,color:"#0f1c09",marginBottom:10}}>Everything your team needs</h2>
+            <p style={{color:"#666",fontSize:16,maxWidth:520,margin:"0 auto"}}>From submission to settlement, XpensR covers the complete expense lifecycle.</p>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:20}}>
+            {features.map(({icon,title,desc})=>(
+              <div key={title} className="xr-card xr-feat" style={{padding:"24px 22px",borderRadius:14,border:"1px solid #e8f5e2",background:"#fafff8",cursor:"default"}}>
+                <div style={{fontSize:32,marginBottom:12}}>{icon}</div>
+                <div style={{fontFamily:"'Playfair Display',serif",fontSize:17,fontWeight:700,color:"#0f1c09",marginBottom:6}}>{title}</div>
+                <div style={{fontSize:13,color:"#666",lineHeight:1.6}}>{desc}</div>
+              </div>
             ))}
-            {err&&<div style={{color:"#f87171",fontSize:12,marginBottom:10}}>⚠ {err}</div>}
-            <button onClick={saveNewPassword} disabled={busy||!newPw||!cfPw} style={{width:"100%",padding:"13px",background:G,border:"none",borderRadius:10,color:"#fff",fontFamily:FB,fontWeight:700,fontSize:15,cursor:"pointer"}}>
-              {busy?"Saving…":"Save New Password →"}
-            </button>
-          </>)}
+          </div>
+        </div>
+      </section>
 
-          {/* ── FORGOT SENT VIEW ── */}
-          {view==="forgot_sent"&&(<>
-            <div style={{textAlign:"center",padding:"10px 0"}}>
-              <div style={{fontSize:44,marginBottom:12}}>📧</div>
-              <div style={{fontFamily:FD,fontSize:18,fontWeight:700,color:"#fff",marginBottom:8}}>Check your inbox</div>
-              <p style={{color:"rgba(255,255,255,0.5)",fontSize:13,lineHeight:1.6,marginBottom:20}}>A reset link was sent to <strong style={{color:"rgba(255,255,255,0.8)"}}>{login}</strong>. Check spam/junk if not seen.</p>
-              <button onClick={()=>setView("login")} style={{background:"none",border:"1px solid rgba(255,255,255,0.15)",borderRadius:9,color:"rgba(255,255,255,0.5)",padding:"9px 20px",fontFamily:FB,fontSize:13,cursor:"pointer"}}>← Back to Sign In</button>
+      {/* ── PRICING ── */}
+      <section id="pricing" style={{padding:"60px max(24px,5vw)",background:"#f8fffe"}}>
+        <div style={{maxWidth:1180,margin:"0 auto"}}>
+          <div style={{textAlign:"center",marginBottom:44}}>
+            <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:"clamp(26px,4vw,40px)",fontWeight:800,color:"#0f1c09",marginBottom:10}}>Simple, transparent pricing</h2>
+            <p style={{color:"#666",fontSize:16}}>Pay per user. Cancel anytime. All plans include core features.</p>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:18}}>
+            {tiers.map(t=>(
+              <div key={t.name} className="xr-card" style={{borderRadius:16,overflow:"hidden",border:`2px solid ${t.popular?"#5CB83A":"#e8f5e2"}`,background:t.popular?"#f0fde9":"#fff",position:"relative"}}>
+                {t.popular&&<div style={{position:"absolute",top:0,left:0,right:0,background:"#5CB83A",color:"#fff",textAlign:"center",fontSize:10,fontWeight:700,padding:"4px 0",letterSpacing:1,textTransform:"uppercase"}}>Most Popular</div>}
+                <div style={{padding:`${t.popular?28:20}px 20px 20px`}}>
+                  <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,fontWeight:700,color:"#0f1c09",marginBottom:4}}>{t.name}</div>
+                  <div style={{fontSize:11,color:"#888",marginBottom:14}}>{t.users}</div>
+                  <div style={{fontFamily:"'Playfair Display',serif",fontSize:26,fontWeight:800,color:t.color,marginBottom:4}}>{t.price}</div>
+                  <div style={{height:1,background:"#e8f5e2",margin:"16px 0"}}/>
+                  {t.features.map(f=>(
+                    <div key={f} style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:8,fontSize:12,color:"#444"}}>
+                      <span style={{color:"#5CB83A",fontWeight:700,flexShrink:0}}>✓</span>{f}
+                    </div>
+                  ))}
+                  <button onClick={()=>document.getElementById("request").scrollIntoView({behavior:"smooth"})} className="xr-btn" style={{width:"100%",marginTop:16,background:t.popular?"#5CB83A":"transparent",color:t.popular?"#fff":"#5CB83A",border:`2px solid #5CB83A`,borderRadius:10,padding:"10px 0",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:FB}}>
+                    Request Access →
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── REQUEST / CONTACT ── */}
+      <section id="request" style={{background:"#fff",padding:"60px max(24px,5vw)"}}>
+        <div style={{maxWidth:900,margin:"0 auto",display:"grid",gridTemplateColumns:"1fr 1fr",gap:48}} className="mob-grid-1">
+          {/* Request form */}
+          <div>
+            <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:28,fontWeight:800,color:"#0f1c09",marginBottom:8}}>Request a Demo</h2>
+            <p style={{color:"#666",fontSize:14,marginBottom:24,lineHeight:1.6}}>Tell us about your team and we'll set up XpensR for you within 24 hours.</p>
+            {reqSent?(
+              <div style={{background:"#f0fde9",border:"1px solid #bbf7d0",borderRadius:12,padding:24,textAlign:"center"}}>
+                <div style={{fontSize:36,marginBottom:8}}>✅</div>
+                <div style={{fontFamily:"'Playfair Display',serif",fontSize:18,fontWeight:700,color:"#16a34a",marginBottom:4}}>Request sent!</div>
+                <p style={{color:"#444",fontSize:13}}>We'll be in touch within 24 hours.</p>
+              </div>
+            ):(
+              <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                {[["name","Your Name *","text"],["company","Company Name","text"],["email","Work Email *","email"],["phone","Phone Number","tel"]].map(([k,ph,type])=>(
+                  <input key={k} type={type} placeholder={ph} value={reqForm[k]} onChange={e=>setReqForm({...reqForm,[k]:e.target.value})}
+                    style={{padding:"11px 14px",borderRadius:9,border:"1.5px solid #e2e8f0",fontSize:13,fontFamily:FB,outline:"none",background:"#f8fffe"}}/>
+                ))}
+                <textarea placeholder="Tell us about your team size and needs…" value={reqForm.message} onChange={e=>setReqForm({...reqForm,message:e.target.value})} rows={3}
+                  style={{padding:"11px 14px",borderRadius:9,border:"1.5px solid #e2e8f0",fontSize:13,fontFamily:FB,resize:"vertical",outline:"none",background:"#f8fffe"}}/>
+                <button onClick={sendRequest} disabled={reqBusy} className="xr-btn" style={{background:"#5CB83A",color:"#fff",border:"none",borderRadius:10,padding:"12px 24px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:FB}}>
+                  {reqBusy?"Sending…":"Send Request →"}
+                </button>
+              </div>
+            )}
+          </div>
+          {/* Contact info */}
+          <div id="contact">
+            <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:28,fontWeight:800,color:"#0f1c09",marginBottom:8}}>Contact Us</h2>
+            <p style={{color:"#666",fontSize:14,marginBottom:28,lineHeight:1.6}}>We'd love to hear from you. Reach out anytime.</p>
+            {[
+              {icon:"🏢",label:"R B Shah & Associates",sub:"Chartered Accountants"},
+              {icon:"📍",label:"Rajkot, Gujarat, India",sub:""},
+              {icon:"📧",label:"rushabh@rbshah.co.in",sub:"Rushabh Shah, CA · Partner"},
+              {icon:"🌐",label:"www.rbshah.co.in",sub:""},
+              {icon:"📱",label:"+91 98250 XXXXX",sub:"WhatsApp preferred"},
+            ].map(({icon,label,sub})=>(
+              <div key={label} style={{display:"flex",alignItems:"flex-start",gap:14,marginBottom:18}}>
+                <div style={{width:38,height:38,borderRadius:"50%",background:"#f0fde9",display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,flexShrink:0}}>{icon}</div>
+                <div>
+                  <div style={{fontSize:14,fontWeight:600,color:"#0f1c09"}}>{label}</div>
+                  {sub&&<div style={{fontSize:12,color:"#888",marginTop:1}}>{sub}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── FOOTER ── */}
+      <footer style={{background:"#0f1c09",padding:"32px max(24px,5vw)",textAlign:"center"}}>
+        <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,fontWeight:800,color:"#7ED957",marginBottom:4}}>XpensR</div>
+        <div style={{fontSize:10,color:"rgba(255,255,255,.3)",letterSpacing:2,textTransform:"uppercase",marginBottom:16}}>by RB</div>
+        <p style={{color:"rgba(255,255,255,.3)",fontSize:12,marginBottom:4}}>© 2026 R B Shah & Associates. Built with ♥ in Rajkot.</p>
+        <p style={{color:"rgba(255,255,255,.2)",fontSize:11}}>XpensR is a product of RB Finsol. All rights reserved.</p>
+      </footer>
+
+      {/* ── LOGIN MODAL ── */}
+      {showLogin&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(6px)"}} onClick={e=>{if(e.target===e.currentTarget)setShowLogin(false);}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:`linear-gradient(145deg,${DARK} 0%,#0a1f06 100%)`,borderRadius:20,padding:32,width:"min(420px,96vw)",boxShadow:"0 32px 80px rgba(0,0,0,.5)",border:"1px solid rgba(255,255,255,.08)",position:"relative"}}>
+            <button onClick={()=>setShowLogin(false)} style={{position:"absolute",top:14,right:16,background:"none",border:"none",color:"rgba(255,255,255,.4)",fontSize:20,cursor:"pointer",lineHeight:1}}>✕</button>
+            <div style={{textAlign:"center",marginBottom:24}}>
+              <div style={{fontFamily:"'Playfair Display',serif",fontSize:28,fontWeight:800,color:"#7ED957",letterSpacing:-0.5}}>XpensR</div>
+              <div style={{fontSize:10,color:"rgba(255,255,255,.3)",letterSpacing:2,textTransform:"uppercase",marginTop:2}}>Sign in to your workspace</div>
             </div>
-          </>)}
-
-          {/* ── FORGOT VIEW ── */}
-          {view==="forgot"&&(<>
-            <button onClick={()=>setView("login")} style={{background:"none",border:"none",color:"rgba(255,255,255,0.4)",fontFamily:FB,fontSize:12,cursor:"pointer",padding:0,marginBottom:14,display:"flex",alignItems:"center",gap:5}}>← Back</button>
-            <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",fontWeight:700,letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>Reset Password</div>
-            <p style={{color:"rgba(255,255,255,0.45)",fontSize:12,marginBottom:18,lineHeight:1.5}}>Enter your email address (for admin accounts only).</p>
-            <div style={{marginBottom:16}}><label style={{display:"block",fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.4)",letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Email</label><input type="email" value={login} onChange={e=>{setLogin(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&sendReset()} placeholder="you@company.in" style={inp}/></div>
-            {err&&<div style={{color:"#f87171",fontSize:12,marginBottom:10}}>⚠ {err}</div>}
-            <button onClick={sendReset} disabled={busy||!login} style={{width:"100%",padding:"13px",background:G,border:"none",borderRadius:10,color:"#fff",fontFamily:FB,fontWeight:700,fontSize:15,cursor:"pointer"}}>{busy?"Sending…":"Send Reset Link →"}</button>
-            <p style={{color:"rgba(255,255,255,0.3)",fontSize:11,marginTop:10}}>Note: password reset is only for admin accounts. For employee access, ask your manager to reset your password.</p>
-          </>)}
-
-          {/* ── MAIN LOGIN VIEW ── */}
-          {view==="login"&&(<>
-            <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",fontWeight:700,letterSpacing:2,textTransform:"uppercase",marginBottom:20}}>Sign in to your workspace</div>
-            {msg&&<div style={{background:"rgba(126,217,87,0.1)",border:"1px solid rgba(126,217,87,0.3)",borderRadius:8,padding:"9px 12px",marginBottom:14,fontSize:12,color:G}}>{msg}</div>}
-
-            {/* Google */}
-            <button onClick={googleLogin} disabled={gBusy} style={{width:"100%",padding:"11px",background:"rgba(255,255,255,0.08)",border:"1.5px solid rgba(255,255,255,0.15)",borderRadius:10,color:"#fff",fontFamily:FB,fontSize:14,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,marginBottom:14}}>
-              {gBusy?<span style={{width:16,height:16,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin .7s linear infinite",display:"inline-block"}}/>:<svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.35-8.16 2.35-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>}
-              {gBusy?"Connecting…":"Continue with Google"}
-            </button>
-            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}><div style={{flex:1,height:1,background:"rgba(255,255,255,0.1)"}}/><span style={{color:"rgba(255,255,255,0.25)",fontSize:11}}>or username / email / mobile</span><div style={{flex:1,height:1,background:"rgba(255,255,255,0.1)"}}/></div>
-
-            <div style={{marginBottom:12}}>
-              <label style={{display:"block",fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.4)",letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Username / Email / Mobile</label>
-              <input type="text" value={login} onChange={e=>{setLogin(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)} placeholder="username  or  abc@company.in  or  9123456789" className="login-inp" style={inp} autoComplete="username"/>
-            </div>
-            <div style={{marginBottom:8}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-                <label style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.4)",letterSpacing:1,textTransform:"uppercase"}}>Password</label>
-                <span onClick={()=>{setErr("");setMsg("");setView("forgot");}} style={{color:G,fontSize:11,cursor:"pointer",textDecoration:"underline"}}>Forgot?</span>
+            <div style={{display:"flex",flexDirection:"column",gap:12}}>
+              <div style={{position:"relative"}}>
+                <input type="text" value={login} onChange={e=>{setLogin(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)}
+                  placeholder="username  or  email@company.in  or  9123456789"
+                  className="login-inp"
+                  style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.06)",color:"#ffffff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}
+                  autoComplete="username"/>
               </div>
               <div style={{position:"relative"}}>
-                <input type={showPw?"text":"password"} value={pass} onChange={e=>{setPass(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)} placeholder="••••••••" style={{...inp,paddingRight:44}} autoComplete="current-password"/>
-                <button onClick={()=>setSP(!showPw)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"rgba(255,255,255,0.3)",cursor:"pointer",fontSize:16}}>{showPw?"🙈":"👁"}</button>
+                <input type={showPw?"text":"password"} value={pass} onChange={e=>{setPass(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)}
+                  placeholder="your password" className="login-inp"
+                  style={{width:"100%",padding:"12px 40px 12px 14px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.06)",color:"#ffffff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}
+                  autoComplete="current-password"/>
+                <button onClick={()=>setSPw(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"rgba(255,255,255,.35)",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>{showPw?"🙈":"👁"}</button>
               </div>
+              {err&&<div style={{color:"#f87171",fontSize:12,textAlign:"center",padding:"6px 10px",background:"rgba(239,68,68,.1)",borderRadius:7}}>{err}</div>}
+              <button onClick={()=>attempt(login,pass)} disabled={busy} style={{background:"#7ED957",color:"#0f1c09",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:FB,marginTop:4}}>
+                {busy?"Signing in…":"Sign In →"}
+              </button>
+              {SB_ENABLED&&<button onClick={googleLogin} disabled={busy} style={{background:"rgba(255,255,255,.06)",color:"rgba(255,255,255,.7)",border:"1px solid rgba(255,255,255,.12)",borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:FB}}>
+                <span style={{marginRight:8}}>🔐</span>Admin: Sign in with Google
+              </button>}
             </div>
-            {err&&<div style={{color:"#f87171",fontSize:12,marginBottom:8}}>⚠ {err}</div>}
-
-            <button onClick={()=>attempt(login,pass)} disabled={busy||!login||!pass}
-              style={{marginTop:12,width:"100%",padding:"13px",background:busy||!login||!pass?"rgba(126,217,87,0.3)":G,border:"none",borderRadius:10,color:"#fff",fontFamily:FB,fontWeight:700,fontSize:15,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}>
-              {busy&&<span style={{width:18,height:18,border:"2.5px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin .7s linear infinite",display:"inline-block"}}/>}
-              {busy?"Signing in…":"Sign In →"}
-            </button>
-
-            {/* Demo hint - dev only, hidden in production */}
-            {!SB_ENABLED&&<div style={{marginTop:14,padding:"10px 12px",background:"rgba(126,217,87,0.05)",border:"1px solid rgba(126,217,87,0.1)",borderRadius:9,fontSize:11,color:"rgba(255,255,255,.3)",textAlign:"center"}}>
-              Demo mode — use credentials from your admin
-            </div>}
-          </>)}
+          </div>
         </div>
-        <div style={{marginTop:14,textAlign:"center",fontSize:10,color:"rgba(255,255,255,0.2)"}}>
-          © 2026 ClaimX by RB ·{" "}
-          <span onClick={()=>setLegalModal("privacy")} style={{cursor:"pointer",textDecoration:"underline",color:"rgba(255,255,255,0.35)"}}>Privacy Policy</span>
-          {" · "}
-          <span onClick={()=>setLegalModal("terms")} style={{cursor:"pointer",textDecoration:"underline",color:"rgba(255,255,255,0.35)"}}>Terms of Service</span>
-          {" · "}
-          <span onClick={()=>setLegalModal("cookies")} style={{cursor:"pointer",textDecoration:"underline",color:"rgba(255,255,255,0.35)"}}>Cookie Policy</span>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -1795,7 +1896,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     if(!coData)return;
     const n=coData.claims.filter(c=>c.status==="Pending").length;
     const canApproveCheck=["manager","approver"].includes(user.role);
-    if(n>0&&canApproveCheck)sendPush("ClaimX",`${n} claim${n!==1?"s":""} await your approval`);
+    if(n>0&&canApproveCheck)sendPush("XpensR",`${n} claim${n!==1?"s":""} await your approval`);
   },[!!coData]);
 
 
@@ -2370,7 +2471,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       const empPhone=emp?.whatsappNumber||emp?.mobile;
       if(empPhone&&co.policy?.notifyWaOnApprove!==false){
         whatsappAlert(empPhone,
-          isFullyApproved?"claimx_claim_approved":"claimx_claim_rejected",
+          isFullyApproved?"xpensr_claim_approved":"xpensr_claim_rejected",
           [emp?.name||"",claimId,fmt(claim.amount),remarks||""]
         );
       }
@@ -2489,7 +2590,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       await sbPushNotif(uid,summaryMsg,"info");
       const u=co.users.find(x=>x.id===uid);
       if(u?.email)emailAlert(u.email,`Trip Closed: ${trip.name}`,summaryMsg);
-      if(u?.mobile)whatsappAlert(u.mobile,"claimx_trip_summary",[trip.name,tripClaims.length.toString(),fmt(total)]);
+      if(u?.mobile)whatsappAlert(u.mobile,"xpensr_trip_summary",[trip.name,tripClaims.length.toString(),fmt(total)]);
     }
     toast(`✓ Trip closed — PDF downloaded — summary sent to all stakeholders`);
   };
@@ -2730,7 +2831,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     <table><tr><th>Claim ID</th><th>Requested By</th><th>Approved By</th><th>Reason</th><th>Date</th></tr>
     ${overrides.map(r=>`<tr><td>${r.claim_id||r.claimId}</td><td>${r.requester_name||r.requesterName}</td><td>${r.reviewer_name||r.reviewerName||"—"}</td><td>${r.reason}</td><td>${r.created_at?new Date(r.created_at).toLocaleDateString("en-IN"):""}</td></tr>`).join("")}
     </table>`:""}
-    <div class="footer">ClaimX by RB · This digest should be reviewed by the Finance team. All override entries require supporting justification.</div>
+    <div class="footer">XpensR by RB · This digest should be reviewed by the Finance team. All override entries require supporting justification.</div>
     </body></html>`);
     w.document.close();w.print();
   };
@@ -2743,7 +2844,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
       // Header
       doc.setFillColor(15,28,9);doc.rect(0,0,W,22,"F");
-      doc.setTextColor(126,217,87);doc.setFont("helvetica","bold");doc.setFontSize(14);doc.text("ClaimX",M,14);
+      doc.setTextColor(126,217,87);doc.setFont("helvetica","bold");doc.setFontSize(14);doc.text("XpensR",M,14);
       doc.setTextColor(200,200,200);doc.setFontSize(9);doc.text("by RB",M+20,14);
       doc.setTextColor(255,255,255);doc.setFontSize(10);doc.text(title||"Expense Report",W/2,14,{align:"center"});
       doc.setTextColor(150,150,150);doc.setFontSize(8);doc.text(subtitle||new Date().toLocaleDateString("en-IN"),W-M,14,{align:"right"});
@@ -2784,7 +2885,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
       // Footer
       doc.setFont("helvetica","normal");doc.setFontSize(7.5);doc.setTextColor(150,150,150);
-      doc.text(`ClaimX by RB · ${activeMeta?.name||""} · Generated ${new Date().toLocaleDateString("en-IN")}`,W/2,200,{align:"center"});
+      doc.text(`XpensR by RB · ${activeMeta?.name||""} · Generated ${new Date().toLocaleDateString("en-IN")}`,W/2,200,{align:"center"});
 
       // Open PDF in new tab instead of forcing download
       const pdfUrl=doc.output("bloburl");
@@ -2804,7 +2905,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const navItems=[
     {id:"dashboard", icon:"▦",  label:"Dashboard"},
     {id:"claims",    icon:"📋", label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"},
-    ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
+    ...(hasPerm("submit")&&!canApprove?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
     {id:"trips",     icon:"🗂️", label:"Trips / Periods"},
     ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[]),
     {id:"topup",icon:"💰",label:"Top-up"},
@@ -2812,12 +2913,13 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     // Edit Requests merged into Approvals tab
     {id:"analytics", icon:"📊", label:"Analytics"},
     // Inbox moved to notification bell in top bar - not in sidebar
+    ...(canApprove?[{id:"ledger",icon:"📒",label:"Trip Ledger"},{id:"balances",icon:"⚖️",label:"Balances"},{id:"settlements",icon:"💳",label:"Settlements"}]:[]),
     ...(canApprove||isFinance?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
     ...(isAdmin||isFinance?[{id:"finance_view",icon:"💼",label:"Finance"}]:[]),
     ...(isAdmin||isManager?[{id:"employees",icon:"👥",label:"Employees"}]:[]),
     ...(isAdmin?[{id:"policy",icon:"⚙️",label:"Policy"}]:[]),
     // My History merged into My Expenses (claims tab)
-    {id:"help",      icon:"❓", label:"Help"},
+    // Help moved to ? icon in toolbar
   ];
 
   return(
@@ -2939,7 +3041,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
                 const topRows=Object.entries(byEmp).sort((a,b)=>b[1]-a[1]).slice(0,10)
                   .map(([id,amt])=>`<tr><td>${getUser(id)?.name||id}</td><td>₹${amt.toLocaleString("en-IN")}</td></tr>`).join("");
                 const html=`<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
-                  <div style="background:#0f1c09;padding:18px 24px;border-radius:10px 10px 0 0"><span style="color:#7ED957;font-weight:800;font-size:18px">ClaimX</span> <span style="color:rgba(255,255,255,.4);font-size:11px">Monthly Digest — ${thisMonth}</span></div>
+                  <div style="background:#0f1c09;padding:18px 24px;border-radius:10px 10px 0 0"><span style="color:#7ED957;font-weight:800;font-size:18px">XpensR</span> <span style="color:rgba(255,255,255,.4);font-size:11px">Monthly Digest — ${thisMonth}</span></div>
                   <div style="background:#fff;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px">
                     <h2 style="color:#1a2e12;font-size:16px">Expense Summary — ${activeMeta?.name||""}</h2>
                     <p>Total approved: <strong>₹${total.toLocaleString("en-IN")}</strong> across ${approved.length} claims</p>
@@ -3072,7 +3174,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             <div style={{padding:"0 16px 8px",fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",letterSpacing:1}}>All Options</div>
             {[
               {id:"dashboard",icon:"▦",label:"Dashboard"},
-              ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
+              ...(hasPerm("submit")&&!canApprove?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
               {id:"trips",icon:"🗂",label:"Trips / Periods"},
               ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[]),
               // Edit Requests merged into Approvals tab
@@ -3591,7 +3693,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
   const blankForm=()=>({id:uid(),date:today(),category:"",desc:"",amount:"",origAmount:"",currency:"INR",tripId:"",notes:"",vendor:"",receipts:[],ocrState:"idle",ocrData:null,scanning:false,gstAmount:"",projectCode:"",manualEdits:{}});
   const [forms,setForms]=useState(()=>{
     try{
-      const d=localStorage.getItem("claimx_draft_v1");
+      const d=localStorage.getItem("xpensr_draft_v1");
       if(d){const p=JSON.parse(d);return p.length>0?p:[blankForm()];}
     }catch{}
     return[blankForm()];
@@ -3599,13 +3701,13 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
   const [idx,setIdx]=useState(0);
   const [showTripModal,setShowTripModal]=useState(false);
   const saveDraft=useCallback((f)=>{
-    try{localStorage.setItem("claimx_draft_v1",JSON.stringify(Array.isArray(f)?f:[f]));}catch{}
+    try{localStorage.setItem("xpensr_draft_v1",JSON.stringify(Array.isArray(f)?f:[f]));}catch{}
   },[]);
-  const clearDraft=()=>{try{localStorage.removeItem("claimx_draft_v1");}catch{}};
+  const clearDraft=()=>{try{localStorage.removeItem("xpensr_draft_v1");}catch{}};
   // Auto-save draft on every form change
   useEffect(()=>{
     if(forms.some(f=>f.category||f.desc||f.amount||f.vendor))
-      try{localStorage.setItem("claimx_draft_v1",JSON.stringify(forms));}catch{}
+      try{localStorage.setItem("xpensr_draft_v1",JSON.stringify(forms));}catch{}
   },[forms]);
   const fileRefs=useRef({});
   const policy=co.policy;
@@ -3731,7 +3833,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
       }catch(e){fail++;}
     }
     setForms([blankForm()]);setIdx(0);
-    try{localStorage.removeItem("claimx_draft_v1");}catch{}
+    try{localStorage.removeItem("xpensr_draft_v1");}catch{}
     if(fail>0)alert(`${ok} submitted, ${fail} failed.`);
   };
 
@@ -3889,8 +3991,8 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
         {/* Draft save buttons */}
         <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:4}}>
           {(fm.category||fm.desc||fm.amount)&&<>
-            <button onClick={()=>{try{localStorage.setItem("claimx_draft_v1",JSON.stringify(forms));alert("✓ Draft saved successfully");}catch(e){alert("Save failed: "+e.message);}}} style={{padding:"4px 10px",background:"none",border:`1px solid ${BDR}`,borderRadius:6,cursor:"pointer",fontSize:10,color:MUTED}}>💾 Save Draft</button>
-            <button onClick={()=>{try{localStorage.removeItem("claimx_draft_v1");setForms([blankForm()]);setIdx(0);}catch{}}} style={{padding:"4px 10px",background:"none",border:"1px solid #fee2e2",borderRadius:6,cursor:"pointer",fontSize:10,color:"#dc2626"}}>✕ Clear Draft</button>
+            <button onClick={()=>{try{localStorage.setItem("xpensr_draft_v1",JSON.stringify(forms));alert("✓ Draft saved successfully");}catch(e){alert("Save failed: "+e.message);}}} style={{padding:"4px 10px",background:"none",border:`1px solid ${BDR}`,borderRadius:6,cursor:"pointer",fontSize:10,color:MUTED}}>💾 Save Draft</button>
+            <button onClick={()=>{try{localStorage.removeItem("xpensr_draft_v1");setForms([blankForm()]);setIdx(0);}catch{}}} style={{padding:"4px 10px",background:"none",border:"1px solid #fee2e2",borderRadius:6,cursor:"pointer",fontSize:10,color:"#dc2626"}}>✕ Clear Draft</button>
           </>}
         </div>
         <div style={{display:"flex",gap:9}}>
@@ -3910,7 +4012,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
               setForms(newForms);
               setIdx(0);
               // Always clear draft after submission — don't restore stale data
-              try{localStorage.removeItem("claimx_draft_v1");}catch{}
+              try{localStorage.removeItem("xpensr_draft_v1");}catch{}
             }catch(e){
               // Do NOT clear form — show error and let user fix it
               alert("Submission failed: "+(e?.message||String(e)));
@@ -5143,7 +5245,7 @@ function MyHistoryTab({user,trips,claims,getUser,exportClaimsPDF}){
     const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
     const W=210,M=18;let y=M;
     doc.setFillColor(15,28,9);doc.rect(0,0,W,26,"F");
-    doc.setTextColor(126,217,87);doc.setFont("helvetica","bold");doc.setFontSize(16);doc.text("ClaimX",M,16);
+    doc.setTextColor(126,217,87);doc.setFont("helvetica","bold");doc.setFontSize(16);doc.text("XpensR",M,16);
     doc.setTextColor(200,200,200);doc.setFontSize(9);doc.text("Client Reimbursement Claim",M+22,16);
     doc.setTextColor(150,150,150);doc.text(new Date().toLocaleDateString("en-IN"),W-M,16,{align:"right"});
     y=32;
@@ -5177,7 +5279,7 @@ function MyHistoryTab({user,trips,claims,getUser,exportClaimsPDF}){
     doc.text("Signature: ________________________",M,y);
     doc.text(`Date: ${new Date().toLocaleDateString("en-IN")}`,W-M,y,{align:"right"});
     doc.setFontSize(7.5);doc.setTextColor(150,150,150);
-    doc.text("Generated by ClaimX by RB · claim-x-beta.vercel.app",W/2,286,{align:"center"});
+    doc.text("Generated by XpensR by RB · claim-x-beta.vercel.app",W/2,286,{align:"center"});
     doc.save(`Claim_${trip.name.replace(/\s+/g,"_")}_${user.name.replace(/\s+/g,"_")}.pdf`);
   };
 
@@ -5330,7 +5432,7 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
     // Header
     doc.setFillColor(15,28,9);doc.rect(0,0,W,20,"F");
     doc.setFont("helvetica","bold");doc.setFontSize(12);doc.setTextColor(126,217,87);
-    doc.text("ClaimX by RB — Trip Ledger",ML,13);
+    doc.text("XpensR by RB — Trip Ledger",ML,13);
     doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(180,200,170);
     doc.text(companyName||"",W-ML,13,{align:"right"});
     y=26;
@@ -5370,7 +5472,7 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
     doc.text(`Total Approved: ₹${totApproved.toLocaleString("en-IN")}   Pending: ₹${totPending.toLocaleString("en-IN")}   To Recover: ₹${totRecover.toLocaleString("en-IN")}   To Pay: ₹${totPay.toLocaleString("en-IN")}`,ML,y);
     // Footer
     doc.setFont("helvetica","normal");doc.setFontSize(6.5);doc.setTextColor(150,150,150);
-    doc.text(`ClaimX by RB · ${companyName||""} · Ledger as of ${new Date().toLocaleDateString("en-IN")}`,W/2,200,{align:"center"});
+    doc.text(`XpensR by RB · ${companyName||""} · Ledger as of ${new Date().toLocaleDateString("en-IN")}`,W/2,200,{align:"center"});
     doc.output("dataurlnewwindow");
   };
 
@@ -6019,7 +6121,7 @@ function ShortcutHelp({onClose}){
 
 // ─── AI CHATBOT ───────────────────────────────────────────────────────────────
 function AIChatbot({user,co,onClose}){
-  const CHAT_KEY="claimx_chat_"+user?.id;
+  const CHAT_KEY="xpensr_chat_"+user?.id;
   const[msgs,setMsgs]=useState(()=>{
     try{const s=localStorage.getItem(CHAT_KEY);if(s)return JSON.parse(s);}catch{}
     return[{role:"assistant",content:"Hi! I'm ClaimX Assistant. Ask me anything about submitting expenses, approving claims, creating trips, or any other feature. How can I help?"}];
@@ -6042,7 +6144,7 @@ function AIChatbot({user,co,onClose}){
     try{localStorage.removeItem(CHAT_KEY);}catch{}
   };
 
-  const CONTEXT=`You are ClaimX Assistant, a helpful support bot for ClaimX by RB — a cloud-based expense management app.
+  const CONTEXT=`You are ClaimX Assistant, a helpful support bot for XpensR by RB — a cloud-based expense management app.
 Key features: expense claims submission with AI OCR, trip management with budgets, multi-level approval (employee→manager→admin), settlements, GST ITC tracking, analytics, dark mode, keyboard shortcuts.
 User: ${user?.name||"Unknown"}, Role: ${user?.role||"employee"}, Company: ${co?.meta?.name||"Unknown"}.
 Active trips: ${(co?.trips||[]).filter(t=>t.status==="active").length}.
@@ -6287,7 +6389,7 @@ function HelpManual({userRole,onClose,inline=false}){
           </button>
         ))}
         <div style={{marginTop:"auto",paddingTop:12,borderTop:"1px solid rgba(255,255,255,.1)"}}>
-          <div style={{fontSize:10,color:"rgba(255,255,255,.3)",textAlign:"center",lineHeight:1.5}}>ClaimX<br/>by RB · support@claimx.in</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,.3)",textAlign:"center",lineHeight:1.5}}>XpensR<br/>by RB · support@claimx.in</div>
         </div>
       </div>}
       {/* Content */}
@@ -6680,9 +6782,9 @@ export default function Root(){
       }
       if(event==="SIGNED_OUT"){
         // Only clear if this was intentional logout (flag set by handleLogout)
-        const wasIntentional=sessionStorage.getItem("claimx_logout")==="1";
+        const wasIntentional=sessionStorage.getItem("xpensr_logout")==="1";
         if(wasIntentional){
-          try{sessionStorage.removeItem("claimx_logout");}catch{}
+          try{sessionStorage.removeItem("xpensr_logout");}catch{}
           setSession(null);setLoading(false);
         }
         // Unintentional SIGNED_OUT (e.g. token expired) — reload to re-check
@@ -6781,7 +6883,7 @@ export default function Root(){
 
     // For OAuth users: set flag + call Supabase signOut
     if(!isCustomAuth&&SB_ENABLED){
-      try{sessionStorage.setItem("claimx_logout","1");}catch(e){}
+      try{sessionStorage.setItem("xpensr_logout","1");}catch(e){}
       try{await supabase.auth.signOut();}catch(e){}
     }
 
@@ -6794,21 +6896,41 @@ export default function Root(){
   // If we have a valid custom auth session already, skip the loading screen entirely
   const hasValidSession=session&&(session.customAuth?session.sbUser:true);
 
-  if(loading&&!hasValidSession)return(
-    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(145deg,${DARK},#162e0d)`,fontFamily:FB}}>
-      <div style={{textAlign:"center",maxWidth:340}}>
-        <Logo width={180} dark/>
-        <div style={{marginTop:24,display:"flex",alignItems:"center",justifyContent:"center",gap:8,color:"rgba(255,255,255,0.4)",fontSize:13}}>
-          <span style={{width:18,height:18,border:"2px solid rgba(255,255,255,0.2)",borderTopColor:G,borderRadius:"50%",animation:"spin .8s linear infinite",display:"inline-block",flexShrink:0}}/>
-          {loadMsg}
+  if(loading&&!hasValidSession){
+    const quotes=["The secret of getting ahead is getting started.","Good accounting is good governance.","Work smarter, not harder — let XpensR handle the paperwork.","Every expense tells a story. XpensR helps you tell it right.","The details are not the details. They make the design."];
+    const q=quotes[Math.floor(Date.now()/10000)%quotes.length];
+    return(
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:`linear-gradient(145deg,${DARK} 0%,#0a1f06 60%,#162e0d 100%)`,fontFamily:FB,position:"relative",overflow:"hidden"}}>
+        {/* Animated background circles */}
+        <div style={{position:"absolute",width:400,height:400,borderRadius:"50%",background:"rgba(126,217,87,0.04)",top:-100,right:-100,pointerEvents:"none"}}/>
+        <div style={{position:"absolute",width:300,height:300,borderRadius:"50%",background:"rgba(126,217,87,0.03)",bottom:-80,left:-80,pointerEvents:"none"}}/>
+        <div style={{textAlign:"center",maxWidth:380,padding:"0 24px",position:"relative",zIndex:1}}>
+          {/* Logo */}
+          <div style={{marginBottom:32}}>
+            <div style={{fontFamily:FD,fontSize:42,fontWeight:800,color:"#7ED957",letterSpacing:-1,lineHeight:1}}>XpensR</div>
+            <div style={{fontSize:12,color:"rgba(255,255,255,0.3)",letterSpacing:3,textTransform:"uppercase",marginTop:4}}>by RB</div>
+          </div>
+          {/* Spinner */}
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:16,marginBottom:36}}>
+            <div style={{position:"relative",width:56,height:56}}>
+              <div style={{position:"absolute",inset:0,borderRadius:"50%",border:"3px solid rgba(126,217,87,0.15)"}}/>
+              <div style={{position:"absolute",inset:0,borderRadius:"50%",border:"3px solid transparent",borderTopColor:"#7ED957",animation:"spin .9s linear infinite"}}/>
+              <div style={{position:"absolute",inset:8,borderRadius:"50%",border:"2px solid transparent",borderTopColor:"rgba(126,217,87,0.4)",animation:"spin 1.4s linear infinite reverse"}}/>
+            </div>
+            <div style={{color:"rgba(255,255,255,0.45)",fontSize:13,letterSpacing:.5}}>{loadMsg}</div>
+          </div>
+          {/* Quote */}
+          <div style={{borderTop:"1px solid rgba(255,255,255,0.07)",paddingTop:24,marginBottom:20}}>
+            <p style={{color:"rgba(255,255,255,0.3)",fontSize:12,lineHeight:1.7,fontStyle:"italic",margin:0}}>&ldquo;{q}&rdquo;</p>
+          </div>
+          <button onClick={()=>setLoading(false)}
+            style={{background:"none",border:"1px solid rgba(255,255,255,0.12)",borderRadius:20,color:"rgba(255,255,255,0.3)",padding:"6px 18px",fontFamily:FB,fontSize:11,cursor:"pointer",letterSpacing:.5}}>
+            Skip →
+          </button>
         </div>
-        <button onClick={()=>setLoading(false)}
-          style={{marginTop:20,background:"none",border:"1px solid rgba(255,255,255,0.15)",borderRadius:8,color:"rgba(255,255,255,0.35)",padding:"7px 16px",fontFamily:FB,fontSize:11,cursor:"pointer"}}>
-          Skip → Go to Login
-        </button>
       </div>
-    </div>
-  );
+    );
+  }
 
   if(isReset)return<ErrorBoundary><Login onLogin={handleLogin} DB={DB} isPasswordRecovery={true}/></ErrorBoundary>;
 
