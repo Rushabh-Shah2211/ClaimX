@@ -1687,7 +1687,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       await sbPushNotif(m.id,`💰 Fund request: ${req.empName} needs ₹${req.amount.toLocaleString("en-IN")} for "${tripName}" — ${req.reason}`,"warn");
     }
     if(SB_ENABLED){
-      await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});
+      const{error:topupErr}=await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});
+      if(topupErr){console.error("Topup insert error:",topupErr.message);toast("Fund request notification sent but DB save failed: "+topupErr.message,"error");return;}
       await loadFromSB();
     }
     toast("✓ Fund request sent to manager");
@@ -2875,7 +2876,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             <EditRequestsPanel editRequests={editRequests} claims={co.claims} getUser={getUser} cid={cid} toast={toast} sbEnabled={SB_ENABLED} onApprove={approveEditRequest} onReject={rejectEditRequest}/>
           </Card>}
         </>}
-        {tab==="topup"&&<TopupTab user={user} topups={canApprove?co.topups.filter(t=>t.status==="Pending"||t.empId===user.id):co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} trips={co.trips} sbCreateTopup={async(req)=>{if(SB_ENABLED){await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});await loadFromSB();}else{setTopups(p=>[...p,req]);}}}/>}
+        {tab==="topup"&&<TopupTab user={user} topups={canApprove?co.topups.filter(t=>t.status==="Pending"||t.empId===user.id):co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} trips={co.trips} sbCreateTopup={async(req)=>{if(SB_ENABLED){const{error:te}=await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});if(te){toast("Top-up request failed: "+te.message,"error");return;}await loadFromSB();}else{setTopups(p=>[...p,req]);}}}/>}
         {tab==="analytics"&&<Analytics
           claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept;}):co.claims.filter(c=>c.empId===user.id)}
           trips={isAdmin?co.trips:isManager?co.trips.filter(t=>{const assigned=(t.assignedTo||[]);return assigned.some(id=>{const u=getUser(id);return u?.dept===myUser?.dept;})||t.createdBy===user.id;}):co.trips.filter(t=>(t.assignedTo||[]).includes(user.id)||t.createdBy===user.id)}
@@ -4136,7 +4137,7 @@ function TopupTab({user,topups,setTopups,toast,sbCreateTopup,trips}){
     if(!form.amount||!form.reason){toast("Fill amount and reason","error");return;}
     const tripId=form.tripId||myTrips[0]?.id;
     if(!tripId){toast("Please select a trip for this top-up request","error");return;}
-    const req={id:"TUP-"+uid(),empId:user.id,amount:parseFloat(form.amount),reason:form.reason,date:today(),status:"Pending",tripId};
+    const req={id:uid(),empId:user.id,amount:parseFloat(form.amount),reason:form.reason,date:today(),status:"Pending",tripId};
     if(sbCreateTopup){await sbCreateTopup(req);}else{setTopups(p=>[...p,req]);}
     setForm({amount:"",reason:"",tripId:""});
     toast("✓ Top-up request sent to manager");
@@ -5515,7 +5516,7 @@ function FundRequestModal({trips,user,cid,onClose,onSubmit,sbEnabled}){
   const submit=async()=>{
     if(!tripId||!amount||!reason){return;}
     setBusy(true);
-    const req={id:"FR-"+Date.now(),tripId,empId:user.id,empName:user.name,amount:parseFloat(amount),reason,status:"Pending",date:today(),companyId:cid};
+    const req={id:uid(),tripId,empId:user.id,empName:user.name,amount:parseFloat(amount),reason,status:"Pending",date:today(),companyId:cid};
     await onSubmit(req);
     setDone(true);setBusy(false);
     setTimeout(onClose,2000);
