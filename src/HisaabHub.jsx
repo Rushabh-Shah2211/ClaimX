@@ -185,18 +185,19 @@ const mapTopup=r=>r?({id:r.id,empId:r.emp_id,amount:parseFloat(r.amount),reason:
 
 // ─── SB: load full company data ───────────────────────────────────────────────
 async function sbLoadCompany(cid){
-  const [
-    {data:meta},{data:users},{data:trips},{data:claims},
-    {data:topups},{data:audit},{data:notifs},{data:policy}
-  ]=await Promise.all([
-    supabase.from("companies").select("*").eq("id",cid).single(),
-    supabase.from("users").select("*").eq("company_id",cid),
-    supabase.from("trips").select("*,trip_assignments(user_id)").eq("company_id",cid).order("created_at",{ascending:false}),
-    supabase.from("claims").select("*,receipts(*),claim_comments(*)").eq("company_id",cid).order("created_at",{ascending:false}),
-    supabase.from("topups").select("*").eq("company_id",cid).order("created_at",{ascending:false}),
-    supabase.from("audit_log").select("*").eq("company_id",cid).order("created_at",{ascending:false}).limit(500),
-    supabase.from("notifications").select("*").eq("company_id",cid).order("created_at",{ascending:false}).limit(300),
-    supabase.from("policy").select("*").eq("company_id",cid).single(),
+  // Fetch each table separately so one failure doesn't kill the whole load
+  const safe=async(q,fallback=[])=>{try{const{data,error}=await q;if(error){console.warn("sbLoadCompany query error:",error.message);return fallback;}return data||fallback;}catch(e){console.warn("sbLoadCompany exception:",e.message);return fallback;}};
+  const safeSingle=async(q,fallback=null)=>{try{const{data,error}=await q;if(error){console.warn("sbLoadCompany single error:",error.message);return fallback;}return data||fallback;}catch(e){return fallback;}};
+
+  const [meta,users,trips,claims,topups,audit,notifs,policy]=await Promise.all([
+    safeSingle(supabase.from("companies").select("*").eq("id",cid).single()),
+    safe(supabase.from("users").select("*").eq("company_id",cid)),
+    safe(supabase.from("trips").select("*,trip_assignments(user_id)").eq("company_id",cid).order("created_at",{ascending:false})),
+    safe(supabase.from("claims").select("*,receipts(*),claim_comments(*)").eq("company_id",cid).order("created_at",{ascending:false})),
+    safe(supabase.from("topups").select("*").eq("company_id",cid).order("date",{ascending:false})),
+    safe(supabase.from("audit_log").select("*").eq("company_id",cid).order("created_at",{ascending:false}).limit(500)),
+    safe(supabase.from("notifications").select("*").eq("company_id",cid).order("created_at",{ascending:false}).limit(300)),
+    safeSingle(supabase.from("policy").select("*").eq("company_id",cid).single()),
   ]);
 
   // Fetch signed URLs for all receipts in parallel so images show immediately
@@ -367,24 +368,21 @@ const claimEmailHtml=(action,claim,remarks,companyName)=>{
 
 // ─── TRIP SETTLEMENT PDF ──────────────────────────────────────────────────────
 const generateSettlementPDF=async(trip,claims,getUser,companyName)=>{
-  // jsPDF loaded from npm package
   const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
-  const W=210,M=20;
-  let y=M;
+  const W=210,ML=15,MR=15,CW=W-ML-MR;
+  let y=10;
+  const newPage=()=>{doc.addPage();y=14;};
+  const checkY=(need=14)=>{if(y+need>278)newPage();};
 
-  // Header
-  doc.setFillColor(15,28,9);
-  doc.rect(0,0,W,28,"F");
-  doc.setTextColor(126,217,87);
-  doc.setFont("helvetica","bold");
-  doc.setFontSize(18);
-  doc.text("ClaimX",M,16);
-  doc.setTextColor(200,200,200);
-  doc.setFontSize(9);
-  doc.text("by RB · Trip Settlement Statement",M+26,16);
-  doc.setTextColor(150,150,150);
-  doc.text(companyName||"",W-M,16,{align:"right"});
-  y=38;
+  // ── Header ────────────────────────────────────────────────
+  doc.setFillColor(15,28,9);doc.rect(0,0,W,22,"F");
+  doc.setFont("helvetica","bold");doc.setFontSize(13);doc.setTextColor(126,217,87);
+  doc.text("ClaimX",ML,14);
+  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(180,200,170);
+  doc.text("by RB — Trip Settlement Statement",ML+22,14);
+  doc.setTextColor(130,130,130);
+  doc.text(String(companyName||"").slice(0,40),W-MR,14,{align:"right"});
+  y=30;
 
   // Trip details
   doc.setTextColor(20,20,20);
@@ -408,69 +406,131 @@ const generateSettlementPDF=async(trip,claims,getUser,companyName)=>{
   const settlement=isBalance?(openBal+topups-totalSpent):totalSpent;
   const recoverable=isBalance&&settlement>0;
 
-  doc.setFillColor(240,253,233);
-  doc.roundedRect(M,y,W-2*M,32,3,3,"F");
-  doc.setTextColor(20,20,20);
+  // ── Trip details ──────────────────────────────────────────
+  doc.setFont("helvetica","bold");doc.setFontSize(13);doc.setTextColor(20,20,20);
+  doc.text((trip.name||"Trip").slice(0,50),ML,y);y+=6;
+  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(100,100,100);
+  doc.text(`${trip.startDate||""} → ${trip.endDate||""}  ·  ${trip.type||"Trip"}  ·  ${trip.currency||"INR"}${trip.projectCode?" · Proj: "+trip.projectCode:""}`,ML,y);y+=10;
+
+  // ── Summary box ───────────────────────────────────────────
+  doc.setFillColor(240,253,233);doc.roundedRect(ML,y,CW,30,2,2,"F");
+  doc.setDrawColor(200,235,200);doc.roundedRect(ML,y,CW,30,2,2,"S");
   const cols=isBalance
-    ?[["Opening Balance","₹"+openBal.toLocaleString("en-IN")],["Top-ups","₹"+topups.toLocaleString("en-IN")],["Total Spent","₹"+totalSpent.toLocaleString("en-IN")],["Settlement",`₹${Math.abs(settlement).toLocaleString("en-IN")} ${recoverable?"(Return)":"(Payable)"}`]]
-    :[["Total Expenses","₹"+totalSpent.toLocaleString("en-IN")],["Budget","₹"+budget.toLocaleString("en-IN")],["Variance",`₹${Math.abs(totalSpent-budget).toLocaleString("en-IN")} ${totalSpent>budget?"Over":"Under"}`],["Status","Reimbursement"]];
-  const colW=(W-2*M)/cols.length;
+    ?[["Opening Bal","₹"+openBal.toLocaleString("en-IN")],["Top-ups","₹"+topups.toLocaleString("en-IN")],["Approved Exp","₹"+totalSpent.toLocaleString("en-IN")],["Settlement",`₹${Math.abs(settlement).toLocaleString("en-IN")} ${recoverable?"(Recover)":"(Pay)"}`]]
+    :[["Total Approved","₹"+totalSpent.toLocaleString("en-IN")],["Budget","₹"+budget.toLocaleString("en-IN")],["Variance",`₹${Math.abs(totalSpent-budget).toLocaleString("en-IN")}`],["Mode","Reimbursement"]];
+  const colW=CW/cols.length;
   cols.forEach(([l,v],i)=>{
-    const cx=M+i*colW+colW/2;
-    doc.setFontSize(8);doc.setTextColor(100,100,100);doc.text(l,cx,y+8,{align:"center"});
-    doc.setFontSize(12);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);doc.text(v,cx,y+18,{align:"center"});
-    doc.setFont("helvetica","normal");
+    const cx=ML+i*colW+colW/2;
+    doc.setFontSize(7);doc.setTextColor(90,120,90);doc.setFont("helvetica","normal");doc.text(l,cx,y+8,{align:"center"});
+    doc.setFontSize(10);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);doc.text(v.slice(0,16),cx,y+20,{align:"center"});
   });
-  y+=38;
+  y+=36;
 
-  // Expense table
-  doc.setFontSize(10);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);
-  doc.text("Approved Expenses",M,y);y+=5;
-  doc.setFillColor(21,128,61);
-  doc.rect(M,y,W-2*M,6,"F");
-  doc.setTextColor(255,255,255);doc.setFontSize(7.5);doc.setFont("helvetica","bold");
-  const th=["Date","Vendor","Category","Description","Amount"];
-  const tw=[22,32,28,52,26];
-  let tx=M+2;
-  th.forEach((h,i)=>{doc.text(h,tx,y+4.5);tx+=tw[i];});
-  y+=7;
-
-  tripClaims.forEach((c,idx)=>{
-    if(y>265){doc.addPage();y=20;}
-    doc.setFillColor(idx%2===0?250:245,idx%2===0?253:250,idx%2===0?243:238);
-    doc.rect(M,y,W-2*M,5.5,"F");
-    doc.setTextColor(40,40,40);doc.setFontSize(7.5);doc.setFont("helvetica","normal");
-    tx=M+2;
-    const vals=[c.date||"",c.vendor?.slice(0,14)||"—",c.category||"",c.desc?.slice(0,24)||"","₹"+(c.amount).toLocaleString("en-IN")];
-    vals.forEach((v,i)=>{doc.text(v,tx,y+4);tx+=tw[i];});
-    y+=6;
-  });
-
-  y+=4;
-  doc.setDrawColor(200,230,180);doc.line(M,y,W-M,y);y+=5;
-  doc.setFontSize(9);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);
-  doc.text(`Total: ₹${totalSpent.toLocaleString("en-IN")}`,W-M,y,{align:"right"});
-
-  // Footer
-  y+=10;
-  if(isBalance){
-    const box=recoverable?"#fef3c7":"#f0fde9";
-    doc.setFillColor(...(recoverable?[254,243,199]:[240,253,233]));
-    doc.roundedRect(M,y,W-2*M,14,2,2,"F");
-    doc.setFontSize(9);doc.setFont("helvetica","bold");
-    doc.setTextColor(recoverable?146:21,recoverable?64:128,recoverable?0:61);
-    doc.text(
-      recoverable
-        ?`₹${settlement.toLocaleString("en-IN")} is recoverable from employee`
-        :`₹${Math.abs(settlement).toLocaleString("en-IN")} is payable to employee`,
-      W/2,y+9,{align:"center"}
-    );
-    y+=18;
+  // ── Per-employee breakdown ─────────────────────────────────
+  const assigned=(trip.assignedTo||[]);
+  if(assigned.length>0){
+    checkY(12);
+    doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(20,20,20);
+    doc.text("Employee Settlement Summary",ML,y);y+=5;
+    assigned.forEach(uid=>{
+      const u=getUser(uid);if(!u)return;
+      const empApproved=claims.filter(c=>c.tripId===trip.id&&c.empId===uid&&c.status==="Approved");
+      const empRejected=claims.filter(c=>c.tripId===trip.id&&c.empId===uid&&c.status==="Rejected");
+      const empSpent=empApproved.reduce((s,c)=>s+c.amount,0);
+      const empBudget=(trip.employeeBudgets?.[uid]?.allocated||0)+(trip.employeeBudgets?.[uid]?.topups||0)||Math.round(budget/Math.max(assigned.length,1));
+      const empBal=isBalance?(empBudget-empSpent):-empSpent;
+      checkY(8);
+      doc.setFillColor(248,252,248);doc.rect(ML,y,CW,7,"F");
+      doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(30,30,30);
+      doc.text((u.name||"").slice(0,20),ML+2,y+5);
+      doc.text(`Budget: ₹${empBudget.toLocaleString("en-IN")}`,ML+52,y+5);
+      doc.text(`Spent: ₹${empSpent.toLocaleString("en-IN")}`,ML+90,y+5);
+      doc.text(`Rejected: ${empRejected.length}`,ML+125,y+5);
+      doc.setFont("helvetica","bold");
+      doc.setTextColor(empBal>0?200:21,empBal>0?50:128,empBal>0?50:61);
+      const balTxt=empBal>0?`Recover ₹${empBal.toLocaleString("en-IN")}`:empBal<0?`Pay ₹${(-empBal).toLocaleString("en-IN")}`:"Settled";
+      doc.text(balTxt,W-MR,y+5,{align:"right"});
+      y+=8;
+    });
+    y+=4;
   }
 
-  doc.setFontSize(8);doc.setTextColor(150,150,150);doc.setFont("helvetica","normal");
-  doc.text(`Generated by ClaimX · ${new Date().toLocaleDateString("en-IN","dd MMM yyyy")} · ${companyName||""}`,W/2,285,{align:"center"});
+  // ── Approved expenses table ────────────────────────────────
+  checkY(16);
+  doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(20,20,20);
+  doc.text(`Approved Expenses (${tripClaims.length})`,ML,y);y+=5;
+  doc.setFillColor(21,128,61);doc.rect(ML,y,CW,6,"F");
+  doc.setTextColor(255,255,255);doc.setFontSize(7);doc.setFont("helvetica","bold");
+  const th=["Date","Employee","Category","Description","Amount"];
+  const tw=[20,28,24,CW-92,20];
+  let tx=ML+2;th.forEach((h,i)=>{doc.text(h,tx,y+4.2);tx+=tw[i];});y+=7;
 
+  tripClaims.forEach((c,idx)=>{
+    checkY(7);
+    const emp2=getUser(c.empId);
+    doc.setFillColor(idx%2===0?252:247,idx%2===0?254:252,idx%2===0?248:244);
+    doc.rect(ML,y,CW,5.5,"F");
+    doc.setTextColor(40,40,40);doc.setFontSize(7);doc.setFont("helvetica","normal");
+    tx=ML+2;
+    [(c.date||"").slice(0,10),(emp2?.name||"—").slice(0,13),(c.category||"").slice(0,11),(c.desc||"").slice(0,22),"₹"+(c.amount).toLocaleString("en-IN")].forEach((v,i)=>{doc.text(v,tx,y+4);tx+=tw[i];});
+    y+=6;
+  });
+  y+=3;doc.setDrawColor(200,230,180);doc.line(ML,y,W-MR,y);y+=5;
+  doc.setFontSize(9);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);
+  doc.text(`Approved Total: ₹${totalSpent.toLocaleString("en-IN")}`,W-MR,y,{align:"right"});y+=10;
+
+  // ── Rejected expenses table ────────────────────────────────
+  const rejClaims=claims.filter(c=>c.tripId===trip.id&&c.status==="Rejected");
+  if(rejClaims.length>0){
+    checkY(16);
+    doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(220,50,50);
+    doc.text(`Rejected Expenses (${rejClaims.length}) — Not reimbursed`,ML,y);y+=5;
+    doc.setFillColor(220,50,50);doc.rect(ML,y,CW,6,"F");
+    doc.setTextColor(255,255,255);doc.setFontSize(7);doc.setFont("helvetica","bold");
+    tx=ML+2;th.forEach((h,i)=>{doc.text(h,tx,y+4.2);tx+=tw[i];});y+=7;
+    const rejTotal=rejClaims.reduce((s,c)=>s+c.amount,0);
+    rejClaims.forEach((c,idx)=>{
+      checkY(7);
+      const emp2=getUser(c.empId);
+      doc.setFillColor(255,248,248);doc.rect(ML,y,CW,5.5,"F");
+      doc.setTextColor(180,50,50);doc.setFontSize(7);doc.setFont("helvetica","normal");
+      tx=ML+2;
+      [(c.date||"").slice(0,10),(emp2?.name||"—").slice(0,13),(c.category||"").slice(0,11),(c.desc||"").slice(0,22),"₹"+(c.amount).toLocaleString("en-IN")].forEach((v,i)=>{doc.text(v,tx,y+4);tx+=tw[i];});
+      if(c.remarks){doc.setTextColor(180,100,50);doc.text("↳ "+c.remarks.slice(0,50),ML+4,y+8.5);}
+      y+=6;
+    });
+    y+=3;doc.setDrawColor(220,150,150);doc.line(ML,y,W-MR,y);y+=5;
+    doc.setFontSize(9);doc.setFont("helvetica","bold");doc.setTextColor(220,50,50);
+    doc.text(`Rejected Total: ₹${rejTotal.toLocaleString("en-IN")}`,W-MR,y,{align:"right"});y+=10;
+  }
+
+  // ── Settlement summary ─────────────────────────────────────
+  checkY(22);
+  doc.setFillColor(...(recoverable?[254,243,199]:[240,253,233]));
+  doc.roundedRect(ML,y,CW,16,2,2,"F");
+  doc.setFontSize(10);doc.setFont("helvetica","bold");
+  doc.setTextColor(recoverable?146:21,recoverable?64:128,recoverable?0:61);
+  doc.text(
+    isBalance
+      ?(recoverable?`₹${settlement.toLocaleString("en-IN")} recoverable from employees`:`₹${Math.abs(settlement).toLocaleString("en-IN")} payable to employees`)
+      :`Reimbursable: ₹${totalSpent.toLocaleString("en-IN")}`,
+    W/2,y+10,{align:"center"}
+  );
+  y+=22;
+
+  // Signature line
+  checkY(14);
+  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(120,120,120);
+  doc.text("Authorised by: ________________________",ML,y);
+  doc.text(`Date: ${new Date().toLocaleDateString("en-IN")}`,W-MR,y,{align:"right"});
+
+  // ── Page footer ────────────────────────────────────────────
+  const totalPages=doc.getNumberOfPages();
+  for(let p=1;p<=totalPages;p++){
+    doc.setPage(p);
+    doc.setFontSize(7);doc.setTextColor(170,170,170);doc.setFont("helvetica","normal");
+    doc.text(`ClaimX by RB · ${companyName||""} · Generated ${new Date().toLocaleDateString("en-IN")} · Page ${p}/${totalPages}`,W/2,290,{align:"center"});
+  }
   return doc;
 };
 
@@ -487,8 +547,9 @@ function PrefsProvider({children}){
 }
 function usePrefs(){return useContext(PrefsContext);}
 
-function PrefsModal({onClose}){
+function PrefsModal({onClose,savePolicy,policy}){
   const[prefs,setPrefs]=usePrefs();
+  const brandColors=["#7ED957","#2563eb","#7c3aed","#dc2626","#ea580c","#0891b2","#16a34a","#d97706","#db2777","#0f172a"];
   const inpS={padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB,width:"100%"};
   return(
     <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}>
@@ -511,6 +572,22 @@ function PrefsModal({onClose}){
             ))}
           </div>
         </div>
+        {/* Brand Colour */}
+        {policy&&savePolicy&&<div style={{marginBottom:20}}>
+          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:8,textTransform:"uppercase"}}>Brand Colour</label>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:6}}>
+            {brandColors.map(c=>(
+              <div key={c} onClick={async()=>{
+                const newPolicy={...policy,primaryColor:c};
+                await savePolicy(newPolicy);
+              }} style={{width:30,height:30,borderRadius:"50%",background:c,cursor:"pointer",
+                border:(policy?.primaryColor||"#7ED957")===c?"3px solid #fff":"3px solid transparent",
+                boxShadow:(policy?.primaryColor||"#7ED957")===c?`0 0 0 2.5px ${c}`:"none",
+                transition:"all .15s"}}/>
+            ))}
+          </div>
+          <div style={{fontSize:10,color:MUTED}}>Changes apply immediately across the whole app</div>
+        </div>}
         {/* Font Size */}
         <div style={{marginBottom:20}}>
           <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:6,textTransform:"uppercase"}}>Font Size — {prefs.fontSize||13}px</label>
@@ -1034,6 +1111,15 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
   const allCo=SB_ENABLED?(sbCoList||[]):Object.values(DB);
   const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB,width:"100%"};
 
+  // Reload fresh data whenever approvals tab is opened
+  useEffect(()=>{
+    if(tab==="approvals"&&SB_ENABLED&&loadFromSB){
+      loadFromSB();
+      if(typeof loadEditRequests==="function")loadEditRequests();
+    }
+  // eslint-disable-next-line
+  },[tab]);
+
   useEffect(()=>{
     if(!SB_ENABLED)return;
     setLoading(true);
@@ -1548,9 +1634,11 @@ function Profile({user,users,setUsers,onLogout,updateUserInSB,toast}){
             <select value={liveUser?.delegateTo||""} onChange={async e=>{
               const val=e.target.value||null;
               try{
-                if(updateUserInSB){await updateUserInSB(user.id,{delegateTo:val});}
-                setUsers(p=>p.map(u=>u.id===user.id?{...u,delegateTo:val}:u));
-                toast&&toast("✓ Delegation saved");
+                if(updateUserInSB){
+                  await updateUserInSB(user.id,{delegateTo:val,...(val===null?{delegateUntil:null}:{})});
+                }
+                setUsers(p=>p.map(u=>u.id===user.id?{...u,delegateTo:val,...(val===null?{delegateUntil:null}:{})}:u));
+                toast&&toast(val?"✓ Delegation saved — notifications routed to delegate":"✓ Delegation removed — notifications restored to you");
               }catch(err){alert("Failed to save: "+err.message);}
             }} style={{...inpS,appearance:"none"}}>
               <option value="">— No delegation —</option>
@@ -1672,7 +1760,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       if(e.key==="?"||e.key==="/"){e.preventDefault();setSSC(p=>!p);return;}
       if(e.key==="Escape"){setMdl(null);setSSC(false);setSFR(false);return;}
       if(e.ctrlKey||e.metaKey||e.altKey)return;
-      const map={n:"submit",a:"approvals",c:"claims",t:"trips",d:"dashboard",f:"finance_view",i:"inbox"};
+      const map={n:"submit",a:"approvals",c:"claims",t:"trips",d:"dashboard",f:"finance_view",i:"inbox",b:"balances",s:"settlements",u:"topup",y:"analytics",h:"help"};
       if(map[e.key.toLowerCase()]){e.preventDefault();setTab(map[e.key.toLowerCase()]);}
     };
     window.addEventListener("keydown",handler);
@@ -1682,10 +1770,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   // Fund request handler
   const handleFundRequest=async(req)=>{
     const tripName=co.trips.find(t=>t.id===req.tripId)?.name||req.tripId;
-    const deptMgrs=co.users.filter(u=>["manager","admin"].includes(u.role));
-    for(const m of deptMgrs){
-      await sbPushNotif(m.id,`💰 Fund request: ${req.empName} needs ₹${req.amount.toLocaleString("en-IN")} for "${tripName}" — ${req.reason}`,"warn");
-    }
+    // Use notifyApprovers to respect dept routing and delegation
+    await notifyApprovers(req.empId,`💰 Fund request: ${req.empName} needs ₹${req.amount.toLocaleString("en-IN")} for "${tripName}" — ${req.reason}`,"warn");
     if(SB_ENABLED){
       const{error:topupErr}=await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});
       if(topupErr){console.error("Topup insert error:",topupErr.message);toast("Fund request notification sent but DB save failed: "+topupErr.message,"error");return;}
@@ -1879,6 +1965,56 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   };
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── Central approver notification helper ─────────────────────────────────────
+  // Finds the correct manager for an employee's dept, respects delegation,
+  // always notifies all admins too.
+  const notifyApprovers=async(empId,text,type="info")=>{
+    const emp=co.users.find(u=>u.id===empId)||{dept:null};
+    const notified=new Set();
+
+    // Find the dept manager for this employee
+    const deptMgr=co.users.find(u=>
+      u.role==="manager"&&
+      (emp.dept?u.dept===emp.dept:true)&&
+      u.id!==empId
+    );
+
+    // Resolve effective approver (respects active delegation)
+    const resolveDelegatee=(mgr)=>{
+      if(!mgr)return null;
+      if(mgr.delegateTo&&(!mgr.delegateUntil||mgr.delegateUntil>=today())){
+        // Delegated — notify the delegate instead
+        return mgr.delegateTo;
+      }
+      return mgr.id;
+    };
+
+    if(deptMgr){
+      const effectiveId=resolveDelegatee(deptMgr);
+      if(effectiveId&&!notified.has(effectiveId)){
+        await sbPushNotif(effectiveId,text,type);
+        notified.add(effectiveId);
+      }
+    }
+
+    // Always notify all admins
+    for(const admin of co.users.filter(u=>u.role==="admin"&&u.id!==empId)){
+      if(!notified.has(admin.id)){
+        await sbPushNotif(admin.id,text,type);
+        notified.add(admin.id);
+      }
+    }
+
+    // Fallback: if no manager found, notify any available manager
+    if(notified.size===0){
+      const anyMgr=co.users.find(u=>["manager","admin"].includes(u.role)&&u.id!==empId);
+      if(anyMgr){
+        const effectiveId=resolveDelegatee(anyMgr)||anyMgr.id;
+        await sbPushNotif(effectiveId,text,type);
+      }
+    }
+  };
+
   const sbPushNotif=async(toUserId,text,type="info")=>{
     if(SB_ENABLED){
       await supabase.from("notifications").insert({company_id:cid,user_id:toUserId,text,type,read:false});
@@ -1930,13 +2066,21 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const reqId=uid();
     const req={id:reqId,company_id:cid,claim_id:claim.id,requested_by:user.id,requester_name:user.name,reason,status:"Pending",created_at:new Date().toISOString()};
     if(SB_ENABLED){
-      await supabase.from("edit_requests").insert(req);
-      // Notify managers
-      const mgr=co.users.find(u=>u.role==="manager");
-      if(mgr)await sbPushNotif(mgr.id,`Edit request for ${claim.id} from ${user.name}: "${reason}"`,"warn");
+      const{error:erErr}=await supabase.from("edit_requests").insert(req);
+      if(erErr){
+        console.error("edit_requests insert error:",erErr.message);
+        if(erErr.message?.includes("does not exist")||erErr.code==="42P01"){
+          toast("Edit requests table not set up — run claimx_missing_tables.sql in Supabase","error");
+          return;
+        }
+        toast("Failed to submit: "+erErr.message,"error");
+        return;
+      }
+      // Notify dept manager + all admins, respecting delegation
+      await notifyApprovers(user.id,`✏ Edit request for ${claim.id} from ${user.name}: "${reason}"`,"warn");
       await loadEditRequests();
     } else {
-      setEditRequests(p=>[{...req,id:uid(),createdAt:new Date().toISOString()},...p]);
+      setEditRequests(p=>[{...req},...p]);
     }
     toast("✓ Edit request submitted — awaiting manager approval");
   };
@@ -2112,8 +2256,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         await sbAddAudit("Auto-Approved",claimId,"Under limit");
         toast("⚡ Auto-approved instantly!");
       } else {
-        const approverId=user.delegateTo||co.users.find(u=>["manager","approver"].includes(u.role)&&u.id!==user.id)?.id;
-        if(approverId)await sbPushNotif(approverId,`New claim ${claimId} from ${user.name} awaiting approval`,"info");
+        // Notify dept manager + admins, respecting delegation
+        await notifyApprovers(user.id,`New claim ${claimId} from ${user.name} — ${fmt(amount)} awaiting approval`,"info");
         toast(weekend?"⚠️ Weekend → manager":noRcpt?"⚠️ Receipt required":isAnomaly?"🔍 Anomaly flagged":catEx?"⚠️ Category % exceeded":"Claim submitted");
       }
       await loadFromSB();
@@ -2125,13 +2269,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       setTrips(p=>p.map(t=>t.id===tripId?{...t,spent:t.spent+(auto?amount:0)}:t));
       if(auto){setAudit(p=>[{id:"AL-"+uid(),action:"Auto-Approved",claimId,by:user.id,byName:user.name,at:new Date().toLocaleString(),remarks:"Under limit"},...(p||[])]);toast("⚡ Auto-approved instantly!");}
       else{
-        // Notify manager of employee's dept + all admins
-        const deptMgr=co.users.find(u=>u.role==="manager"&&u.dept===myUser?.dept);
-        const rawApproverId=user.delegateTo||deptMgr?.id||co.users.find(u=>["manager","admin"].includes(u.role)&&u.id!==user.id)?.id;
-        const approverId=rawApproverId?effectiveApprover(rawApproverId):rawApproverId;
-        if(approverId)sbPushNotif(approverId,`New claim ${claimId} from ${user.name} — ${fmt(amount)} awaiting approval`,"info");
-        // Notify all admins
-        for(const a of co.users.filter(u=>u.role==="admin"&&u.id!==approverId))sbPushNotif(a.id,`${user.name} submitted ${fmt(amount)} expense — ${claimId}`,"info");
+        // Notify dept manager + admins, respecting delegation (localStorage path)
+        notifyApprovers(user.id,`New claim ${claimId} from ${user.name} — ${fmt(amount)} awaiting approval`,"info");
         toast(isAnomaly?"🔍 Submitted — anomaly flagged":catEx?"⚠️ Submitted — category % exceeded":"✓ Claim submitted");
       }
     }
@@ -2281,10 +2420,16 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   };
 
   const handleTopup=async(req,decision)=>{
+    const emp=co.users.find(u=>u.id===req.empId);
     if(SB_ENABLED){
-      await supabase.from("topups").update({status:decision}).eq("id",req.id);
-      if(decision==="Approved")await supabase.from("users").update({balance:(co.users.find(u=>u.id===req.empId)?.balance||0)+req.amount}).eq("id",req.empId);
+      const{error:_te}=await supabase.from("topups").update({status:decision}).eq("id",req.id);
+      if(_te){toast("Failed to update top-up: "+_te.message,"error");return;}
+      if(decision==="Approved"&&emp){
+        const bk=co.policy.reimbursementMode?"reimbursable":"balance";
+        await supabase.from("users").update({[bk]:(emp[bk]||0)+req.amount}).eq("id",emp.id);
+      }
       await sbPushNotif(req.empId,`Top-up ${decision.toLowerCase()}${decision==="Approved"?": "+fmt(req.amount):""}`,decision==="Approved"?"success":"error");
+      await sbAddAudit(decision==="Approved"?"Topup Approved":"Topup Rejected",req.id,`₹${req.amount} — ${emp?.name||req.empId}`);
       await loadFromSB();
     } else {
       setTopups(p=>p.map(t=>t.id===req.id?{...t,status:decision}:t));
@@ -2459,7 +2604,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     if(patch.balance!==undefined)     dbPatch.balance=patch.balance;
     if(patch.isSuspended!==undefined) dbPatch.is_suspended=patch.isSuspended;
     if(patch.delegateTo!==undefined)  dbPatch.delegate_to=patch.delegateTo;
-    if(patch.delegateUntil!==undefined)dbPatch.delegate_until=patch.delegateUntil;
+    if(patch.delegateUntil!==undefined) dbPatch.delegate_until=patch.delegateUntil??null; // null clears it
     if(patch.mobile!==undefined)      dbPatch.mobile=patch.mobile;
     if(patch.notifyEmail!==undefined) dbPatch.notify_email=patch.notifyEmail;
 
@@ -2699,7 +2844,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       {showHelp&&<HelpManual userRole={user.role} onClose={()=>setSHelp(false)}/>}
       {showCam&&<CameraModal onCapture={f=>{setCamF(f);setSCam(false);setTab("submit");}} onClose={()=>setSCam(false)}/>}
       {showShortcuts&&<ShortcutHelp onClose={()=>setSSC(false)}/>}
-      {showPrefs&&<PrefsModal onClose={()=>setSPrefs(false)}/>}
+      {showPrefs&&<PrefsModal onClose={()=>setSPrefs(false)} policy={co.policy} savePolicy={savePolicyToSB}/>}
       {showFundReq&&hasPerm("submit")&&<FundRequestModal trips={co.trips} user={user} cid={cid} onClose={()=>setSFR(false)} onSubmit={handleFundRequest} sbEnabled={SB_ENABLED}/>}
       {showTutorial&&<OnboardingTutorial role={user.role} onClose={closeTutorial}/>}
       {showChatbot&&<AIChatbot user={user} co={co} onClose={()=>setShowChatbot(false)}/>}
@@ -2870,7 +3015,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           }}
         />}
         {tab==="approvals"&&canApprove&&<>
-          <ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest}/>
+          <ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} onReload={loadFromSB}/>
           {editRequests.length>0&&<Card style={{padding:16,marginTop:16}}>
             <div style={{fontFamily:FD,fontSize:14,fontWeight:700,color:INK,marginBottom:12}}>✏ Edit Requests {editRequests.filter(r=>r.status==="Pending").length>0&&<span style={{background:"#fef3c7",color:"#92400e",fontSize:11,padding:"1px 7px",borderRadius:10,marginLeft:7,fontFamily:FB}}>{editRequests.filter(r=>r.status==="Pending").length} pending</span>}</div>
             <EditRequestsPanel editRequests={editRequests} claims={co.claims} getUser={getUser} cid={cid} toast={toast} sbEnabled={SB_ENABLED} onApprove={approveEditRequest} onReject={rejectEditRequest}/>
@@ -3983,11 +4128,13 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
 }
 
 // ─── APPROVALS TAB ────────────────────────────────────────────────────────────
-function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip,users,user,editRequests,approveEditRequest,rejectEditRequest}){
+function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip,users,user,editRequests,approveEditRequest,rejectEditRequest,onReload}){
   const [filter,setFilter]=useState("All");
   const [selected,setSelected]=useState(new Set());
   const pendingTrips=(trips||[]).filter(t=>t.status==="pending_approval");
+  const pendingEdits=(editRequests||[]).filter(r=>r.status==="Pending");
   const shown=filter==="All"?pendingClaims:filter==="Anomaly"?pendingClaims.filter(c=>c.anomaly):filter==="High Value"?pendingClaims.filter(c=>needsDualApproval&&needsDualApproval(c.amount)):pendingClaims.filter(c=>c.flagged||c.weekendFlag);
+  const totalPending=pendingClaims.length+pendingTopups.length+pendingTrips.length+pendingEdits.length;
 
   const toggleSel=(id)=>setSelected(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n;});
   const toggleAll=()=>setSelected(p=>p.size===shown.length?new Set():new Set(shown.map(c=>c.id)));
@@ -3995,8 +4142,17 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
   const bulkReject =()=>{selected.forEach(id=>handleDecision(id,"Rejected","Bulk rejected"));setSelected(new Set());};
   return(
     <div>
-      <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:4}}>Approvals</h1>
-      <p style={{color:MUTED,fontSize:12,marginBottom:12}}>{pendingClaims.length} claims · {pendingTopups.length} top-ups · {pendingTrips.length} trips · {pendingClaims.filter(c=>c.anomaly).length} anomalies</p>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+        <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Approvals</h1>
+        {onReload&&<button onClick={onReload} style={{padding:"5px 12px",background:"none",border:`1px solid ${BDR}`,borderRadius:7,cursor:"pointer",fontSize:11,color:MUTED}}>🔄 Refresh</button>}
+      </div>
+      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+        {[["📋 Claims",pendingClaims.length,"#3b82f6"],["💰 Top-ups",pendingTopups.length,"#f59e0b"],["🗂 Trips",pendingTrips.length,"#7c3aed"],["✏ Edits",pendingEdits.length,"#f97316"]].map(([label,count,color])=>(
+          <div key={label} style={{padding:"4px 10px",borderRadius:16,background:count>0?"white":"#f9fafb",border:`1.5px solid ${count>0?color:"#e5e7eb"}`,fontSize:11,color:count>0?color:MUTED,fontWeight:count>0?700:400}}>
+            {label}: {count}
+          </div>
+        ))}
+      </div>
 
       {/* ── Pending Edit Requests ── */}
       {(editRequests||[]).filter(r=>r.status==="Pending").length>0&&<div style={{marginBottom:20}}>
@@ -5563,15 +5719,20 @@ function FundRequestModal({trips,user,cid,onClose,onSubmit,sbEnabled}){
 
 // ─── KEYBOARD SHORTCUTS ───────────────────────────────────────────────────────
 const SHORTCUTS=[
-  {key:"N",label:"New Expense",desc:"Open expense submission"},
-  {key:"A",label:"Approvals",desc:"Go to approvals"},
-  {key:"C",label:"Claims",desc:"View claims"},
-  {key:"T",label:"Trips",desc:"View trips"},
-  {key:"D",label:"Dashboard",desc:"Go to dashboard"},
-  {key:"F",label:"Finance",desc:"Finance view"},
-  {key:"I",label:"Inbox",desc:"Open inbox"},
-  {key:"?",label:"Shortcuts",desc:"Show this help"},
-  {key:"Esc",label:"Close",desc:"Close any modal"},
+  {key:"N",label:"New Expense",       desc:"Open expense submission"},
+  {key:"A",label:"Approvals",         desc:"Go to approvals (incl. topups & edit requests)"},
+  {key:"C",label:"Claims",            desc:"View claims / my expenses"},
+  {key:"T",label:"Trips",             desc:"View trips & periods"},
+  {key:"D",label:"Dashboard",         desc:"Go to dashboard"},
+  {key:"F",label:"Finance",           desc:"Finance view & exports"},
+  {key:"I",label:"Inbox",             desc:"Open notifications inbox"},
+  {key:"B",label:"Balances",          desc:"Employee balance summary"},
+  {key:"S",label:"Settlements",       desc:"Trip settlement tracker"},
+  {key:"U",label:"Top-up",            desc:"Request wallet top-up"},
+  {key:"Y",label:"Analytics",         desc:"Analytics & charts"},
+  {key:"H",label:"Help",              desc:"Help & tutorial"},
+  {key:"?",label:"Shortcuts",         desc:"Show this help"},
+  {key:"Esc",label:"Close",           desc:"Close any modal"},
 ];
 
 function ShortcutHelp({onClose}){
