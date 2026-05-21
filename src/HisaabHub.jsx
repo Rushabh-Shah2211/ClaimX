@@ -110,7 +110,7 @@ select{appearance:none}
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const fmt   = n  => "₹"+Number(n).toLocaleString("en-IN");
-const uid   = () => Math.random().toString(36).slice(2,9).toUpperCase();
+const uid=()=>'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16);});
 const today = () => new Date().toISOString().slice(0,10);
 const inits = nm => nm.trim().split(/\s+/).map(w=>w[0]).join("").toUpperCase().slice(0,2);
 const isWknd= d  => { const day=new Date(d).getDay(); return day===0||day===6; };
@@ -178,27 +178,7 @@ const mapTrip=r=>r?({
   settledEmps:r.employee_settled||[],
 }):null;
 const mapClaim=r=>r?({id:r.id,companyId:r.company_id,tripId:r.trip_id,empId:r.emp_id,date:r.date,category:r.category,desc:r.description,vendor:r.vendor,amount:parseFloat(r.amount)||0,origAmount:parseFloat(r.orig_amount)||0,origCur:r.orig_currency,status:r.status,autoApproved:r.auto_approved,remarks:r.remarks,flagged:r.flagged,anomaly:r.anomaly,anomalyReasons:r.anomaly_reasons||[],weekendFlag:r.weekend_flag,notes:r.notes,receipts:(r.receipts||[]).map(rc=>({id:rc.id,name:rc.file_name,storagePath:rc.storage_path,type:rc.mime_type,url:null})),comments:(r.claim_comments||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at)).map(c=>({id:c.id,userId:c.user_id,name:c.user_name,text:c.text,time:new Date(c.created_at).toLocaleString()}))}):null;
-const mapPolicy=r=>r?({
-  autoApproveLimit:parseFloat(r.auto_approve_limit)||5000,
-  reimbursementMode:r.reimbursement_mode||false,
-  receiptMandatoryAbove:parseFloat(r.receipt_mandatory_above)||0,
-  weekendRequiresApproval:r.weekend_requires_approval||false,
-  multiLevelApproval:r.multi_level_approval||false,
-  approvalLevels:r.approval_levels||[],
-  vendorWhitelist:r.vendor_whitelist||[],
-  vendorBlacklist:r.vendor_blacklist||[],
-  departmentBudgets:r.department_budgets||{},
-  categoryPct:r.category_pct||{},
-  scheduledReports:r.scheduled_reports||[],
-  primaryColor:r.primary_color||"#7ED957",
-  departments:r.departments||DEFAULT_DEPTS,
-  categories:r.categories||DEFAULT_CATS,
-  dualApproveAbove:parseFloat(r.dual_approve_above)||0,
-  notifyEmailOnApprove:r.notify_email_on_approve!==false,
-  notifyEmailOnReject:r.notify_email_on_reject!==false,
-  notifyWaOnApprove:r.notify_wa_on_approve||false,
-  notifyWaOnReject:r.notify_wa_on_reject||false,
-}):null;
+const mapPolicy=r=>r?({autoApproveLimit:parseFloat(r.auto_approve_limit)||5000,reimbursementMode:r.reimbursement_mode||false,receiptMandatoryAbove:parseFloat(r.receipt_mandatory_above)||0,weekendRequiresApproval:r.weekend_requires_approval||false,multiLevelApproval:r.multi_level_approval||false,approvalLevels:r.approval_levels||[],vendorWhitelist:r.vendor_whitelist||[],vendorBlacklist:r.vendor_blacklist||[],departmentBudgets:r.department_budgets||{},categoryPct:r.category_pct||{},scheduledReports:r.scheduled_reports||[],primaryColor:r.primary_color||"#7ED957",departments:r.departments||DEFAULT_DEPTS,categories:r.categories||DEFAULT_CATS,dualApproveAbove:parseFloat(r.dual_approve_above)||0}):null;
 const mapNotif=r=>r?({id:r.id,userId:r.user_id,text:r.text,type:r.type,read:r.read,time:new Date(r.created_at).toLocaleString()}):null;
 const mapAudit=r=>r?({id:r.id,action:r.action,claimId:r.claim_id,by:r.by_user_id,byName:r.by_name,at:new Date(r.created_at).toLocaleString(),remarks:r.remarks}):null;
 const mapTopup=r=>r?({id:r.id,empId:r.emp_id,amount:parseFloat(r.amount),reason:r.reason,date:r.date,status:r.status}):null;
@@ -387,35 +367,38 @@ const claimEmailHtml=(action,claim,remarks,companyName)=>{
 
 // ─── TRIP SETTLEMENT PDF ──────────────────────────────────────────────────────
 const generateSettlementPDF=async(trip,claims,getUser,companyName)=>{
+  // jsPDF loaded from npm package
   const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
-  const W=210,ML=18,MR=18,CW=W-ML-MR; // margins
-  let y=12;
+  const W=210,M=20;
+  let y=M;
 
-  // ── Header bar ─────────────────────────────────────────────────────────────
+  // Header
   doc.setFillColor(15,28,9);
-  doc.rect(0,0,W,22,"F");
-  doc.setFont("helvetica","bold");doc.setFontSize(14);doc.setTextColor(126,217,87);
-  doc.text("ClaimX",ML,14);
-  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(180,200,180);
-  doc.text("by RB — Trip Settlement Statement",ML+22,14);
-  doc.setTextColor(140,140,140);
-  doc.text(String(companyName||""),W-MR,14,{align:"right"});
-  y=30;
+  doc.rect(0,0,W,28,"F");
+  doc.setTextColor(126,217,87);
+  doc.setFont("helvetica","bold");
+  doc.setFontSize(18);
+  doc.text("ClaimX",M,16);
+  doc.setTextColor(200,200,200);
+  doc.setFontSize(9);
+  doc.text("by RB · Trip Settlement Statement",M+26,16);
+  doc.setTextColor(150,150,150);
+  doc.text(companyName||"",W-M,16,{align:"right"});
+  y=38;
 
-  // ── Trip title ─────────────────────────────────────────────────────────────
-  doc.setFont("helvetica","bold");doc.setFontSize(13);doc.setTextColor(20,20,20);
-  // Truncate long trip names
-  const tripName=(trip.name||"Trip").slice(0,50);
-  doc.text(tripName,ML,y);
+  // Trip details
+  doc.setTextColor(20,20,20);
+  doc.setFontSize(14);
+  doc.setFont("helvetica","bold");
+  doc.text(trip.name||"Trip",M,y);
   y+=6;
-  doc.setFont("helvetica","normal");doc.setFontSize(8.5);doc.setTextColor(100,100,100);
-  const meta=`${trip.startDate||""} to ${trip.endDate||""}`+
-    (trip.currency&&trip.currency!=="INR"?` · ${trip.currency}`:"") +
-    (trip.projectCode?` · ${trip.projectCode}`:"");
-  doc.text(meta,ML,y);
+  doc.setFontSize(9);
+  doc.setFont("helvetica","normal");
+  doc.setTextColor(100,100,100);
+  doc.text(`${trip.startDate||""} → ${trip.endDate||""} · ${trip.type||"Trip"} · ${trip.currency||"INR"}${trip.projectCode?" · "+trip.projectCode:""}`,M,y);
   y+=10;
 
-  // ── Summary box ────────────────────────────────────────────────────────────
+  // Summary box
   const tripClaims=claims.filter(c=>c.tripId===trip.id&&c.status==="Approved");
   const totalSpent=tripClaims.reduce((s,c)=>s+c.amount,0);
   const budget=trip.budget||0;
@@ -423,147 +406,70 @@ const generateSettlementPDF=async(trip,claims,getUser,companyName)=>{
   const openBal=trip.openingBalance||budget;
   const isBalance=trip.tripMode!=="reimbursement";
   const settlement=isBalance?(openBal+topups-totalSpent):totalSpent;
+  const recoverable=isBalance&&settlement>0;
 
   doc.setFillColor(240,253,233);
-  doc.roundedRect(ML,y,CW,26,2,2,"F");
-  doc.setDrawColor(200,235,200);
-  doc.roundedRect(ML,y,CW,26,2,2,"S");
-
-  const summaryItems=isBalance
-    ?[["Opening Bal.",`₹${openBal.toLocaleString("en-IN")}`],
-      ["Top-ups",`₹${topups.toLocaleString("en-IN")}`],
-      ["Total Spent",`₹${totalSpent.toLocaleString("en-IN")}`],
-      [settlement>0?"To Return":"To Pay",`₹${Math.abs(settlement).toLocaleString("en-IN")}`]]
-    :[["Total Spent",`₹${totalSpent.toLocaleString("en-IN")}`],
-      ["Budget",`₹${budget.toLocaleString("en-IN")}`],
-      ["Variance",`₹${Math.abs(totalSpent-budget).toLocaleString("en-IN")}`],
-      ["Mode","Reimbursement"]];
-
-  const colW2=CW/summaryItems.length;
-  summaryItems.forEach(([label,val],i)=>{
-    const cx=ML+i*colW2+colW2/2;
-    doc.setFont("helvetica","normal");doc.setFontSize(7);doc.setTextColor(90,130,90);
-    doc.text(label,cx,y+7,{align:"center"});
-    doc.setFont("helvetica","bold");doc.setFontSize(10);doc.setTextColor(15,28,9);
-    // Truncate long values
-    const valStr=String(val).slice(0,14);
-    doc.text(valStr,cx,y+17,{align:"center"});
+  doc.roundedRect(M,y,W-2*M,32,3,3,"F");
+  doc.setTextColor(20,20,20);
+  const cols=isBalance
+    ?[["Opening Balance","₹"+openBal.toLocaleString("en-IN")],["Top-ups","₹"+topups.toLocaleString("en-IN")],["Total Spent","₹"+totalSpent.toLocaleString("en-IN")],["Settlement",`₹${Math.abs(settlement).toLocaleString("en-IN")} ${recoverable?"(Return)":"(Payable)"}`]]
+    :[["Total Expenses","₹"+totalSpent.toLocaleString("en-IN")],["Budget","₹"+budget.toLocaleString("en-IN")],["Variance",`₹${Math.abs(totalSpent-budget).toLocaleString("en-IN")} ${totalSpent>budget?"Over":"Under"}`],["Status","Reimbursement"]];
+  const colW=(W-2*M)/cols.length;
+  cols.forEach(([l,v],i)=>{
+    const cx=M+i*colW+colW/2;
+    doc.setFontSize(8);doc.setTextColor(100,100,100);doc.text(l,cx,y+8,{align:"center"});
+    doc.setFontSize(12);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);doc.text(v,cx,y+18,{align:"center"});
+    doc.setFont("helvetica","normal");
   });
-  y+=32;
+  y+=38;
 
-  // ── Employee breakdown (if per-employee budgets set) ───────────────────────
-  const assigned=(trip.assignedTo||[]);
-  if(assigned.length>1&&trip.employeeBudgets&&Object.keys(trip.employeeBudgets).length>0){
-    doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(20,20,20);
-    doc.text("Employee Settlement Summary",ML,y);y+=5;
-
-    assigned.forEach(uid=>{
-      const u=getUser(uid);if(!u)return;
-      const empClaims=tripClaims.filter(c=>c.empId===uid);
-      const empSpent=empClaims.reduce((s,c)=>s+c.amount,0);
-      const empBudget=(trip.employeeBudgets[uid]?.allocated||0)+(trip.employeeBudgets[uid]?.topups||0);
-      const empBal=isBalance?(empBudget-empSpent):-empSpent;
-
-      if(y>270){doc.addPage();y=20;}
-      doc.setFillColor(248,252,248);
-      doc.rect(ML,y,CW,7,"F");
-      doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(30,30,30);
-      const nameStr=(u.name||"").slice(0,22);
-      doc.text(nameStr,ML+2,y+5);
-      doc.text(`Budget: ₹${empBudget.toLocaleString("en-IN")}`,ML+60,y+5);
-      doc.text(`Spent: ₹${empSpent.toLocaleString("en-IN")}`,ML+100,y+5);
-      doc.setFont("helvetica","bold");
-      doc.setTextColor(empBal>0?220:empBal<0?20:80,empBal>0?50:empBal<0?130:80,empBal>0?50:empBal<0?61:80);
-      const balStr=empBal>0?`Return: ₹${empBal.toLocaleString("en-IN")}`:empBal<0?`Pay: ₹${(-empBal).toLocaleString("en-IN")}`:"Settled";
-      doc.text(balStr,W-MR,y+5,{align:"right"});
-      y+=8;
-    });
-    y+=4;
-  }
-
-  // ── Expense table ──────────────────────────────────────────────────────────
-  doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(20,20,20);
-  doc.text(`Approved Expenses (${tripClaims.length})`,ML,y);y+=5;
-
-  // Table header
+  // Expense table
+  doc.setFontSize(10);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);
+  doc.text("Approved Expenses",M,y);y+=5;
   doc.setFillColor(21,128,61);
-  doc.rect(ML,y,CW,6.5,"F");
-  doc.setFont("helvetica","bold");doc.setFontSize(7);doc.setTextColor(255,255,255);
-
-  // Fixed column widths that fit A4 portrait with margins
-  const cols2=[
-    {h:"Date",    w:22, align:"left"},
-    {h:"Employee",w:30, align:"left"},
-    {h:"Category",w:26, align:"left"},
-    {h:"Vendor",  w:34, align:"left"},
-    {h:"Description",w:42, align:"left"},
-    {h:"Amount",  w:CW-154, align:"right"},
-  ];
-  let hx=ML+2;
-  cols2.forEach(col=>{
-    if(col.align==="right")doc.text(col.h,hx+col.w-2,y+4.5,{align:"right"});
-    else doc.text(col.h,hx,y+4.5);
-    hx+=col.w;
-  });
+  doc.rect(M,y,W-2*M,6,"F");
+  doc.setTextColor(255,255,255);doc.setFontSize(7.5);doc.setFont("helvetica","bold");
+  const th=["Date","Vendor","Category","Description","Amount"];
+  const tw=[22,32,28,52,26];
+  let tx=M+2;
+  th.forEach((h,i)=>{doc.text(h,tx,y+4.5);tx+=tw[i];});
   y+=7;
 
-  // Table rows
   tripClaims.forEach((c,idx)=>{
-    if(y>272){doc.addPage();y=16;}
-    doc.setFillColor(idx%2===0?250:244,idx%2===0?253:249,idx%2===0?244:240);
-    doc.rect(ML,y,CW,5.5,"F");
-    doc.setFont("helvetica","normal");doc.setFontSize(7);doc.setTextColor(40,40,40);
-
-    const emp=getUser(c.empId);
-    const rowVals=[
-      {v:(c.date||"").slice(0,10),       w:22, align:"left"},
-      {v:(emp?.name||"—").slice(0,12),    w:30, align:"left"},
-      {v:(c.category||"").slice(0,12),   w:26, align:"left"},
-      {v:(c.vendor||"—").slice(0,16),    w:34, align:"left"},
-      {v:(c.desc||"").slice(0,20),       w:42, align:"left"},
-      {v:"₹"+(c.amount||0).toLocaleString("en-IN"), w:CW-154, align:"right"},
-    ];
-    let rx=ML+2;
-    rowVals.forEach(cell=>{
-      if(cell.align==="right")doc.text(cell.v,rx+cell.w-4,y+4,{align:"right"});
-      else doc.text(cell.v,rx,y+4);
-      rx+=cell.w;
-    });
+    if(y>265){doc.addPage();y=20;}
+    doc.setFillColor(idx%2===0?250:245,idx%2===0?253:250,idx%2===0?243:238);
+    doc.rect(M,y,W-2*M,5.5,"F");
+    doc.setTextColor(40,40,40);doc.setFontSize(7.5);doc.setFont("helvetica","normal");
+    tx=M+2;
+    const vals=[c.date||"",c.vendor?.slice(0,14)||"—",c.category||"",c.desc?.slice(0,24)||"","₹"+(c.amount).toLocaleString("en-IN")];
+    vals.forEach((v,i)=>{doc.text(v,tx,y+4);tx+=tw[i];});
     y+=6;
   });
 
-  // Total row
-  y+=2;
-  doc.setDrawColor(21,128,61);doc.setLineWidth(0.3);doc.line(ML,y,W-MR,y);y+=4;
-  doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(21,128,61);
-  doc.text(`Total Approved: ₹${totalSpent.toLocaleString("en-IN")}`,W-MR,y,{align:"right"});
+  y+=4;
+  doc.setDrawColor(200,230,180);doc.line(M,y,W-M,y);y+=5;
+  doc.setFontSize(9);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);
+  doc.text(`Total: ₹${totalSpent.toLocaleString("en-IN")}`,W-M,y,{align:"right"});
 
-  // ── Settlement footer ──────────────────────────────────────────────────────
+  // Footer
   y+=10;
-  if(y>250){doc.addPage();y=20;}
-  const boxColor=settlement>0?[254,243,199]:[240,253,233];
-  doc.setFillColor(...boxColor);
-  doc.roundedRect(ML,y,CW,14,2,2,"F");
-  doc.setFont("helvetica","bold");doc.setFontSize(9);
-  doc.setTextColor(settlement>0?146:21,settlement>0?64:128,settlement>0?0:61);
-  const settlementText=isBalance
-    ?(settlement>0?`Return ₹${settlement.toLocaleString("en-IN")} to company`:`Company owes ₹${(-settlement).toLocaleString("en-IN")} to employees`)
-    :`Total reimbursable to employees: ₹${totalSpent.toLocaleString("en-IN")}`;
-  doc.text(settlementText,W/2,y+9,{align:"center"});
-  y+=20;
-
-  // Signature line
-  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(100,100,100);
-  doc.text("Authorised by: _______________________",ML,y);
-  doc.text(`Date: ${new Date().toLocaleDateString("en-IN")}`,W-MR,y,{align:"right"});
-
-  // ── Footer ─────────────────────────────────────────────────────────────────
-  const pageCount=doc.getNumberOfPages();
-  for(let p=1;p<=pageCount;p++){
-    doc.setPage(p);
-    doc.setFont("helvetica","normal");doc.setFontSize(7);doc.setTextColor(170,170,170);
-    doc.text(`ClaimX by RB · ${companyName||""} · Generated ${new Date().toLocaleDateString("en-IN")} · Page ${p}/${pageCount}`,W/2,290,{align:"center"});
+  if(isBalance){
+    const box=recoverable?"#fef3c7":"#f0fde9";
+    doc.setFillColor(...(recoverable?[254,243,199]:[240,253,233]));
+    doc.roundedRect(M,y,W-2*M,14,2,2,"F");
+    doc.setFontSize(9);doc.setFont("helvetica","bold");
+    doc.setTextColor(recoverable?146:21,recoverable?64:128,recoverable?0:61);
+    doc.text(
+      recoverable
+        ?`₹${settlement.toLocaleString("en-IN")} is recoverable from employee`
+        :`₹${Math.abs(settlement).toLocaleString("en-IN")} is payable to employee`,
+      W/2,y+9,{align:"center"}
+    );
+    y+=18;
   }
+
+  doc.setFontSize(8);doc.setTextColor(150,150,150);doc.setFont("helvetica","normal");
+  doc.text(`Generated by ClaimX · ${new Date().toLocaleDateString("en-IN","dd MMM yyyy")} · ${companyName||""}`,W/2,285,{align:"center"});
 
   return doc;
 };
@@ -938,7 +844,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
 
   return(
     <div style={{minHeight:"100vh",background:`linear-gradient(145deg,${DARK} 0%,#162e0d 45%,#0c1f08 100%)`,display:"flex",fontFamily:FB,position:"relative",overflow:"hidden"}}>
-      <style>{GLSTYLE}</style>
+      <style>{GLSTYLE+`.login-inp::placeholder{color:rgba(255,255,255,0.28)!important;font-weight:300}.login-inp::-webkit-input-placeholder{color:rgba(255,255,255,0.28)!important}`}</style>
       <div style={{position:"absolute",inset:0,backgroundImage:"linear-gradient(rgba(126,217,87,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(126,217,87,.025) 1px,transparent 1px)",backgroundSize:"44px 44px"}}/>
 
       {/* Cookie Consent Banner */}
@@ -1050,7 +956,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
 
             <div style={{marginBottom:12}}>
               <label style={{display:"block",fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.4)",letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Username / Email / Mobile</label>
-              <input type="text" value={login} onChange={e=>{setLogin(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)} placeholder="janvi.davda  or  janvi@co.in  or  9876543210" style={inp} autoComplete="username"/>
+              <input type="text" value={login} onChange={e=>{setLogin(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)} placeholder="username  or  abc@company.in  or  9123456789" className="login-inp" style={inp} autoComplete="username"/>
             </div>
             <div style={{marginBottom:8}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
@@ -1200,7 +1106,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
 
   return(
     <div style={{display:"flex",minHeight:"100vh",fontFamily:FB,background:"#f0f4f8"}}>
-      <style>{GLSTYLE}</style>
+      <style>{GLSTYLE+`.login-inp::placeholder{color:rgba(255,255,255,0.28)!important;font-weight:300}.login-inp::-webkit-input-placeholder{color:rgba(255,255,255,0.28)!important}`}</style>
       {notif&&<div style={{position:"fixed",top:20,right:20,zIndex:1000,padding:"12px 18px",borderRadius:12,fontWeight:600,fontSize:13,background:notif.t==="error"?"#fee2e2":"#dcfce7",color:notif.t==="error"?"#dc2626":"#15803d",boxShadow:"0 4px 20px #0002"}}>{notif.msg}</div>}
       {/* Sidebar */}
       <div style={{width:220,background:"#1e2736",display:"flex",flexDirection:"column",padding:"20px 12px",position:"sticky",top:0,height:"100vh"}}>
@@ -1746,13 +1652,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const[showFundReq,setSFR]=useState(false);
   const[showShortcuts,setSSC]=useState(false);
   // Show onboarding tutorial on first login
-  const[showTutorial,setShowTutorial]=useState(()=>{
-    try{return !localStorage.getItem("claimx_tutorial_done_"+user.id);}catch{return false;}
-  });
-  const closeTutorial=()=>{
-    try{localStorage.setItem("claimx_tutorial_done_"+user.id,"1");}catch{}
-    setShowTutorial(false);
-  };
+  const[showTutorial,setShowTutorial]=useState(false);
+  const closeTutorial=()=>setShowTutorial(false);
   const[showChatbot,setShowChatbot]=useState(false);
 
   // Keyboard shortcuts
@@ -1965,37 +1866,21 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   const loadEditRequests=async()=>{
     if(!SB_ENABLED){return;}
-    try{
-      const{data,error}=await supabase.from("edit_requests").select("*").eq("company_id",cid).order("created_at",{ascending:false});
-      if(error){
-        console.warn("edit_requests table error:",error.message,"— table may not exist yet");
-        return;
-      }
-      if(data)setEditRequests(data);
-    }catch(e){console.warn("loadEditRequests:",e.message);}
+    const{data}=await supabase.from("edit_requests").select("*").eq("company_id",cid).order("created_at",{ascending:false});
+    if(data)setEditRequests(data);
   };
 
   const submitEditRequest=async(claim,reason)=>{
     const reqId=uid();
     const req={id:reqId,company_id:cid,claim_id:claim.id,requested_by:user.id,requester_name:user.name,reason,status:"Pending",created_at:new Date().toISOString()};
     if(SB_ENABLED){
-      try{
-        const{error}=await supabase.from("edit_requests").insert(req);
-        if(error){
-          console.error("edit_requests insert error:",error.message);
-          // If table doesn't exist, show helpful message
-          if(error.message.includes("does not exist")){
-            toast("Edit requests table not set up yet. Run the setup SQL in Supabase.","error");
-            return;
-          }
-          throw error;
-        }
-        const mgrs=co.users.filter(u=>["manager","admin"].includes(u.role));
-        for(const mgr of mgrs)await sbPushNotif(mgr.id,`Edit request for ${claim.id} from ${user.name}: "${reason}"`,"warn");
-        await loadEditRequests();
-      }catch(e){toast("Failed to submit edit request: "+e.message,"error");return;}
+      await supabase.from("edit_requests").insert(req);
+      // Notify managers
+      const mgr=co.users.find(u=>u.role==="manager");
+      if(mgr)await sbPushNotif(mgr.id,`Edit request for ${claim.id} from ${user.name}: "${reason}"`,"warn");
+      await loadEditRequests();
     } else {
-      setEditRequests(p=>[{...req},...p]);
+      setEditRequests(p=>[{...req,id:uid(),createdAt:new Date().toISOString()},...p]);
     }
     toast("✓ Edit request submitted — awaiting manager approval");
   };
@@ -2722,7 +2607,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   return(
     <div className="claimx-root" data-dark={String(isDark)} style={{display:"flex",minHeight:"100vh",fontFamily:FB,background:isDark?"#0f172a":"#f5faf3",color:isDark?"#f0f9ff":"#1a2e12",transition:"background .2s,color .2s"}}>
-      <style>{GLSTYLE}</style>
+      <style>{GLSTYLE+`.login-inp::placeholder{color:rgba(255,255,255,0.28)!important;font-weight:300}.login-inp::-webkit-input-placeholder{color:rgba(255,255,255,0.28)!important}`}</style>
       <style>{`
         /* Font size scaling — zoom scales EVERYTHING including inline px styles */
         .claimx-root { zoom: ${(appFontSize/13).toFixed(3)}; }
@@ -2870,6 +2755,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               if(patch.budget!==undefined)dbPatch.budget=patch.budget;
               if(patch.categoryLimits!==undefined)dbPatch.category_limits=patch.categoryLimits;
               if(patch.employeeBudgets!==undefined)dbPatch.employee_budgets=patch.employeeBudgets;
+              if(patch.status!==undefined)dbPatch.status=patch.status;
               const{error}=await supabase.from("trips").update(dbPatch).eq("id",tripId);
               if(error)throw new Error(error.message);
               // Handle assignedTo changes via trip_assignments table
@@ -2909,7 +2795,13 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="editreqs"&&canApprove&&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id}/>}
         {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={co.users} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin}/>}
         {tab==="policy"&&isAdmin&&<Policy policy={co.policy} setPolicy={setCoPolicy} savePolicy={savePolicyToSB} toast={toast} users={co.users} sbEnabled={SB_ENABLED}/>}
-        {tab==="help"&&<HelpManual userRole={user.role} onClose={()=>setTab("dashboard")} inline={true}/>}
+        {tab==="help"&&<div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Help & Getting Started</h1>
+            <Btn onClick={()=>setShowTutorial(true)} style={{fontSize:12}}>▶ Launch Tutorial</Btn>
+          </div>
+          <HelpManual userRole={user.role} onClose={()=>setTab("dashboard")} inline={true}/>
+        </div>}
       </div>
 
       {modal?.type==="editRequest"&&<EditRequestModal claim={modal.data} userId={user.id} userName={user.name} cid={cid} onClose={()=>setMdl(null)} onSubmit={submitEditRequest} sbEnabled={SB_ENABLED}/>}
@@ -3165,6 +3057,32 @@ function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin}){
             })}
           </div>
         </div>
+        <div style={{marginBottom:11}}>
+          <label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:6,textTransform:"uppercase"}}>Category Limits (% of budget — 0 = no limit)</label>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+            {DEFAULT_CATS.slice(0,8).map(cat=>(
+              <div key={cat} style={{display:"flex",alignItems:"center",gap:6}}>
+                <span style={{fontSize:11,color:INK,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cat}</span>
+                <input type="number" min={0} max={100}
+                  value={form.categoryLimits?.[cat]||""}
+                  onChange={e=>setForm(f=>({...f,categoryLimits:{...f.categoryLimits,[cat]:parseFloat(e.target.value)||0}}))}
+                  placeholder="%" style={{width:52,padding:"4px 6px",border:`1.5px solid ${BDR}`,borderRadius:5,fontSize:11}}/>
+                <span style={{fontSize:10,color:MUTED}}>%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        {trip.status==="closed"&&(
+          <div style={{marginBottom:10,padding:"8px 11px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7}}>
+            <div style={{fontSize:10,fontWeight:700,color:"#92400e",marginBottom:4}}>⚠ This trip is closed.</div>
+            <button onClick={async()=>{
+              if(!window.confirm(`Reopen "${trip.name}"? Status will return to active.`))return;
+              setBusy(true);
+              try{await onSave(trip.id,{...form,status:"active"});onClose();}
+              catch(e){alert("Failed: "+e.message);}finally{setBusy(false);}
+            }} style={{padding:"5px 12px",background:"#f59e0b",color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontWeight:700}}>↺ Reopen Trip</button>
+          </div>
+        )}
         <div style={{display:"flex",gap:9,justifyContent:"flex-end"}}>
           <button onClick={onClose} style={{padding:"9px 16px",borderRadius:8,border:`1px solid ${BDR}`,background:"transparent",color:MUTED,cursor:"pointer",fontSize:13}}>Cancel</button>
           <Btn onClick={save} disabled={busy} style={{padding:"9px 22px",fontSize:13}}>{busy?"Saving…":"Save Changes"}</Btn>
@@ -3867,7 +3785,14 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                   <Btn onClick={()=>approveTrip(t)} style={{fontSize:10,padding:"5px 10px"}}>✓ Approve</Btn>
                   <Btn v="danger" onClick={()=>rejectTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>✗</Btn>
                 </>}
-                {(isAdmin||isManager)&&t.status==="active"&&<><Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"");doc.output("dataurlnewwindow");}catch(e){toast("PDF failed","error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄</Btn><Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>✏</Btn><Btn v="outline" onClick={()=>setBudgetTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>💰</Btn><Btn v="warning" onClick={()=>closeTrip(t.id)} style={{fontSize:10,padding:"5px 10px"}}>🔒 Close</Btn></>}
+                {(isAdmin||isManager)&&(t.status==="active"||t.status==="closed")&&(
+                  <div style={{display:"flex",gap:5}}>
+                    <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"");const pu=doc.output("bloburl");window.open(pu,"_blank");}catch(e){toast("PDF failed","error");}}} style={{fontSize:10,padding:"5px 8px"}}>PDF</Btn>
+                    <Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Edit</Btn>
+                    <Btn v="outline" onClick={()=>setBudgetTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Budget</Btn>
+                    {t.status==="active"&&<Btn v="warning" onClick={()=>closeTrip(t.id)} style={{fontSize:10,padding:"5px 10px"}}>Close</Btn>}
+                  </div>
+                )}
               </div>
             </div>
             <div style={{display:"flex",gap:16,marginBottom:6,flexWrap:"wrap"}}>
@@ -4596,32 +4521,13 @@ function EditRequestsTab({editRequests,claims,getUser,isManager,approveEditReque
 }
 
 // ─── POLICY TAB ───────────────────────────────────────────────────────────────
-function Policy({policy:initialPolicy,setPolicy:setParentPolicy,savePolicy,toast,users,sbEnabled}){
-  // Local copy of policy — prevents Supabase reload wiping unsaved changes
-  const[policy,setPolicy]=useState(()=>({...initialPolicy}));
-  const[saved,setSaved]=useState(false);
+function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sbEnabled}){
+  const[policy,setPolicy]=useState(()=>({...initPol}));
   const emps=users.filter(u=>u.role==="employee").length;
   const tier=TIERED.find(t=>emps>=t.min&&emps<=t.max)||TIERED[0];
   const [vendor,setVendor]=useState("");
   const [vMode,setVMode]=useState("blacklist");
   const inpS={padding:"8px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,background:"var(--input-bg,#fafff8)",width:"100%"};
-
-  const handleSave=async()=>{
-    setSaved(false);
-    // Update parent state first
-    setParentPolicy(policy);
-    if(sbEnabled&&savePolicy){
-      try{
-        await savePolicy(policy);
-        setSaved(true);
-        toast("✓ All settings saved to database");
-        setTimeout(()=>setSaved(false),3000);
-      }catch(e){toast("Save failed: "+e.message,"error");}
-    } else {
-      setSaved(true);
-      toast("✓ Settings saved");
-    }
-  };
   return(
     <div>
       <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:14}}>Policy & Settings</h1>
@@ -4801,9 +4707,8 @@ function Policy({policy:initialPolicy,setPolicy:setParentPolicy,savePolicy,toast
         </div>
       </Card>
 
-      <div style={{marginTop:12,display:"flex",alignItems:"center",gap:10}}>
-        <Btn onClick={handleSave} style={{background:policy.primaryColor||G}}>Save All Settings</Btn>
-        {saved&&<span style={{fontSize:11,color:"#16a34a",fontWeight:600}}>✓ Saved!</span>}
+      <div style={{marginTop:12,display:"flex",gap:10,alignItems:"center"}}>
+        <Btn onClick={async()=>{setParentPol(policy);if(sbEnabled&&savePolicy){try{await savePolicy(policy);toast("✓ Saved to database");}catch(e){toast(e.message,"error");}}else toast("✓ Saved");}} style={{background:policy.primaryColor||G}}>Save All Settings</Btn>
       </div>
     </div>
   );
@@ -5016,164 +4921,135 @@ function TravelCalendar({trips,users,isAdmin,myDept}){
 function SettlementsTab({trips,claims,users,getUser,isAdmin,myDept,cid,sbEnabled}){
   const[expandedEmp,setExpandedEmp]=useState(null);
   const[expandedTrip,setExpandedTrip]=useState(null);
-  const[settling,setSettling]=useState(null);
-  const[view,setView]=useState("employees"); // "employees" | "trips"
+  const[settling,setSettling]=useState(null); // tripId being settled
 
   const markSettled=async(trip,empId)=>{
-    if(!window.confirm(`Mark settlement for ${getUser(empId)?.name||empId} on trip "${trip.name}"?\n\nThis confirms all money has been settled.`))return;
-    setSettling(trip.id+"_"+empId);
+    setSettling(trip.id);
     try{
-      const currentSettled=trip.settledEmps||[];
-      const newSettled=[...new Set([...currentSettled,empId])];
-      const allSettled=(trip.assignedTo||[]).every(id=>newSettled.includes(id));
       if(sbEnabled&&supabase){
+        // Record settlement by updating trip's settled_at and resetting balance tracking
         await supabase.from("trips").update({
-          employee_settled:newSettled,
-          ...(allSettled?{status:"fully_closed",settled_at:new Date().toISOString()}:{})
+          settled_at:new Date().toISOString(),
+          settled_by:empId,
         }).eq("id",trip.id);
+        // Add an audit entry
+        await supabase.from("notifications").insert({
+          id:"SETTLE-"+Date.now(),
+          company_id:cid,
+          user_id:empId,
+          message:`Trip "${trip.name}" marked as settled`,
+          type:"success",
+          read:false,
+          created_at:new Date().toISOString(),
+        });
       }
-    }catch(e){alert("Settlement failed: "+e.message);}
-    finally{setSettling(null);}
-    window.location.reload();
+      // Reload page to reflect settlement
+      // Don't reload page — just refresh data from Supabase
+      if(typeof loadFromSB==="function")await loadFromSB();
+      else setSettling(null);
+    }catch(e){
+      alert("Settlement failed: "+e.message);
+    }finally{setSettling(null);}
   };
 
-  // All closed trips (including newly closed awaiting settlement)
-  const closedTrips=trips.filter(t=>["closed","fully_closed"].includes(t.status));
-
-  // Per-employee settlement data
-  const empData=users
-    .filter(u=>["employee","manager"].includes(u.role)&&(isAdmin||u.dept===myDept))
+  // Calculate per-employee settlement
+  const empSettlements=users
+    .filter(u=>u.role==="employee"&&(isAdmin||u.dept===myDept))
     .map(u=>{
-      const empTrips=closedTrips.filter(t=>(t.assignedTo||[]).includes(u.id)||t.createdBy===u.id);
-      const tripBreakdown=empTrips.map(t=>{
-        const tc=claims.filter(c=>c.empId===u.id&&c.tripId===t.id&&c.status==="Approved");
-        const spent=tc.reduce((s,c)=>s+c.amount,0);
-        const empBudget=(t.employeeBudgets?.[u.id]?.allocated||0)+(t.employeeBudgets?.[u.id]?.topups||0)||(t.budget||0);
+      const empTrips=trips.filter(t=>(t.assignedTo||[]).includes(u.id)||t.createdBy===u.id);
+      const tripData=empTrips.map(t=>{
+        const tripClaims=claims.filter(c=>c.empId===u.id&&c.tripId===t.id&&c.status==="Approved");
+        const spent=tripClaims.reduce((s,c)=>s+c.amount,0);
+        const topups=t.topupsTotal||0;
+        const openBal=t.openingBalance||t.budget||0;
         const isBalance=t.tripMode!=="reimbursement";
-        const balance=isBalance?(empBudget-spent):-spent;
-        const isSettled=(t.settledEmps||[]).includes(u.id)||t.status==="fully_closed";
-        return{trip:t,claims:tc,spent,empBudget,balance,isBalance,isSettled};
-      }).filter(td=>td.claims.length>0||td.empBudget>0);
-
-      const totalRecoverable=tripBreakdown.filter(td=>!td.isSettled&&td.balance>0).reduce((s,td)=>s+td.balance,0);
-      const totalPayable=tripBreakdown.filter(td=>!td.isSettled&&td.balance<0).reduce((s,td)=>s+Math.abs(td.balance),0);
-      return{user:u,trips:tripBreakdown,totalRecoverable,totalPayable};
+        const settlement=isBalance?(openBal+topups-spent):(-spent);
+        return{trip:t,claims:tripClaims,spent,openBal,topups,settlement,isBalance};
+      }).filter(td=>td.trip.status==="closed"||td.spent>0);
+      const totalRecoverable=tripData.reduce((s,td)=>s+(td.settlement>0?td.settlement:0),0);
+      const totalPayable=tripData.reduce((s,td)=>s+(td.settlement<0?-td.settlement:0),0);
+      return{user:u,trips:tripData,totalRecoverable,totalPayable};
     }).filter(e=>e.trips.length>0);
-
-  const totalRecoverable=empData.reduce((s,e)=>s+e.totalRecoverable,0);
-  const totalPayable=empData.reduce((s,e)=>s+e.totalPayable,0);
 
   return(
     <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
-        <div>
-          <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Settlements</h1>
-          <p style={{color:MUTED,fontSize:12,marginTop:2}}>Track money owed to/from employees across all closed trips</p>
-        </div>
-        <div style={{display:"flex",gap:6}}>
-          <Btn v={view==="employees"?"primary":"outline"} onClick={()=>setView("employees")} style={{fontSize:11,padding:"6px 12px"}}>👤 By Employee</Btn>
-          <Btn v={view==="trips"?"primary":"outline"} onClick={()=>setView("trips")} style={{fontSize:11,padding:"6px 12px"}}>🗂 By Trip</Btn>
-        </div>
-      </div>
+      <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:4}}>Settlements</h1>
+      <p style={{color:MUTED,fontSize:12,marginBottom:14}}>Employee-wise balance recovery and payment status</p>
 
       {/* Summary cards */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:18}} className="mob-grid-1">
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:18}} className="mob-grid-1">
         <Card style={{padding:16,borderLeft:"4px solid #dc2626"}}>
-          <div style={{fontSize:10,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:4}}>💰 Recoverable</div>
-          <div style={{fontFamily:FD,fontSize:22,fontWeight:800,color:"#dc2626"}}>{fmt(totalRecoverable)}</div>
-          <div style={{fontSize:10,color:MUTED,marginTop:2}}>Collect from employees</div>
+          <div style={{fontSize:10,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:4}}>Total Recoverable</div>
+          <div style={{fontSize:20,fontWeight:800,color:"#dc2626"}}>{fmt(empSettlements.reduce((s,e)=>s+e.totalRecoverable,0))}</div>
+          <div style={{fontSize:10,color:MUTED,marginTop:2}}>To be collected from employees</div>
         </Card>
         <Card style={{padding:16,borderLeft:"4px solid #16a34a"}}>
-          <div style={{fontSize:10,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:4}}>💸 Payable</div>
-          <div style={{fontFamily:FD,fontSize:22,fontWeight:800,color:"#16a34a"}}>{fmt(totalPayable)}</div>
-          <div style={{fontSize:10,color:MUTED,marginTop:2}}>Pay to employees</div>
-        </Card>
-        <Card style={{padding:16,borderLeft:"4px solid #7c3aed"}}>
-          <div style={{fontSize:10,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:4}}>⚖ Net Position</div>
-          <div style={{fontFamily:FD,fontSize:22,fontWeight:800,color:"#7c3aed"}}>{fmt(Math.abs(totalRecoverable-totalPayable))}</div>
-          <div style={{fontSize:10,color:MUTED,marginTop:2}}>{totalRecoverable>totalPayable?"Net recoverable":"Net payable"}</div>
+          <div style={{fontSize:10,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:4}}>Total Payable</div>
+          <div style={{fontSize:20,fontWeight:800,color:"#16a34a"}}>{fmt(empSettlements.reduce((s,e)=>s+e.totalPayable,0))}</div>
+          <div style={{fontSize:10,color:MUTED,marginTop:2}}>To be paid to employees</div>
         </Card>
       </div>
 
-      {empData.length===0&&<Card style={{padding:32,textAlign:"center"}}>
-        <div style={{fontSize:40,marginBottom:8}}>✅</div>
-        <div style={{fontFamily:FD,fontSize:16,fontWeight:700,color:INK}}>All settled!</div>
-        <div style={{color:MUTED,fontSize:12,marginTop:4}}>No pending settlements. Close trips to generate settlement data.</div>
-      </Card>}
+      {empSettlements.length===0&&<Card style={{padding:32,textAlign:"center"}}><div style={{fontSize:32}}>📊</div><div style={{color:MUTED,marginTop:8,fontSize:13}}>No settlement data yet. Settlements appear when trips are closed.</div></Card>}
 
-      {view==="employees"&&empData.map(({user:u,trips:tripData,totalRecoverable:rec,totalPayable:pay})=>(
-        <Card key={u.id} style={{marginBottom:12,padding:0,overflow:"hidden",
-          borderLeft:rec>0?"4px solid #dc2626":pay>0?"4px solid #16a34a":"4px solid #e5e7eb"}}>
+      {empSettlements.map(({user:u,trips:tripData,totalRecoverable,totalPayable})=>(
+        <Card key={u.id} style={{marginBottom:10,padding:0,overflow:"hidden"}}>
           {/* Employee header */}
           <div onClick={()=>setExpandedEmp(expandedEmp===u.id?null:u.id)}
-            style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",cursor:"pointer",
-            background:expandedEmp===u.id?"var(--gl,#f0fde9)":"var(--card,#fff)"}}>
-            <div style={{width:40,height:40,borderRadius:"50%",background:rec>0?"#fee2e2":pay>0?"#dcfce7":GL,
-              display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:13,
-              color:rec>0?"#dc2626":pay>0?"#16a34a":GD,flexShrink:0}}>{u.avatar||inits(u.name)}</div>
+            style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",cursor:"pointer",background:expandedEmp===u.id?"#f0fde9":"#fff"}}>
+            <div style={{width:36,height:36,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:GD,fontSize:13,flexShrink:0}}>{u.avatar||inits(u.name)}</div>
             <div style={{flex:1}}>
               <div style={{fontWeight:700,fontSize:14,color:INK}}>{u.name}</div>
-              <div style={{fontSize:11,color:MUTED}}>{u.dept||"—"} · {tripData.length} closed trip{tripData.length!==1?"s":""}</div>
+              <div style={{fontSize:11,color:MUTED}}>{u.dept||"—"} · {tripData.length} trip{tripData.length!==1?"s":""}</div>
             </div>
             <div style={{textAlign:"right",flexShrink:0}}>
-              {rec>0&&<div style={{fontSize:14,fontWeight:800,color:"#dc2626"}}>↩ {fmt(rec)}<div style={{fontSize:9,fontWeight:400}}>to collect</div></div>}
-              {pay>0&&<div style={{fontSize:14,fontWeight:800,color:"#16a34a"}}>↪ {fmt(pay)}<div style={{fontSize:9,fontWeight:400}}>to pay</div></div>}
-              {rec===0&&pay===0&&<div style={{fontSize:12,color:MUTED,fontStyle:"italic"}}>Settled ✓</div>}
+              {totalRecoverable>0&&<div style={{fontSize:13,fontWeight:700,color:"#dc2626"}}>↩ {fmt(totalRecoverable)} recoverable</div>}
+              {totalPayable>0&&<div style={{fontSize:13,fontWeight:700,color:"#16a34a"}}>↪ {fmt(totalPayable)} payable</div>}
+              {totalRecoverable===0&&totalPayable===0&&<div style={{fontSize:12,color:MUTED}}>Settled</div>}
             </div>
-            <span style={{color:MUTED,fontSize:12,marginLeft:4}}>{expandedEmp===u.id?"▲":"▼"}</span>
+            <span style={{color:MUTED,fontSize:12}}>{expandedEmp===u.id?"▲":"▼"}</span>
           </div>
 
           {/* Trip breakdown */}
-          {expandedEmp===u.id&&<div style={{borderTop:`1px solid ${BDR}`,background:"var(--bg,#f8faf6)"}}>
-            {tripData.map(({trip:t,claims:tc,spent,empBudget,balance,isBalance,isSettled})=>(
+          {expandedEmp===u.id&&<div style={{borderTop:`1px solid ${BDR}`,background:"var(--input-bg,#fafff8)"}}>
+            {tripData.map(({trip:t,claims:tc,spent,openBal,topups,settlement,isBalance})=>(
               <div key={t.id} style={{borderBottom:`1px solid ${BDR}`}}>
-                <div onClick={()=>setExpandedTrip(expandedTrip===t.id+u.id?null:t.id+u.id)}
+                <div onClick={()=>setExpandedTrip(expandedTrip===t.id?null:t.id)}
                   style={{display:"flex",alignItems:"center",gap:10,padding:"10px 18px 10px 28px",cursor:"pointer"}}>
                   <div style={{flex:1}}>
-                    <div style={{fontSize:13,fontWeight:600,color:INK,display:"flex",alignItems:"center",gap:6}}>
-                      {t.name}
-                      {isSettled&&<span style={{background:"#dcfce7",color:"#16a34a",fontSize:9,padding:"1px 6px",borderRadius:4,fontWeight:700}}>✓ SETTLED</span>}
-                    </div>
-                    <div style={{fontSize:10,color:MUTED}}>{t.startDate} → {t.endDate} · {tc.length} expenses</div>
+                    <div style={{fontSize:13,fontWeight:600,color:INK}}>{t.name} {t.settled_at&&<span style={{fontSize:9,background:"#dcfce7",color:"#16a34a",padding:"1px 6px",borderRadius:4,marginLeft:5}}>✓ Settled</span>}</div>
+                    <div style={{fontSize:10,color:MUTED}}>{t.startDate} → {t.endDate} · {isBalance?"Balance":"Reimbursement"}</div>
                   </div>
                   <div style={{textAlign:"right",flexShrink:0}}>
-                    <div style={{fontWeight:800,fontSize:14,color:balance>0?"#dc2626":balance<0?"#16a34a":MUTED}}>
-                      {balance>0?`↩ ${fmt(balance)}`:balance<0?`↪ ${fmt(-balance)}`:"Settled"}
+                    <div style={{fontSize:12,fontWeight:700,color:settlement>0?"#dc2626":settlement<0?"#16a34a":MUTED}}>
+                      {settlement>0?`↩ ${fmt(settlement)}`:settlement<0?`↪ ${fmt(-settlement)}`:"Settled"}
                     </div>
-                    <div style={{fontSize:9,color:MUTED}}>{fmt(spent)} spent of {fmt(empBudget)} budget</div>
+                    <div style={{fontSize:9,color:MUTED}}>{tc.length} expenses · {fmt(spent)} spent</div>
                   </div>
-                  {!isSettled&&balance!==0&&(
-                    <button onClick={e=>{e.stopPropagation();markSettled(t,u.id);}}
-                      disabled={settling===t.id+"_"+u.id}
-                      style={{marginLeft:6,padding:"5px 12px",background:"#16a34a",color:"#fff",border:"none",
-                        borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0,whiteSpace:"nowrap"}}>
-                      {settling===t.id+"_"+u.id?"…":"✓ Mark Settled"}
+                  {/* Mark settled button — only for closed, unsettled trips with non-zero balance */}
+                  {t.status==="closed"&&!t.settled_at&&settlement!==0&&(
+                    <button onClick={e=>{e.stopPropagation();if(window.confirm(`Mark trip "${t.name}" as settled? This records that the balance of ${fmt(Math.abs(settlement))} has been ${settlement>0?"recovered from":"paid to"} the employee.`))markSettled(t,u.id);}}
+                      style={{marginLeft:6,padding:"4px 10px",background:"#16a34a",color:"#fff",border:"none",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0}}>
+                      {settling===t.id?"…":"✓ Settle"}
                     </button>
                   )}
-                  <span style={{color:MUTED,fontSize:11}}>{expandedTrip===t.id+u.id?"▲":"▼"}</span>
+                  <span style={{color:MUTED,fontSize:11,marginLeft:4}}>{expandedTrip===t.id?"▲":"▼"}</span>
                 </div>
 
-                {/* Invoice drill-down */}
-                {expandedTrip===t.id+u.id&&<div style={{padding:"0 18px 12px 36px"}}>
-                  <div style={{display:"flex",gap:16,fontSize:11,color:MUTED,marginBottom:8,flexWrap:"wrap"}}>
-                    <span>Budget: <strong style={{color:INK}}>{fmt(empBudget)}</strong></span>
-                    <span>Spent: <strong style={{color:"#dc2626"}}>{fmt(spent)}</strong></span>
-                    <span style={{fontWeight:700,color:balance>0?"#dc2626":balance<0?"#16a34a":MUTED}}>
-                      {balance>0?`Recover: ${fmt(balance)}`:balance<0?`Pay: ${fmt(-balance)}`:"Settled"}
-                    </span>
-                  </div>
-                  {tc.length===0&&<div style={{fontSize:11,color:MUTED,fontStyle:"italic"}}>No approved expenses for this employee on this trip.</div>}
+                {/* Claim list */}
+                {expandedTrip===t.id&&<div style={{padding:"0 18px 12px 36px"}}>
+                  {isBalance&&<div style={{display:"flex",gap:14,fontSize:11,color:MUTED,marginBottom:8}}>
+                    <span>Opening: <strong>{fmt(openBal)}</strong></span>
+                    {topups>0&&<span>Top-ups: <strong>+{fmt(topups)}</strong></span>}
+                    <span>Spent: <strong>{fmt(spent)}</strong></span>
+                    <span style={{color:settlement>0?"#dc2626":"#16a34a",fontWeight:700}}>Net: {settlement>0?`↩${fmt(settlement)}`:`↪${fmt(-settlement)}`}</span>
+                  </div>}
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                    {tc.length>0&&<thead><tr>
-                      <th style={{textAlign:"left",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase",borderBottom:`1px solid ${BDR}`}}>Date</th>
-                      <th style={{textAlign:"left",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase",borderBottom:`1px solid ${BDR}`}}>Description</th>
-                      <th style={{textAlign:"left",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase",borderBottom:`1px solid ${BDR}`}}>Category</th>
-                      <th style={{textAlign:"right",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase",borderBottom:`1px solid ${BDR}`}}>Amount</th>
-                    </tr></thead>}
+                    <thead><tr><th style={{textAlign:"left",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase"}}>Date</th><th style={{textAlign:"left",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase"}}>Description</th><th style={{textAlign:"left",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase"}}>Category</th><th style={{textAlign:"right",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase"}}>Amount</th></tr></thead>
                     <tbody>{tc.map(c=>(
-                      <tr key={c.id} style={{borderBottom:`1px solid ${BDR}`}}>
+                      <tr key={c.id} style={{borderTop:`1px solid ${BDR}`}}>
                         <td style={{padding:"4px 6px",color:MUTED}}>{c.date}</td>
-                        <td style={{padding:"4px 6px",color:INK,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.desc||"—"}</td>
+                        <td style={{padding:"4px 6px",color:INK}}>{c.desc?.slice(0,25)||"—"}</td>
                         <td style={{padding:"4px 6px",color:MUTED}}>{c.category}</td>
                         <td style={{padding:"4px 6px",textAlign:"right",fontWeight:600,color:INK}}>{fmt(c.amount)}</td>
                       </tr>
@@ -5185,69 +5061,9 @@ function SettlementsTab({trips,claims,users,getUser,isAdmin,myDept,cid,sbEnabled
           </div>}
         </Card>
       ))}
-
-      {view==="trips"&&closedTrips.map(t=>{
-        const tripClaims=claims.filter(c=>c.tripId===t.id&&c.status==="Approved");
-        const totalSpent=tripClaims.reduce((s,c)=>s+c.amount,0);
-        const assigned=(t.assignedTo||[]);
-        const settledCount=(t.settledEmps||[]).length;
-        const fullySettled=t.status==="fully_closed"||settledCount>=assigned.length;
-        return(
-          <Card key={t.id} style={{marginBottom:10,padding:0,overflow:"hidden",
-            borderLeft:fullySettled?"4px solid #16a34a":"4px solid #f59e0b"}}>
-            <div onClick={()=>setExpandedTrip(expandedTrip===t.id?null:t.id)}
-              style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",cursor:"pointer"}}>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:14,color:INK,display:"flex",alignItems:"center",gap:8}}>
-                  {t.name}
-                  {fullySettled
-                    ?<span style={{background:"#dcfce7",color:"#16a34a",fontSize:9,padding:"2px 7px",borderRadius:4,fontWeight:700}}>✓ FULLY SETTLED</span>
-                    :<span style={{background:"#fef3c7",color:"#92400e",fontSize:9,padding:"2px 7px",borderRadius:4,fontWeight:700}}>⏳ PENDING SETTLEMENT</span>}
-                </div>
-                <div style={{fontSize:11,color:MUTED}}>{t.startDate} → {t.endDate} · {assigned.length} employees · {settledCount}/{assigned.length} settled</div>
-              </div>
-              <div style={{textAlign:"right"}}>
-                <div style={{fontFamily:FD,fontSize:16,fontWeight:700,color:INK}}>{fmt(totalSpent)}</div>
-                <div style={{fontSize:9,color:MUTED}}>total spent</div>
-              </div>
-              <span style={{color:MUTED,fontSize:12}}>{expandedTrip===t.id?"▲":"▼"}</span>
-            </div>
-            {expandedTrip===t.id&&<div style={{borderTop:`1px solid ${BDR}`,padding:"12px 18px",background:"var(--bg,#f8faf6)"}}>
-              {assigned.map(uid=>{
-                const u=getUser(uid);if(!u)return null;
-                const tc=tripClaims.filter(c=>c.empId===uid);
-                const spent=tc.reduce((s,c)=>s+c.amount,0);
-                const empBudget=(t.employeeBudgets?.[uid]?.allocated||0)+(t.employeeBudgets?.[uid]?.topups||0)||(t.budget/Math.max(assigned.length,1));
-                const balance=(t.tripMode!=="reimbursement")?(empBudget-spent):-spent;
-                const isSettled=(t.settledEmps||[]).includes(uid)||fullySettled;
-                return(
-                  <div key={uid} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:`1px solid ${BDR}`}}>
-                    <div style={{width:28,height:28,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:GD,fontSize:10}}>{u.avatar||inits(u.name)}</div>
-                    <div style={{flex:1}}>
-                      <div style={{fontWeight:600,fontSize:12,color:INK}}>{u.name}</div>
-                      <div style={{fontSize:10,color:MUTED}}>{tc.length} expenses · {fmt(spent)} spent</div>
-                    </div>
-                    <div style={{fontWeight:700,fontSize:13,color:balance>0?"#dc2626":balance<0?"#16a34a":MUTED}}>
-                      {balance>0?`↩ ${fmt(balance)}`:balance<0?`↪ ${fmt(-balance)}`:"Settled"}
-                    </div>
-                    {isSettled
-                      ?<span style={{fontSize:10,color:"#16a34a",fontWeight:600}}>✓</span>
-                      :<button onClick={()=>markSettled(t,uid)} disabled={settling===t.id+"_"+uid}
-                          style={{padding:"4px 10px",background:"#16a34a",color:"#fff",border:"none",borderRadius:5,fontSize:10,fontWeight:700,cursor:"pointer"}}>
-                          {settling===t.id+"_"+uid?"…":"Settle"}
-                        </button>}
-                  </div>
-                );
-              })}
-            </div>}
-          </Card>
-        );
-      })}
     </div>
   );
 }
-
-
 
 // ─── FINANCE TAB ─────────────────────────────────────────────────────────────
 function FinanceTab({claims,trips,getUser,users,isAdmin,policy,onExportPDF}){
@@ -5771,6 +5587,64 @@ function HelpManual({userRole,onClose,inline=false}){
   );
 }
 // ─── EDIT REQUEST MODAL ───────────────────────────────────────────────────────
+
+// ─── EDIT CLAIM INLINE ────────────────────────────────────────────────────────
+function EditClaimInline({claim,trips,cid,sbEnabled,onClose}){
+  const[form,setForm]=useState({
+    date:claim.date||today(),category:claim.category||"",
+    desc:claim.desc||"",amount:String(claim.amount||""),
+    vendor:claim.vendor||"",notes:claim.notes||"",
+    gstAmount:String(claim.gstAmount||""),
+  });
+  const[busy,setBusy]=useState(false);
+  const trip=trips.find(t=>t.id===claim.tripId);
+  const inpS={width:"100%",padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB};
+  const save=async()=>{
+    if(!form.category||!form.desc||!form.amount){alert("Category, description and amount required.");return;}
+    setBusy(true);
+    try{
+      const patch={date:form.date,category:form.category,description:form.desc,vendor:form.vendor,amount:parseFloat(form.amount),notes:form.notes,gst_amount:parseFloat(form.gstAmount)||0};
+      if(sbEnabled){
+        const{error}=await supabase.from("claims").update(patch).eq("id",claim.id);
+        if(error)throw new Error(error.message);
+      }
+      onClose();
+      window.location.reload();
+    }catch(e){alert("Save failed: "+e.message);}
+    finally{setBusy(false);}
+  };
+  return(
+    <div style={{marginTop:14,borderTop:`2px solid ${G}`,paddingTop:14}}>
+      <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>✏ Edit Claim</div>
+      {trip&&<div style={{fontSize:10,color:MUTED,marginBottom:8}}>Trip: <strong>{trip.name}</strong> · {trip.startDate} → {trip.endDate}</div>}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:9}}>
+        <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Date</label>
+          <input type="date" value={form.date} min={trip?.startDate} max={trip?.endDate||today()} onChange={e=>setForm({...form,date:e.target.value})} style={inpS}/></div>
+        <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Category</label>
+          <select value={form.category} onChange={e=>setForm({...form,category:e.target.value})} style={{...inpS,appearance:"none"}}>
+            <option value="">Select…</option>{DEFAULT_CATS.map(c=><option key={c}>{c}</option>)}
+          </select></div>
+      </div>
+      <div style={{marginBottom:9}}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Description *</label>
+        <input value={form.desc} onChange={e=>setForm({...form,desc:e.target.value})} style={inpS}/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9,marginBottom:9}}>
+        <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Amount ₹ *</label>
+          <input type="number" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} style={inpS}/></div>
+        <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>GST Amount</label>
+          <input type="number" value={form.gstAmount} onChange={e=>setForm({...form,gstAmount:e.target.value})} placeholder="0" style={inpS}/></div>
+        <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Vendor</label>
+          <input value={form.vendor} onChange={e=>setForm({...form,vendor:e.target.value})} style={inpS}/></div>
+      </div>
+      <div style={{marginBottom:11}}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Notes / Invoice #</label>
+        <textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} rows={2} style={{...inpS,resize:"vertical"}}/></div>
+      <div style={{display:"flex",gap:8}}>
+        <Btn onClick={save} disabled={busy} style={{flex:1}}>{busy?"Saving…":"Save Changes"}</Btn>
+        <button onClick={onClose} style={{padding:"9px 16px",borderRadius:8,border:`1px solid ${BDR}`,background:"transparent",color:MUTED,cursor:"pointer",fontSize:13}}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled,cid,editRequests,onEditRequest,onApproveEditRequest,onRejectEditRequest,isAdmin=false}){
   const [remarks,setRemarks]=useState("");
   const [comment,setComment]=useState("");
@@ -5889,30 +5763,24 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
             <Btn v="outline" onClick={()=>setMdl(null)}>Cancel</Btn>
           </div>
         </div>}
-        {type==="detail"&&<div style={{marginTop:11}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}}>
-            <Badge s={c.status==="Approved"||c.status==="Auto-Approved"?"Approved":c.status}/>
-            <div style={{display:"flex",gap:7}}>
-              {c.status==="Pending"&&c.empId===userId&&(
-                <Btn v="outline" onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Edit</Btn>
-              )}
-              {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&onEditRequest&&(
-                <Btn v="warning" onClick={()=>setMdl({type:"editRequest",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Request Edit</Btn>
-              )}
-              <Btn v="outline" onClick={()=>setMdl(null)} style={{fontSize:11}}>Close</Btn>
-            </div>
+        {type==="detail"&&<div style={{marginTop:11,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          {/* Never show auto-approved status to employees — just show "Approved" */}
+          <Badge s={c.status==="Approved"||c.status==="Auto-Approved"?"Approved":c.status}/>
+          <div style={{display:"flex",gap:7}}>
+            {/* Edit request: only for own approved claims, no auto-approved reveal */}
+            {/* Pending claims - employee can edit directly */}
+            {c.status==="Pending"&&c.empId===userId&&(
+              <Btn v="outline" onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Edit</Btn>
+            )}
+            {/* Approved claims - must request edit */}
+            {c.status==="Pending"&&c.empId===userId&&(
+              <Btn v="outline" onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Edit</Btn>
+            )}
+            {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&onEditRequest&&(
+              <Btn v="warning" onClick={()=>setMdl({type:"editRequest",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Request Edit</Btn>
+            )}
+            <Btn v="outline" onClick={()=>setMdl(null)} style={{fontSize:11}}>Close</Btn>
           </div>
-          {/* Admin override — only for admins, reverses approved/rejected decisions */}
-          {isAdmin&&handleDecision&&(c.status==="Approved"||c.status==="Rejected"||c.status==="Manager Approved")&&(
-            <div style={{padding:"10px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,marginTop:4}}>
-              <div style={{fontSize:10,fontWeight:700,color:"#92400e",marginBottom:6,textTransform:"uppercase",letterSpacing:.5}}>⚡ Admin Override — Reverse Decision</div>
-              <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
-                {c.status!=="Approved"&&<Btn onClick={()=>{handleDecision(c.id,"Approved","Admin override — approved");setMdl(null);}} style={{padding:"6px 12px",fontSize:11,background:"#16a34a",color:"#fff"}}>✓ Override → Approve</Btn>}
-                {c.status!=="Rejected"&&<Btn onClick={()=>{handleDecision(c.id,"Rejected","Admin override — rejected");setMdl(null);}} style={{padding:"6px 12px",fontSize:11,background:"#dc2626",color:"#fff"}}>✗ Override → Reject</Btn>}
-                {(c.status==="Approved"||c.status==="Manager Approved")&&<Btn v="outline" onClick={()=>{handleDecision(c.id,"Pending","Admin override — returned for re-review");setMdl(null);}} style={{padding:"6px 12px",fontSize:11}}>↩ Return to Pending</Btn>}
-              </div>
-            </div>
-          )}
         </div>}
       </div>
     </div>
