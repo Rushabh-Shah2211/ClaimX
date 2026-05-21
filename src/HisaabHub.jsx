@@ -1433,7 +1433,9 @@ function Lightbox({receipt,onClose}){
 }
 
 // ─── PROFILE SETTINGS ─────────────────────────────────────────────────────────
-function Profile({user,users,setUsers,onLogout,updateUserInSB}){
+function Profile({user,users,setUsers,onLogout,updateUserInSB,toast}){
+  // Always read fresh from co.users — user prop (session) may be stale
+  const liveUser=users.find(u=>u.id===user.id)||user;
   const [form,setForm]=useState({
     email:user.email||"",
     username:user.username||"",
@@ -1543,10 +1545,13 @@ function Profile({user,users,setUsers,onLogout,updateUserInSB}){
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:14}} className="mob-grid-1">
           <div>
             <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Delegate To</label>
-            <select value={user.delegateTo||""} onChange={async e=>{
+            <select value={liveUser?.delegateTo||""} onChange={async e=>{
               const val=e.target.value||null;
-              if(updateUserInSB)await updateUserInSB(user.id,{delegateTo:val});
-              setUsers(p=>p.map(u=>u.id===user.id?{...u,delegateTo:val}:u));
+              try{
+                if(updateUserInSB){await updateUserInSB(user.id,{delegateTo:val});}
+                setUsers(p=>p.map(u=>u.id===user.id?{...u,delegateTo:val}:u));
+                toast&&toast("✓ Delegation saved");
+              }catch(err){alert("Failed to save: "+err.message);}
             }} style={{...inpS,appearance:"none"}}>
               <option value="">— No delegation —</option>
               {users.filter(u=>["manager","admin"].includes(u.role)&&u.id!==user.id).map(u=>(
@@ -1556,7 +1561,7 @@ function Profile({user,users,setUsers,onLogout,updateUserInSB}){
           </div>
           <div>
             <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Delegate Until</label>
-            <input type="date" min={today()} defaultValue={user.delegateUntil||""} onBlur={async e=>{
+            <input type="date" min={today()} key={liveUser?.delegateUntil||""} defaultValue={liveUser?.delegateUntil||""} onBlur={async e=>{
               if(updateUserInSB)await updateUserInSB(user.id,{delegateUntil:e.target.value});
               setUsers(p=>p.map(u=>u.id===user.id?{...u,delegateUntil:e.target.value}:u));
             }} style={inpS}/>
@@ -2633,7 +2638,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   const printSummary=(clms,empUser,trip)=>exportClaimsPDF(clms,
     trip?`Trip: ${trip.name}`:empUser?`Claims: ${empUser.name}`:"All Claims",
-    `${activeMeta?.name||""} · ${new Date().toLocaleDateString("en-IN")}`
+    `${companyName||""} · ${new Date().toLocaleDateString("en-IN")}`
   );
 
   const navItems=[
@@ -2685,7 +2690,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               <span style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>Profile & Settings</span>
               <button onClick={()=>setSPro(false)} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:MUTED}}>✕</button>
             </div>
-            <Profile user={user} users={co.users} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} onLogout={onLogout} updateUserInSB={updateUserInSB}/>
+            <Profile user={user} users={co.users} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} onLogout={onLogout} updateUserInSB={updateUserInSB} toast={toast}/>
           </div>
         </div>
       )}
@@ -2829,15 +2834,16 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             <EditRequestsPanel editRequests={editRequests} claims={co.claims} getUser={getUser} cid={cid} toast={toast} sbEnabled={SB_ENABLED} onApprove={approveEditRequest} onReject={rejectEditRequest}/>
           </Card>}
         </>}
-        {tab==="topup"&&!canApprove&&<TopupTab user={user} topups={co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} trips={co.trips} sbCreateTopup={async(req)=>{if(SB_ENABLED){await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});await loadFromSB();}else{setTopups(p=>[...p,req]);}}}/>}
+        {tab==="topup"&&<TopupTab user={user} topups={canApprove?co.topups.filter(t=>t.status==="Pending"||t.empId===user.id):co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} trips={co.trips} sbCreateTopup={async(req)=>{if(SB_ENABLED){await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});await loadFromSB();}else{setTopups(p=>[...p,req]);}}}/>}
         {tab==="analytics"&&<Analytics
           claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept;}):co.claims.filter(c=>c.empId===user.id)}
           trips={isAdmin?co.trips:isManager?co.trips.filter(t=>{const assigned=(t.assignedTo||[]);return assigned.some(id=>{const u=getUser(id);return u?.dept===myUser?.dept;})||t.createdBy===user.id;}):co.trips.filter(t=>(t.assignedTo||[]).includes(user.id)||t.createdBy===user.id)}
           users={isAdmin?co.users:isManager?co.users.filter(u=>u.dept===myUser?.dept):co.users.filter(u=>u.id===user.id)}
           isManager={isManager} isAdmin={isAdmin} getUser={getUser} policy={co.policy} printSummary={printSummary} user={user}/>}
         {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
-        {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={co.auditLog||[]} claims={co.claims} getUser={getUser}/>}
+        {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={isAdmin?(co.auditLog||[]):(co.auditLog||[]).filter(e=>{const u=getUser(e.userId||e.by);return u?.dept===myUser?.dept;})} claims={co.claims} getUser={getUser}/>}
         {tab==="my_history"&&!isManager&&!isAdmin&&<MyHistoryTab user={user} trips={co.trips} claims={co.claims} getUser={getUser} exportClaimsPDF={exportClaimsPDF}/>}
+        {tab==="balances"&&canApprove&&<BalancesTab trips={co.trips} claims={co.claims} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept)} getUser={getUser} isAdmin={isAdmin} fmt={fmt}/>}
         {tab==="settlements"&&canApprove&&<SettlementsTab trips={co.trips} claims={co.claims} users={co.users} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} cid={cid} sbEnabled={SB_ENABLED}/>}
         {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}/>}
         {tab==="trip_approvals"&&canApprove&&<TripApprovalsTab trips={co.trips} getUser={getUser} approveTrip={approveTrip} rejectTrip={rejectTrip} isAdmin={isAdmin}/>}
@@ -2854,7 +2860,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       </div>
 
       {modal?.type==="editRequest"&&<EditRequestModal claim={modal.data} userId={user.id} userName={user.name} cid={cid} onClose={()=>setMdl(null)} onSubmit={submitEditRequest} sbEnabled={SB_ENABLED}/>}
-      {modal&&modal.type!=="editRequest"&&<ClaimModal modal={modal} setMdl={setMdl} handleDecision={handleDecision} getUser={getUser} trips={co.trips} claims={co.claims} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}} userId={user.id} userName={user.name} addCommentToSB={addCommentToSB} sbEnabled={SB_ENABLED} cid={cid} editRequests={editRequests} onEditRequest={submitEditRequest} onApproveEditRequest={approveEditRequest} onRejectEditRequest={rejectEditRequest} isAdmin={isAdmin}/>}
+      {modal&&modal.type!=="editRequest"&&<ClaimModal modal={modal} setMdl={setMdl} handleDecision={handleDecision} getUser={getUser} trips={co.trips} claims={co.claims} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}} userId={user.id} userName={user.name} addCommentToSB={addCommentToSB} sbEnabled={SB_ENABLED} cid={cid} editRequests={editRequests} onEditRequest={submitEditRequest} onApproveEditRequest={approveEditRequest} onRejectEditRequest={rejectEditRequest} isAdmin={isAdmin} isManager={isManager}/>}
 
       {/* MOBILE BOTTOM NAV */}
       {/* ── MOBILE BOTTOM NAV ─────────────────────────────────────────────── */}
@@ -2894,7 +2900,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[]),
               ...(canApprove?[{id:"editreqs",icon:"✏️",label:"Edit Requests",badge:editRequests.filter(r=>r.status==="Pending").length||undefined}]:[]),
               {id:"claims",icon:"📋",label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"},
-              ...(canApprove?[{id:"settlements",icon:"💳",label:"Settlements"}]:[]),
+              ...(canApprove?[{id:"balances",icon:"⚖️",label:"Balances"}]:[]),
+    ...(canApprove?[{id:"settlements",icon:"💳",label:"Settlements"}]:[]),
               ...(canApprove?[{id:"topup",icon:"💰",label:"Top-ups"}]:[]),
               {id:"analytics",icon:"📊",label:"Analytics"},
               {id:"inbox",icon:"🔔",label:"Inbox",badge:myNotifs.length},
@@ -3021,7 +3028,7 @@ function MgrDash({co,meta,setTab,getUser}){
 }
 
 // ─── CLAIMS TAB ───────────────────────────────────────────────────────────────
-function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,submitEditRequest,hasEditWindow,userId,onExportPDF}){
+function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,submitEditRequest,hasEditWindow,userId,onExportPDF,companyName}){
   const [filter,setFilter]=useState("All");
   const [search,setSearch]=useState("");
   const [anomalyOnly,setAO]=useState(false);
@@ -5012,7 +5019,148 @@ function TravelCalendar({trips,users,isAdmin,myDept}){
   );
 }
 
-// ─── SETTLEMENTS TAB ─────────────────────────────────────────────────────────
+// ─── BALANCES TAB ─────────────────────────────────────────────────────────────
+function BalancesTab({trips,claims,users,getUser,isAdmin,fmt:fmtFn}){
+  const f=fmtFn||fmt;
+  const[expandedEmp,setExpandedEmp]=useState(null);
+  const[expandedTrip,setExpandedTrip]=useState(null);
+
+  const allTrips=[...trips].sort((a,b)=>(b.startDate||"").localeCompare(a.startDate||""));
+
+  const empData=users.filter(u=>["employee","manager"].includes(u.role)).map(u=>{
+    const empTrips=allTrips.filter(t=>(t.assignedTo||[]).includes(u.id)||t.createdBy===u.id);
+    const tripBreakdown=empTrips.map(t=>{
+      const tc=claims.filter(c=>c.empId===u.id&&c.tripId===t.id);
+      const approved=tc.filter(c=>c.status==="Approved");
+      const rejected=tc.filter(c=>c.status==="Rejected");
+      const pending=tc.filter(c=>c.status==="Pending");
+      const spent=approved.reduce((s,c)=>s+c.amount,0);
+      const empBudget=(t.employeeBudgets?.[u.id]?.allocated||0)+(t.employeeBudgets?.[u.id]?.topups||0)||0;
+      const tripBudgetShare=t.budget>0&&(t.assignedTo||[]).length>0?t.budget/(t.assignedTo||[1]).length:0;
+      const budget=empBudget||tripBudgetShare;
+      const balance=t.tripMode!=="reimbursement"?(budget-spent):-spent;
+      return{trip:t,approved,rejected,pending,spent,budget,balance,tc};
+    }).filter(td=>td.tc.length>0||td.budget>0);
+
+    const netBalance=tripBreakdown.reduce((s,td)=>s+td.balance,0);
+    const totalSpent=tripBreakdown.reduce((s,td)=>s+td.spent,0);
+    return{user:u,trips:tripBreakdown,netBalance,totalSpent};
+  }).filter(e=>e.trips.length>0);
+
+  const totalRecoverable=empData.filter(e=>e.netBalance>0).reduce((s,e)=>s+e.netBalance,0);
+  const totalPayable=empData.filter(e=>e.netBalance<0).reduce((s,e)=>s+Math.abs(e.netBalance),0);
+
+  return(
+    <div>
+      <div style={{marginBottom:14}}>
+        <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Balances</h1>
+        <p style={{color:MUTED,fontSize:12,marginTop:2}}>Employee-wise amounts due or recoverable across all trips</p>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:18}} className="mob-grid-1">
+        <Card style={{padding:14,borderLeft:"4px solid #dc2626"}}>
+          <div style={{fontSize:9,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:3}}>To Recover</div>
+          <div style={{fontFamily:FD,fontSize:20,fontWeight:800,color:"#dc2626"}}>{f(totalRecoverable)}</div>
+          <div style={{fontSize:9,color:MUTED}}>from {empData.filter(e=>e.netBalance>0).length} employees</div>
+        </Card>
+        <Card style={{padding:14,borderLeft:"4px solid #16a34a"}}>
+          <div style={{fontSize:9,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:3}}>To Pay</div>
+          <div style={{fontFamily:FD,fontSize:20,fontWeight:800,color:"#16a34a"}}>{f(totalPayable)}</div>
+          <div style={{fontSize:9,color:MUTED}}>to {empData.filter(e=>e.netBalance<0).length} employees</div>
+        </Card>
+        <Card style={{padding:14,borderLeft:"4px solid #7c3aed"}}>
+          <div style={{fontSize:9,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:3}}>Net</div>
+          <div style={{fontFamily:FD,fontSize:20,fontWeight:800,color:"#7c3aed"}}>{f(Math.abs(totalRecoverable-totalPayable))}</div>
+          <div style={{fontSize:9,color:MUTED}}>{totalRecoverable>=totalPayable?"recoverable":"payable"}</div>
+        </Card>
+      </div>
+
+      {empData.length===0&&<Card style={{padding:32,textAlign:"center"}}>
+        <div style={{fontSize:36,marginBottom:8}}>⚖️</div>
+        <div style={{color:MUTED}}>No balance data yet. Employees need trips and approved claims.</div>
+      </Card>}
+
+      {empData.map(({user:u,trips:tripData,netBalance,totalSpent})=>(
+        <Card key={u.id} style={{marginBottom:10,padding:0,overflow:"hidden",
+          borderLeft:netBalance>0?"4px solid #dc2626":netBalance<0?"4px solid #16a34a":"4px solid #e5e7eb"}}>
+          {/* Employee header */}
+          <div onClick={()=>setExpandedEmp(expandedEmp===u.id?null:u.id)}
+            style={{display:"flex",alignItems:"center",gap:12,padding:"13px 18px",cursor:"pointer",
+              background:expandedEmp===u.id?"var(--gl,#f0fde9)":"var(--card)"}}>
+            <div style={{width:36,height:36,borderRadius:"50%",background:netBalance>0?"#fee2e2":netBalance<0?"#dcfce7":GL,
+              display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:12,
+              color:netBalance>0?"#dc2626":netBalance<0?"#16a34a":GD,flexShrink:0}}>{u.avatar||inits(u.name)}</div>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:700,fontSize:13,color:INK}}>{u.name}</div>
+              <div style={{fontSize:10,color:MUTED}}>{u.dept||"—"} · {tripData.length} trip{tripData.length!==1?"s":""} · {f(totalSpent)} total spent</div>
+            </div>
+            <div style={{textAlign:"right",flexShrink:0}}>
+              {netBalance>0&&<div style={{fontWeight:800,fontSize:15,color:"#dc2626"}}>↩ {f(netBalance)}<div style={{fontSize:9,fontWeight:400}}>to recover</div></div>}
+              {netBalance<0&&<div style={{fontWeight:800,fontSize:15,color:"#16a34a"}}>↪ {f(-netBalance)}<div style={{fontSize:9,fontWeight:400}}>to pay</div></div>}
+              {netBalance===0&&<div style={{fontSize:11,color:MUTED,fontStyle:"italic"}}>Settled</div>}
+            </div>
+            <span style={{color:MUTED,fontSize:11,marginLeft:4}}>{expandedEmp===u.id?"▲":"▼"}</span>
+          </div>
+
+          {/* Trip breakdown */}
+          {expandedEmp===u.id&&<div style={{borderTop:`1px solid ${BDR}`,background:"var(--bg,#f8faf6)"}}>
+            {tripData.map(({trip:t,approved,rejected,pending,spent,budget,balance})=>(
+              <div key={t.id} style={{borderBottom:`1px solid ${BDR}`}}>
+                <div onClick={()=>setExpandedTrip(expandedTrip===t.id+u.id?null:t.id+u.id)}
+                  style={{display:"flex",alignItems:"center",gap:10,padding:"10px 18px 10px 28px",cursor:"pointer"}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:13,fontWeight:600,color:INK}}>{t.name}
+                      <span style={{marginLeft:6,fontSize:9,background:t.status==="active"?"#dcfce7":t.status==="closed"?"#f3f4f6":"#fef3c7",color:t.status==="active"?"#16a34a":t.status==="closed"?"#6b7280":"#92400e",padding:"1px 6px",borderRadius:4,fontWeight:700}}>{t.status}</span>
+                    </div>
+                    <div style={{fontSize:10,color:MUTED}}>{t.startDate}→{t.endDate} · {approved.length} approved, {rejected.length} rejected, {pending.length} pending</div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0}}>
+                    <div style={{fontWeight:700,fontSize:13,color:balance>0?"#dc2626":balance<0?"#16a34a":MUTED}}>
+                      {balance>0?`↩ ${f(balance)}`:balance<0?`↪ ${f(-balance)}`:"Balanced"}
+                    </div>
+                    <div style={{fontSize:9,color:MUTED}}>{f(spent)} spent of {f(budget)} budget</div>
+                  </div>
+                  <span style={{color:MUTED,fontSize:10}}>{expandedTrip===t.id+u.id?"▲":"▼"}</span>
+                </div>
+
+                {/* Invoice drill-down */}
+                {expandedTrip===t.id+u.id&&<div style={{padding:"8px 18px 12px 36px"}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10,fontSize:11}}>
+                    <div style={{padding:"6px 10px",background:"#dcfce7",borderRadius:6}}>✅ Approved: <strong>{f(approved.reduce((s,c)=>s+c.amount,0))}</strong> ({approved.length})</div>
+                    <div style={{padding:"6px 10px",background:"#fee2e2",borderRadius:6}}>✗ Rejected: <strong>{f(rejected.reduce((s,c)=>s+c.amount,0))}</strong> ({rejected.length})</div>
+                    <div style={{padding:"6px 10px",background:"#fef3c7",borderRadius:6}}>⏳ Pending: <strong>{f(pending.reduce((s,c)=>s+c.amount,0))}</strong> ({pending.length})</div>
+                  </div>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                    <thead><tr>
+                      {["Date","Description","Category","Status","Amount"].map(h=>(
+                        <th key={h} style={{padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase",borderBottom:`1px solid ${BDR}`,textAlign:h==="Amount"?"right":"left"}}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>{[...approved,...rejected,...pending].sort((a,b)=>b.amount-a.amount).map((c,i)=>(
+                      <tr key={c.id} style={{borderBottom:`1px solid ${BDR}`,background:i%2===0?"transparent":"rgba(0,0,0,.01)"}}>
+                        <td style={{padding:"4px 6px",color:MUTED,fontSize:10}}>{c.date}</td>
+                        <td style={{padding:"4px 6px",color:INK,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.desc}</td>
+                        <td style={{padding:"4px 6px",color:MUTED}}>{c.category}</td>
+                        <td style={{padding:"4px 6px"}}><Badge s={c.status} sm/></td>
+                        <td style={{padding:"4px 6px",textAlign:"right",fontWeight:600,color:c.status==="Rejected"?"#dc2626":c.status==="Approved"?"#16a34a":INK}}>{f(c.amount)}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                  <div style={{marginTop:8,padding:"8px 10px",background:balance>0?"#fee2e2":balance<0?"#dcfce7":"#f3f4f6",borderRadius:7,fontWeight:700,fontSize:12,color:balance>0?"#dc2626":balance<0?"#16a34a":MUTED}}>
+                    {balance>0?`💰 Recover ₹${balance.toLocaleString("en-IN")} from ${u.name.split(" ")[0]}`:
+                     balance<0?`💸 Pay ₹${(-balance).toLocaleString("en-IN")} to ${u.name.split(" ")[0]}`:
+                     "✓ Balanced — no amount due"}
+                  </div>
+                </div>}
+              </div>
+            ))}
+          </div>}
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+
 function SettlementsTab({trips,claims,users,getUser,isAdmin,myDept,cid,sbEnabled}){
   const[expandedEmp,setExpandedEmp]=useState(null);
   const[expandedTrip,setExpandedTrip]=useState(null);
@@ -5787,7 +5935,7 @@ function EditClaimInline({claim,trips,cid,sbEnabled,onClose}){
   );
 }
 
-function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled,cid,editRequests,onEditRequest,onApproveEditRequest,onRejectEditRequest,isAdmin=false}){
+function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled,cid,editRequests,onEditRequest,onApproveEditRequest,onRejectEditRequest,isAdmin=false,isManager=false}){
   const [remarks,setRemarks]=useState("");
   const [comment,setComment]=useState("");
   const [receiptsWithUrls,setRWU]=useState(null);
@@ -5831,7 +5979,7 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
     <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:500,backdropFilter:"blur(3px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)setMdl(null);}}>
       <div onMouseDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:24,width:"min(540px,96vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 20px 60px #0003"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:13}}>
-          <span style={{fontFamily:FD,fontSize:16,fontWeight:700,color:INK}}>{type==="detail"?"Claim Details":type==="approve"?"Approve Claim":"Reject Claim"}</span>
+          <span style={{fontFamily:FD,fontSize:16,fontWeight:700,color:INK}}>{type==="detail"?"Claim Details":type==="approve"?"Approve Claim":type==="editClaim"?"Edit Claim":"Reject Claim"}</span>
           <button onClick={()=>setMdl(null)} style={{background:"none",border:"none",fontSize:15,cursor:"pointer",color:MUTED}}>✕</button>
         </div>
         <div style={{background:GL,borderRadius:9,padding:13,marginBottom:12}}>
@@ -5861,7 +6009,7 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
           </div>
           <div style={{fontSize:10,color:MUTED,marginTop:3}}>Finance team marks ITC eligibility for GSTR-2A matching</div>
         </div>}
-        {c.anomaly&&<div style={{background:"#ede9fe",border:"1px solid #c4b5fd",borderRadius:7,padding:"8px 11px",marginTop:9,fontSize:11,color:"#7c3aed"}}>🔍 Anomaly: {(c.anomalyReasons||[]).join(" · ")}</div>}
+        {c.anomaly&&(isAdmin||isManager)&&<div style={{background:"#ede9fe",border:"1px solid #c4b5fd",borderRadius:7,padding:"8px 11px",marginTop:9,fontSize:11,color:"#7c3aed"}}>🔍 Anomaly: {(c.anomalyReasons||[]).join(" · ")}</div>}
         {/* Receipts */}
         {displayReceipts.length>0&&<div style={{marginTop:10}}>
           <div style={{fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",letterSpacing:.5,marginBottom:7}}>Receipts ({displayReceipts.length})</div>
@@ -5905,20 +6053,30 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
             <Btn v="outline" onClick={()=>setMdl(null)}>Cancel</Btn>
           </div>
         </div>}
-        {type==="detail"&&<div style={{marginTop:11,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-          {/* Never show auto-approved status to employees — just show "Approved" */}
-          <Badge s={c.status==="Approved"||c.status==="Auto-Approved"?"Approved":c.status}/>
-          <div style={{display:"flex",gap:7}}>
-            {/* Pending: employee edits directly */}
-            {c.status==="Pending"&&c.empId===userId&&(
-              <Btn v="outline" onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Edit</Btn>
-            )}
-            {/* Approved: must request an edit window */}
-            {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&onEditRequest&&(
-              <Btn v="warning" onClick={()=>setMdl({type:"editRequest",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Request Edit</Btn>
-            )}
-            <Btn v="outline" onClick={()=>setMdl(null)} style={{fontSize:11}}>Close</Btn>
+        {type==="detail"&&<div style={{marginTop:11}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
+            <Badge s={c.status==="Approved"||c.status==="Auto-Approved"?"Approved":c.status}/>
+            <div style={{display:"flex",gap:7}}>
+              {c.status==="Pending"&&c.empId===userId&&(
+                <Btn v="outline" onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Edit</Btn>
+              )}
+              {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&onEditRequest&&(
+                <Btn v="warning" onClick={()=>setMdl({type:"editRequest",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Request Edit</Btn>
+              )}
+              <Btn v="outline" onClick={()=>setMdl(null)} style={{fontSize:11}}>Close</Btn>
+            </div>
           </div>
+          {/* Admin override — reverse any manager decision */}
+          {isAdmin&&handleDecision&&(c.status==="Approved"||c.status==="Auto-Approved"||c.status==="Rejected"||c.status==="Manager Approved")&&(
+            <div style={{padding:"10px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#92400e",marginBottom:6,textTransform:"uppercase",letterSpacing:.5}}>⚡ Admin Override</div>
+              <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+                {c.status!=="Approved"&&<Btn onClick={()=>{handleDecision(c.id,"Approved","Admin override");setMdl(null);}} style={{padding:"6px 12px",fontSize:11,background:"#16a34a",color:"#fff"}}>✓ Override → Approve</Btn>}
+                {c.status!=="Rejected"&&<Btn onClick={()=>{handleDecision(c.id,"Rejected","Admin override");setMdl(null);}} style={{padding:"6px 12px",fontSize:11,background:"#dc2626",color:"#fff"}}>✗ Override → Reject</Btn>}
+                {(c.status==="Approved"||c.status==="Auto-Approved"||c.status==="Manager Approved")&&<Btn v="outline" onClick={()=>{handleDecision(c.id,"Pending","Admin override — returned for re-review");setMdl(null);}} style={{padding:"6px 12px",fontSize:11}}>↩ Return to Pending</Btn>}
+              </div>
+            </div>
+          )}
         </div>}
       </div>
     </div>
