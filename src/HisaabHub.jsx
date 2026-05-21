@@ -1663,6 +1663,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const closeTutorial=()=>setShowTutorial(false);
   const[showChatbot,setShowChatbot]=useState(false);
   const[showMobMore,setShowMobMore]=useState(false);
+  const[showFab,setShowFab]=useState(false);
 
   // Keyboard shortcuts
   useEffect(()=>{
@@ -2648,7 +2649,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     {id:"trips",     icon:"🗂️", label:"Trips / Periods"},
     ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[{id:"topup",icon:"💰",label:"Top-up"}]),
     // Trip approvals merged into main Approvals tab - no separate tab
-    ...(canApprove?[{id:"editreqs",icon:"✏️",label:"Edit Requests",badge:editRequests.filter(r=>r.status==="Pending").length||undefined}]:[]),
+    // Edit Requests merged into Approvals tab
     {id:"analytics", icon:"📊", label:"Analytics"},
     // Inbox moved to notification bell in top bar - not in sidebar
     ...(canApprove||isFinance?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
@@ -2682,6 +2683,24 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       {/* Floating chatbot button */}
       <button onClick={()=>setShowChatbot(p=>!p)} style={{position:"fixed",bottom:72,right:20,width:48,height:48,borderRadius:"50%",background:`linear-gradient(135deg,${G},${GD})`,color:"#fff",border:"none",fontSize:22,cursor:"pointer",boxShadow:"0 4px 16px rgba(126,217,87,.5)",zIndex:799,display:"flex",alignItems:"center",justifyContent:"center"}}>
         {showChatbot?"✕":"🤖"}
+      </button>
+      {/* Floating + button for quick actions */}
+      {showFab&&<div style={{position:"fixed",bottom:132,right:22,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:10,zIndex:798}}>
+        {hasPerm("submit")&&<div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{background:"rgba(0,0,0,.7)",color:"#fff",fontSize:11,padding:"4px 10px",borderRadius:6,whiteSpace:"nowrap"}}>New Expense</span>
+          <button onClick={()=>{setShowFab(false);setTab("submit");}} style={{width:42,height:42,borderRadius:"50%",background:G,color:"#fff",border:"none",fontSize:18,cursor:"pointer",boxShadow:"0 3px 12px rgba(126,217,87,.4)"}}>📤</button>
+        </div>}
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{background:"rgba(0,0,0,.7)",color:"#fff",fontSize:11,padding:"4px 10px",borderRadius:6,whiteSpace:"nowrap"}}>New Trip</span>
+          <button onClick={()=>{setShowFab(false);setTab("trips");}} style={{width:42,height:42,borderRadius:"50%",background:"#7c3aed",color:"#fff",border:"none",fontSize:18,cursor:"pointer",boxShadow:"0 3px 12px rgba(124,58,237,.4)"}}>🗂</button>
+        </div>
+        {!canApprove&&<div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{background:"rgba(0,0,0,.7)",color:"#fff",fontSize:11,padding:"4px 10px",borderRadius:6,whiteSpace:"nowrap"}}>Request Top-up</span>
+          <button onClick={()=>{setShowFab(false);setTab("topup");}} style={{width:42,height:42,borderRadius:"50%",background:"#f59e0b",color:"#fff",border:"none",fontSize:18,cursor:"pointer",boxShadow:"0 3px 12px rgba(245,158,11,.4)"}}>💰</button>
+        </div>}
+      </div>}
+      <button onClick={()=>setShowFab(p=>!p)} style={{position:"fixed",bottom:128,right:20,width:44,height:44,borderRadius:"50%",background:showFab?"#dc2626":INK,color:"#fff",border:"none",fontSize:20,cursor:"pointer",boxShadow:"0 4px 14px rgba(0,0,0,.3)",zIndex:798,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
+        {showFab?"✕":"＋"}
       </button>
       {showProf&&(
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:800,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setSPro(false)}>
@@ -2786,7 +2805,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="dashboard"&&!isManager&&!isFinance&&<EmpDash user={user} myUser={myUser} co={co} setTab={setTab}/>}
         {tab==="dashboard"&&isManager&&<>
           <TravelCalendar trips={co.trips} users={co.users} isAdmin={isAdmin} myDept={myUser?.dept}/>
-          <MgrDash co={co} meta={activeMeta} setTab={setTab} getUser={getUser} isAdmin={isAdmin}/>
+          <MgrDash co={co} meta={activeMeta} setTab={setTab} getUser={getUser} isAdmin={isAdmin} myUserId={user.id}/>
         </>}
         {tab==="dashboard"&&isFinance&&!isManager&&<EmpDash user={user} myUser={myUser} co={co} setTab={setTab}/>}
         {tab==="claims"&&<ClaimsTab
@@ -2828,7 +2847,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           }}
         />}
         {tab==="approvals"&&canApprove&&<>
-          <ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users}/>
+          <ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest}/>
           {editRequests.length>0&&<Card style={{padding:16,marginTop:16}}>
             <div style={{fontFamily:FD,fontSize:14,fontWeight:700,color:INK,marginBottom:12}}>✏ Edit Requests {editRequests.filter(r=>r.status==="Pending").length>0&&<span style={{background:"#fef3c7",color:"#92400e",fontSize:11,padding:"1px 7px",borderRadius:10,marginLeft:7,fontFamily:FB}}>{editRequests.filter(r=>r.status==="Pending").length} pending</span>}</div>
             <EditRequestsPanel editRequests={editRequests} claims={co.claims} getUser={getUser} cid={cid} toast={toast} sbEnabled={SB_ENABLED} onApprove={approveEditRequest} onReject={rejectEditRequest}/>
@@ -2848,7 +2867,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}/>}
         {tab==="trip_approvals"&&canApprove&&<TripApprovalsTab trips={co.trips} getUser={getUser} approveTrip={approveTrip} rejectTrip={rejectTrip} isAdmin={isAdmin}/>}
         {tab==="editreqs"&&canApprove&&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id} reload={loadEditRequests}/>}
-        {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={co.users} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin}/>}
+        {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept||u.id===user.id)} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin}/>}
         {tab==="policy"&&isAdmin&&<Policy policy={co.policy} setPolicy={setCoPolicy} savePolicy={savePolicyToSB} toast={toast} users={co.users} sbEnabled={SB_ENABLED}/>}
         {tab==="help"&&<div>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
@@ -2898,7 +2917,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
               {id:"trips",icon:"🗂",label:"Trips / Periods"},
               ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[]),
-              ...(canApprove?[{id:"editreqs",icon:"✏️",label:"Edit Requests",badge:editRequests.filter(r=>r.status==="Pending").length||undefined}]:[]),
+              // Edit Requests merged into Approvals tab
               {id:"claims",icon:"📋",label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"},
               ...(canApprove?[{id:"balances",icon:"⚖️",label:"Balances"}]:[]),
     ...(canApprove?[{id:"settlements",icon:"💳",label:"Settlements"}]:[]),
@@ -2975,14 +2994,25 @@ function EmpDash({user,myUser,co,setTab}){
 }
 
 // ─── MANAGER DASHBOARD ────────────────────────────────────────────────────────
-function MgrDash({co,meta,setTab,getUser}){
-  const emps=co.users.filter(u=>u.role==="employee");
-  const total=co.claims.filter(c=>c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
-  const pending=co.claims.filter(c=>c.status==="Pending").length;
-  const anomalies=co.claims.filter(c=>c.anomaly&&c.status==="Pending").length;
-  const activeTrips=co.trips.filter(t=>t.status==="active");
+function MgrDash({co,meta,setTab,getUser,myUserId}){
+  const myUser=co.users.find(u=>u.id===myUserId);
+  const myDept=myUser?.dept;
+  const isAdmin=myUser?.role==="admin";
+  // Filter employees by dept for manager, show all for admin
+  const emps=co.users.filter(u=>u.role==="employee"&&(isAdmin||u.dept===myDept));
+  const deptClaims=co.claims.filter(c=>{
+    if(isAdmin)return true;
+    const emp=getUser(c.empId);
+    return emp?.dept===myDept;
+  });
+  const total=deptClaims.filter(c=>c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
+  const pending=deptClaims.filter(c=>c.status==="Pending").length;
+  const anomalies=deptClaims.filter(c=>c.anomaly&&c.status==="Pending").length;
+  const activeTrips=co.trips.filter(t=>{
+    if(isAdmin)return t.status==="active";
+    return t.status==="active"&&(t.assignedTo||[]).some(id=>getUser(id)?.dept===myDept||id===myUserId);
+  });
   const activeTrip=activeTrips[0];
-  const deptSpend={}; DEPTS.forEach(d=>{deptSpend[d]=co.claims.filter(c=>c.status!=="Rejected"&&getUser(c.empId)?.dept===d).reduce((s,c)=>s+c.amount,0);});
   return(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
@@ -3000,19 +3030,28 @@ function MgrDash({co,meta,setTab,getUser}){
       <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:14}}>
         <Card>
           <div style={{padding:"12px 16px",borderBottom:`1px solid ${BDR}`}}><span style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK}}>Employee Balances</span></div>
-          {emps.map(e=>{const spent=co.claims.filter(c=>c.empId===e.id&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);const alloc=(e.balance||0)+spent;return(
+          {emps.map(e=>{
+            const approvedSpend=co.claims.filter(c=>c.empId===e.id&&c.status==="Approved").reduce((s,c)=>s+c.amount,0);
+            const walletBalance=co.policy.reimbursementMode?(e.reimbursable||0):(e.balance||0);
+            // Net balance = initial balance - approved claims (balance column already tracks this in balance mode)
+            const netWallet=walletBalance;
+            const alloc=netWallet+approvedSpend;
+            return(
             <div key={e.id} style={{padding:"9px 16px",borderBottom:`1px solid #f8faf6`,display:"flex",alignItems:"center",gap:8}}>
               <div style={{width:28,height:28,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:GD,fontSize:10}}>{e.avatar}</div>
-              <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600,color:INK}}>{e.name} <span style={{fontSize:10,color:MUTED}}>· {e.dept}</span></div><PBar value={spent} max={alloc||1} h={3}/></div>
-              <div style={{textAlign:"right"}}><div style={{fontWeight:700,color:INK,fontSize:12}}>{co.policy.reimbursementMode?fmt(e.reimbursable||0):fmt(e.balance||0)}</div><div style={{fontSize:9,color:MUTED}}>{co.policy.reimbursementMode?"reimb.":"balance"}</div></div>
+              <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600,color:INK}}>{e.name} <span style={{fontSize:10,color:MUTED}}>· {e.dept}</span></div><PBar value={approvedSpend} max={alloc||1} h={3}/></div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontWeight:700,color:netWallet<0?"#dc2626":INK,fontSize:12}}>{fmt(netWallet)}</div>
+                <div style={{fontSize:9,color:MUTED}}>{co.policy.reimbursementMode?"to reimburse":"balance"}</div>
+              </div>
             </div>
           );})}
         </Card>
         <Card style={{padding:18}}>
           <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Department Budgets</div>
-          {Object.entries(co.policy.departmentBudgets||{}).filter(([d,b])=>b>0&&(deptSpend[d]||0)>0).map(([dept,budget])=>(
+          {Object.entries(co.policy.departmentBudgets||{}).filter(([d,b])=>b>0&&(isAdmin||d===myDept)).map(([dept,budget])=>(
             <div key={dept} style={{marginBottom:10}}>
-              <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}><span style={{color:MUTED}}>{dept}</span><span style={{fontWeight:600}}>{fmt(deptSpend[dept]||0)} / {fmt(budget)}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}><span style={{color:MUTED}}>{dept}</span><span style={{fontWeight:600}}>{fmt(deptClaims.filter(c=>getUser(c.empId)?.dept===dept&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0).toLocaleString("en-IN"))} / {fmt(budget)}</span></div>
               <PBar value={deptSpend[dept]||0} max={budget} h={5}/>
             </div>
           ))}
@@ -3919,7 +3958,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
 }
 
 // ─── APPROVALS TAB ────────────────────────────────────────────────────────────
-function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip,users,user}){
+function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip,users,user,editRequests,approveEditRequest,rejectEditRequest}){
   const [filter,setFilter]=useState("All");
   const [selected,setSelected]=useState(new Set());
   const pendingTrips=(trips||[]).filter(t=>t.status==="pending_approval");
@@ -3934,6 +3973,28 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
       <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:4}}>Approvals</h1>
       <p style={{color:MUTED,fontSize:12,marginBottom:12}}>{pendingClaims.length} claims · {pendingTopups.length} top-ups · {pendingTrips.length} trips · {pendingClaims.filter(c=>c.anomaly).length} anomalies</p>
 
+      {/* ── Pending Edit Requests ── */}
+      {(editRequests||[]).filter(r=>r.status==="Pending").length>0&&<div style={{marginBottom:20}}>
+        <div style={{fontFamily:FD,fontSize:14,fontWeight:700,color:INK,marginBottom:8}}>✏ Edit Requests <span style={{background:"#fef3c7",color:"#92400e",fontSize:11,padding:"2px 8px",borderRadius:10,marginLeft:6}}>{(editRequests||[]).filter(r=>r.status==="Pending").length}</span></div>
+        {(editRequests||[]).filter(r=>r.status==="Pending").map(req=>{
+          const claimId=req.claim_id||req.claimId;
+          return(
+            <Card key={req.id} style={{padding:14,marginBottom:8,borderLeft:"4px solid #f59e0b"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+                <div>
+                  <div style={{fontWeight:700,color:INK,fontSize:13}}>{claimId}</div>
+                  <div style={{color:MUTED,fontSize:11,marginTop:1}}>by {req.requester_name||req.requesterName} · {req.created_at?new Date(req.created_at).toLocaleDateString("en-IN"):""}</div>
+                  <div style={{background:"#fef3c7",borderRadius:6,padding:"6px 10px",marginTop:6,fontSize:12,color:"#92400e"}}><strong>Reason:</strong> {req.reason}</div>
+                </div>
+                <div style={{display:"flex",gap:7,flexShrink:0}}>
+                  <Btn onClick={()=>approveEditRequest&&approveEditRequest(req)} style={{padding:"7px 12px",fontSize:11}}>✓ Approve (24h)</Btn>
+                  <Btn v="danger" onClick={()=>rejectEditRequest&&rejectEditRequest(req)} style={{padding:"7px 10px",fontSize:11}}>✗ Reject</Btn>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>}
       {/* ── Pending Trips ── */}
       {pendingTrips.length>0&&<Card style={{padding:16,marginBottom:16,borderColor:"#fcd34d",background:"#fffbeb"}}>
         <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:"#92400e",marginBottom:10}}>⏳ Trips Awaiting Approval ({pendingTrips.length})</div>
@@ -4021,10 +4082,11 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
                       <Btn onClick={()=>handleDecision(c.id,"Approved","Admin override — direct approval")} style={{padding:"6px 9px",fontSize:10,background:"#0369a1",color:"#fff"}}>↯ Override</Btn>
                     )}
                     <button onClick={async()=>{
+                      const note=c.anomaly?"":prompt("Enter anomaly note (what to check):")?.trim()||"Manager flagged as anomaly";
                       const newAnomaly=!c.anomaly;
-                      if(SB_ENABLED){await supabase.from("claims").update({anomaly:newAnomaly,anomaly_reasons:newAnomaly?[...((c.anomalyReasons||[]).filter(r=>!r.includes("Manager flagged"))),"Manager flagged as anomaly"]:[]}).eq("id",c.id);await loadFromSB();}
-                      else setClaims(p=>p.map(x=>x.id===c.id?{...x,anomaly:newAnomaly}:x));
-                    }} title={c.anomaly?"Remove anomaly flag":"Flag as anomaly"} style={{padding:"5px 8px",background:c.anomaly?"#ede9fe":"#f3f4f6",border:c.anomaly?"1px solid #c4b5fd":"none",borderRadius:6,cursor:"pointer",fontSize:12}}>🔍</button>
+                      if(SB_ENABLED){await supabase.from("claims").update({anomaly:newAnomaly,anomaly_reasons:newAnomaly?[...((c.anomalyReasons||[]).filter(r=>!r.includes("Manager flagged"))),note]:[]}).eq("id",c.id);await loadFromSB();}
+                      else setClaims(p=>p.map(x=>x.id===c.id?{...x,anomaly:newAnomaly,anomalyReasons:newAnomaly?[note]:[]}:x));
+                    }} title={c.anomaly?"Remove anomaly flag":"Flag as anomaly — enter note"} style={{padding:"5px 8px",background:c.anomaly?"#ede9fe":"#f3f4f6",border:c.anomaly?"1px solid #c4b5fd":"none",borderRadius:6,cursor:"pointer",fontSize:12}}>🔍</button>
                   </div>
                 </div>
               </div>
@@ -5982,6 +6044,7 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
           <span style={{fontFamily:FD,fontSize:16,fontWeight:700,color:INK}}>{type==="detail"?"Claim Details":type==="approve"?"Approve Claim":type==="editClaim"?"Edit Claim":"Reject Claim"}</span>
           <button onClick={()=>setMdl(null)} style={{background:"none",border:"none",fontSize:15,cursor:"pointer",color:MUTED}}>✕</button>
         </div>
+        {type==="editClaim"?<EditClaimInline claim={c} trips={trips} cid={cid} sbEnabled={sbEnabled} onClose={()=>setMdl(null)}/>:(<>
         <div style={{background:GL,borderRadius:9,padding:13,marginBottom:12}}>
           <div style={{fontFamily:"monospace",fontSize:10,color:GD,fontWeight:600}}>{c.id}</div>
           <div style={{fontSize:14,fontWeight:700,color:INK,marginTop:2}}>{c.desc}</div>
@@ -6078,6 +6141,7 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
             </div>
           )}
         </div>}
+      </>)}
       </div>
     </div>
   );
