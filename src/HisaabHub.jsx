@@ -32,7 +32,7 @@ const GLSTYLE=`@import url('https://fonts.googleapis.com/css2?family=Playfair+Di
 /* ── LIGHT THEME (default) ── */
 :root,[data-dark="false"]{
   --ink:#1a2e12;
-  --muted:#6b7280;
+  --muted: #1f2937;
   --bdr:#e8f0e5;
   --gl:#f0fde9;
   --gm:#d1fae5;
@@ -48,7 +48,7 @@ const GLSTYLE=`@import url('https://fonts.googleapis.com/css2?family=Playfair+Di
 /* ── DARK THEME ── */
 [data-dark="true"]{
   --ink:#f0f9ff;
-  --muted:#94a3b8;
+  --muted: #1f2937;
   --bdr:#2d4a2d;
   --gl:#1a2e1a;
   --gm:#1e3a1e;
@@ -112,6 +112,16 @@ select{appearance:none}
 const fmt   = n  => "₹"+Number(n).toLocaleString("en-IN");
 const uid=()=>'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16);});
 const today = () => new Date().toISOString().slice(0,10);
+const fmtDate = (d) => {
+  // Format any date string (yyyy-mm-dd or ISO) as dd-mm-yyyy
+  if(!d)return"—";
+  try{
+    const s=String(d).slice(0,10); // get yyyy-mm-dd part
+    if(s.length<10)return d;
+    const[y,m,dd]=s.split("-");
+    return `${dd}-${m}-${y}`;
+  }catch{return String(d);}
+};
 const inits = nm => nm.trim().split(/\s+/).map(w=>w[0]).join("").toUpperCase().slice(0,2);
 const isWknd= d  => { const day=new Date(d).getDay(); return day===0||day===6; };
 const FX    = { USD:83.5, EUR:90.2, GBP:105.4, AED:22.7, SGD:62.1, INR:1 };
@@ -361,7 +371,7 @@ const claimEmailHtml=(action,claim,remarks,companyName)=>{
     <h2 style="color:${action==="Approved"?"#15803d":"#dc2626"};font-size:16px;margin:0 0 14px">${action==="Approved"?"\u2713 Claim Approved":"\u2717 Claim Rejected"}</h2>
     <table style="font-size:13px;width:100%;border-collapse:collapse">${rows.map(([l,v])=>`<tr><td style="padding:6px 0;color:#6b7280;width:38%">${l}</td><td style="padding:6px 0;font-weight:600;color:#111">${v}</td></tr>`).join("")}</table>
     <div style="margin-top:16px;padding:10px 14px;background:${action==="Approved"?"#f0fde9":"#fef2f2"};border-radius:7px;font-size:12px;color:${action==="Approved"?"#15803d":"#dc2626"}">${action==="Approved"?"Amount will be settled as per company policy.":"Please contact your manager for details."}</div>
-    <div style="margin-top:18px;font-size:10px;color:#9ca3af">XpensR by RB · ${new Date().toLocaleDateString("en-IN")}</div>
+    <div style="margin-top:18px;font-size:10px;color:#9ca3af">XpensR by RB · ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})}</div>
   </div></div>`;
 };
 
@@ -522,14 +532,14 @@ const generateSettlementPDF=async(trip,claims,getUser,companyName)=>{
   checkY(14);
   doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(120,120,120);
   doc.text("Authorised by: ________________________",ML,y);
-  doc.text(`Date: ${new Date().toLocaleDateString("en-IN")}`,W-MR,y,{align:"right"});
+  doc.text(`Date: ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})}`,W-MR,y,{align:"right"});
 
   // ── Page footer ────────────────────────────────────────────
   const totalPages=doc.getNumberOfPages();
   for(let p=1;p<=totalPages;p++){
     doc.setPage(p);
     doc.setFontSize(7);doc.setTextColor(170,170,170);doc.setFont("helvetica","normal");
-    doc.text(`XpensR by RB · ${companyName||""} · Generated ${new Date().toLocaleDateString("en-IN")} · Page ${p}/${totalPages}`,W/2,290,{align:"center"});
+    doc.text(`XpensR by RB · ${companyName||""} · Generated ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})} · Page ${p}/${totalPages}`,W/2,290,{align:"center"});
   }
   return doc;
 };
@@ -641,7 +651,7 @@ class ErrorBoundary extends Component{
           <div style={{fontSize:48,marginBottom:16}}>⚠️</div>
           <h2 style={{fontFamily:FD,fontSize:22,color:DARK,marginBottom:8}}>Something went wrong</h2>
           <p style={{color:MUTED,fontSize:14,marginBottom:6}}>{this.state.error?.message||"An unexpected error occurred."}</p>
-          <p style={{color:"#9ca3af",fontSize:12,marginBottom:20,fontFamily:"monospace"}}>{this.state.error?.stack?.split('\n')[1]||""}</p>
+          <p style={{color:"#1f2937",fontSize:12,marginBottom:20,fontFamily:"monospace"}}>{this.state.error?.stack?.split('\n')[1]||""}</p>
           <button onClick={()=>{this.setState({error:null});window.location.reload();}} style={{padding:"10px 24px",background:G,border:"none",borderRadius:9,color:"#fff",fontFamily:FB,fontWeight:700,fontSize:14,cursor:"pointer"}}>↺ Reload</button>
         </div>
       </div>
@@ -786,7 +796,7 @@ function LegalContent({type}){
           return<div key={i} style={{paddingLeft:16,marginBottom:3}}>• {line.slice(2).replace(/\*\*([^*]+)\*\*/g,"$1")}</div>;
         }
         if(line.startsWith("*")&&line.endsWith("*")){
-          return<div key={i} style={{fontSize:11,color:"#9ca3af",marginTop:12,fontStyle:"italic"}}>{line.replace(/\*/g,"")}</div>;
+          return<div key={i} style={{fontSize:11,color:"#1f2937",marginTop:12,fontStyle:"italic"}}>{line.replace(/\*/g,"")}</div>;
         }
         if(!line.trim())return<div key={i} style={{height:8}}/>;
         // Bold inline text
@@ -965,14 +975,14 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
         <div style={{background:"rgba(255,255,255,.06)",borderRadius:18,padding:36,width:"min(420px,96vw)",backdropFilter:"blur(20px)",border:"1px solid rgba(255,255,255,.1)"}}>
           <div style={{fontFamily:FD,fontSize:22,color:"#7ED957",marginBottom:20,textAlign:"center"}}>Reset Password</div>
           {/* password recovery form would go here */}
-          <p style={{color:"rgba(255,255,255,.5)",textAlign:"center",fontSize:13}}>Enter your new password below.</p>
+          <p style={{color:"rgba(255,255,255,.8)",textAlign:"center",fontSize:13}}>Enter your new password below.</p>
         </div>
       </div>
     );
   }
 
   return(
-    <div style={{minHeight:"100vh",fontFamily:FB,background:"#f8fffe",color:"#1a2e12"}}>
+    <div style={{minHeight:"100vh",fontFamily:FB,background:"#ffffff",color:"#1a2e12"}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap');
         .xr-btn{transition:all .2s;} .xr-btn:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(0,0,0,.12);}
@@ -983,16 +993,16 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
       `}</style>
 
       {/* ── TOP NAV ── */}
-      <nav style={{position:"sticky",top:0,zIndex:100,background:"rgba(248,255,254,0.92)",backdropFilter:"blur(12px)",borderBottom:"1px solid rgba(126,217,87,0.15)",padding:"0 max(24px,5vw)"}}>
+      <nav style={{position:"sticky",top:0,zIndex:100,background:"rgba(240,249,255,0.95)",backdropFilter:"blur(12px)",borderBottom:"1px solid rgba(126,217,87,0.15)",padding:"0 max(24px,5vw)"}}>
         <div style={{maxWidth:1180,margin:"0 auto",height:64,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <div style={{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:800,color:"#5CB83A",letterSpacing:-0.5}}>XpensR</div>
-            <div style={{fontSize:10,color:"#999",letterSpacing:2,textTransform:"uppercase",marginTop:2}}>by RB</div>
+            <div style={{fontSize:10,color:"#374151",letterSpacing:2,textTransform:"uppercase",marginTop:2}}>by RB</div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:16}}>
             <button onClick={()=>setShowTiers(p=>!p)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#5CB83A",fontFamily:FB,fontWeight:600,padding:"6px 12px"}}>Pricing</button>
-            <a href="#contact" style={{fontSize:13,color:"#666",textDecoration:"none",fontFamily:FB,padding:"6px 12px"}}>Contact</a>
-            <button onClick={()=>setShowLogin(true)} className="xr-btn" style={{background:"#5CB83A",color:"#fff",border:"none",borderRadius:10,padding:"9px 22px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:FB,letterSpacing:.3}}>
+            <a href="#contact" style={{fontSize:13,color:"#374151",textDecoration:"none",fontFamily:FB,padding:"6px 12px"}}>Contact</a>
+            <button onClick={()=>setShowLogin(true)} className="xr-btn" style={{background:"linear-gradient(135deg,#2563eb,#1d4ed8)",color:"#fff",border:"none",borderRadius:10,padding:"9px 22px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:FB,letterSpacing:.3}}>
               Sign In →
             </button>
           </div>
@@ -1000,12 +1010,26 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
       </nav>
 
       {/* ── HERO ── */}
-      <section style={{maxWidth:1180,margin:"0 auto",padding:"80px max(24px,5vw) 60px",textAlign:"center"}} className="xr-anim">
+      <section style={{background:"linear-gradient(135deg,#e8f8ff 0%,#f0ffe8 50%,#e0f0ff 100%)",padding:"80px max(24px,5vw) 70px",textAlign:"center",position:"relative",overflow:"hidden"}} className="xr-anim">
+        {/* Blue wave top-left */}
+        <div style={{position:"absolute",top:0,left:0,width:"45%",height:"60%",background:"radial-gradient(ellipse at top left,rgba(37,99,235,0.12) 0%,transparent 70%)",pointerEvents:"none",zIndex:0}}/>
+        {/* Green wave bottom-right */}
+        <div style={{position:"absolute",bottom:0,right:0,width:"40%",height:"50%",background:"radial-gradient(ellipse at bottom right,rgba(126,217,87,0.15) 0%,transparent 70%)",pointerEvents:"none",zIndex:0}}/>
+        {/* Dot pattern top-right */}
+        <div style={{position:"absolute",top:24,right:32,display:"grid",gridTemplateColumns:"repeat(6,8px)",gap:6,opacity:.3,zIndex:0}}>
+          {Array(24).fill(0).map((_,i)=><div key={i} style={{width:4,height:4,borderRadius:"50%",background:"#2563eb"}}/>)}
+        </div>
+        {/* Dot pattern bottom-left */}
+        <div style={{position:"absolute",bottom:24,left:32,display:"grid",gridTemplateColumns:"repeat(5,8px)",gap:6,opacity:.25,zIndex:0}}>
+          {Array(20).fill(0).map((_,i)=><div key={i} style={{width:4,height:4,borderRadius:"50%",background:"#5CB83A"}}/>)}
+        </div>
+        <div style={{position:"relative",zIndex:1}}>
         <div style={{display:"inline-block",background:"#f0fde9",border:"1px solid #bbf7d0",borderRadius:20,padding:"5px 14px",fontSize:11,fontWeight:700,color:"#16a34a",letterSpacing:1,textTransform:"uppercase",marginBottom:20}}>🚀 Now in Beta — Limited Access</div>
         <h1 style={{fontFamily:"'Playfair Display',serif",fontSize:"clamp(36px,6vw,68px)",fontWeight:800,color:"#0f1c09",lineHeight:1.1,marginBottom:20,letterSpacing:-1}}>
-          Expense Management<br/><span style={{color:"#5CB83A"}}>Built for Growing Teams</span>
+          Expense Management<br/><span style={{background:"linear-gradient(135deg,#2563eb,#5CB83A)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Built for Growing Teams</span>
         </h1>
-        <p style={{fontSize:"clamp(15px,2vw,19px)",color:"#4a6741",lineHeight:1.7,maxWidth:600,margin:"0 auto 36px",fontWeight:400}}>
+        <p style={{fontFamily:"'DM Sans',sans-serif",fontSize:"clamp(18px,2.5vw,24px)",fontWeight:700,color:"#1e3a5f",letterSpacing:.5,marginBottom:8,marginTop:-8}}>Scan. Send. Settled.</p>
+        <p style={{fontSize:"clamp(15px,2vw,17px)",color:"#374151",lineHeight:1.7,maxWidth:560,margin:"0 auto 36px",fontWeight:400}}>
           AI-powered claim submission, smart approval workflows, real-time balances and settlement tracking — all in one beautifully simple app.
         </p>
         <div style={{display:"flex",gap:14,justifyContent:"center",flexWrap:"wrap"}}>
@@ -1021,25 +1045,25 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
           {[["AI OCR","Invoice scanning"],["24hr","Edit windows"],["4 Roles","Admin, Manager, Finance, Employee"],["Real-time","Balances & settlements"]].map(([stat,desc])=>(
             <div key={stat} style={{textAlign:"center"}}>
               <div style={{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:800,color:"#0f1c09"}}>{stat}</div>
-              <div style={{fontSize:11,color:"#888",marginTop:2}}>{desc}</div>
+              <div style={{fontSize:11,color:"#374151",marginTop:2}}>{desc}</div>
             </div>
           ))}
         </div>
-      </section>
+      </div></section>
 
       {/* ── FEATURES ── */}
       <section style={{background:"#fff",padding:"60px max(24px,5vw)"}}>
         <div style={{maxWidth:1180,margin:"0 auto"}}>
           <div style={{textAlign:"center",marginBottom:44}}>
             <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:"clamp(26px,4vw,40px)",fontWeight:800,color:"#0f1c09",marginBottom:10}}>Everything your team needs</h2>
-            <p style={{color:"#666",fontSize:16,maxWidth:520,margin:"0 auto"}}>From submission to settlement, XpensR covers the complete expense lifecycle.</p>
+            <p style={{color:"#374151",fontSize:16,maxWidth:520,margin:"0 auto"}}>From submission to settlement, XpensR covers the complete expense lifecycle.</p>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:20}}>
             {features.map(({icon,title,desc})=>(
-              <div key={title} className="xr-card xr-feat" style={{padding:"24px 22px",borderRadius:14,border:"1px solid #e8f5e2",background:"#fafff8",cursor:"default"}}>
+              <div key={title} className="xr-card xr-feat" style={{padding:"24px 22px",borderRadius:14,border:"1.5px solid #dbeafe",background:"linear-gradient(135deg,#fafff8,#f0f9ff)",cursor:"default"}}>
                 <div style={{fontSize:32,marginBottom:12}}>{icon}</div>
                 <div style={{fontFamily:"'Playfair Display',serif",fontSize:17,fontWeight:700,color:"#0f1c09",marginBottom:6}}>{title}</div>
-                <div style={{fontSize:13,color:"#666",lineHeight:1.6}}>{desc}</div>
+                <div style={{fontSize:13,color:"#374151",lineHeight:1.6}}>{desc}</div>
               </div>
             ))}
           </div>
@@ -1051,7 +1075,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
         <div style={{maxWidth:1180,margin:"0 auto"}}>
           <div style={{textAlign:"center",marginBottom:44}}>
             <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:"clamp(26px,4vw,40px)",fontWeight:800,color:"#0f1c09",marginBottom:10}}>Simple, transparent pricing</h2>
-            <p style={{color:"#666",fontSize:16}}>Pay per user. Cancel anytime. All plans include core features.</p>
+            <p style={{color:"#374151",fontSize:16}}>Pay per user. Cancel anytime. All plans include core features.</p>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:18}}>
             {tiers.map(t=>(
@@ -1059,7 +1083,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
                 {t.popular&&<div style={{position:"absolute",top:0,left:0,right:0,background:"#5CB83A",color:"#fff",textAlign:"center",fontSize:10,fontWeight:700,padding:"4px 0",letterSpacing:1,textTransform:"uppercase"}}>Most Popular</div>}
                 <div style={{padding:`${t.popular?28:20}px 20px 20px`}}>
                   <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,fontWeight:700,color:"#0f1c09",marginBottom:4}}>{t.name}</div>
-                  <div style={{fontSize:11,color:"#888",marginBottom:14}}>{t.users}</div>
+                  <div style={{fontSize:11,color:"#374151",marginBottom:14}}>{t.users}</div>
                   <div style={{fontFamily:"'Playfair Display',serif",fontSize:26,fontWeight:800,color:t.color,marginBottom:4}}>{t.price}</div>
                   <div style={{height:1,background:"#e8f5e2",margin:"16px 0"}}/>
                   {t.features.map(f=>(
@@ -1083,7 +1107,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
           {/* Request form */}
           <div>
             <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:28,fontWeight:800,color:"#0f1c09",marginBottom:8}}>Request a Demo</h2>
-            <p style={{color:"#666",fontSize:14,marginBottom:24,lineHeight:1.6}}>Tell us about your team and we'll set up XpensR for you within 24 hours.</p>
+            <p style={{color:"#374151",fontSize:14,marginBottom:24,lineHeight:1.6}}>Tell us about your team and we'll set up XpensR for you within 24 hours.</p>
             {reqSent?(
               <div style={{background:"#f0fde9",border:"1px solid #bbf7d0",borderRadius:12,padding:24,textAlign:"center"}}>
                 <div style={{fontSize:36,marginBottom:8}}>✅</div>
@@ -1107,7 +1131,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
           {/* Contact info */}
           <div id="contact">
             <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:28,fontWeight:800,color:"#0f1c09",marginBottom:8}}>Contact Us</h2>
-            <p style={{color:"#666",fontSize:14,marginBottom:28,lineHeight:1.6}}>We'd love to hear from you. Reach out anytime.</p>
+            <p style={{color:"#374151",fontSize:14,marginBottom:28,lineHeight:1.6}}>We'd love to hear from you. Reach out anytime.</p>
             {[
               {icon:"🏢",label:"R B Shah & Associates",sub:"Chartered Accountants"},
               {icon:"📍",label:"Rajkot, Gujarat, India",sub:""},
@@ -1119,7 +1143,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
                 <div style={{width:38,height:38,borderRadius:"50%",background:"#f0fde9",display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,flexShrink:0}}>{icon}</div>
                 <div>
                   <div style={{fontSize:14,fontWeight:600,color:"#0f1c09"}}>{label}</div>
-                  {sub&&<div style={{fontSize:12,color:"#888",marginTop:1}}>{sub}</div>}
+                  {sub&&<div style={{fontSize:12,color:"#374151",marginTop:1}}>{sub}</div>}
                 </div>
               </div>
             ))}
@@ -1138,7 +1162,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
       {showLogin&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(6px)"}} onClick={e=>{if(e.target===e.currentTarget)setShowLogin(false);}}>
           <div onClick={e=>e.stopPropagation()} style={{background:`linear-gradient(145deg,${DARK} 0%,#0a1f06 100%)`,borderRadius:20,padding:"32px 32px 28px",width:"min(440px,96vw)",boxShadow:"0 32px 80px rgba(0,0,0,.5)",border:"1px solid rgba(255,255,255,.08)",position:"relative"}}>
-            <button onClick={()=>setShowLogin(false)} style={{position:"absolute",top:14,right:16,background:"none",border:"none",color:"rgba(255,255,255,.4)",fontSize:20,cursor:"pointer",lineHeight:1}}>✕</button>
+            <button onClick={()=>setShowLogin(false)} style={{position:"absolute",top:14,right:16,background:"none",border:"none",color:"rgba(255,255,255,.7)",fontSize:20,cursor:"pointer",lineHeight:1}}>✕</button>
             {/* Logo */}
             <div style={{textAlign:"center",marginBottom:24}}>
               <Logo width={160} dark/>
@@ -1158,7 +1182,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
                   className="login-inp"
                   style={{width:"100%",padding:"13px 40px 13px 16px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}
                   autoComplete="current-password"/>
-                <button onClick={()=>setSPw(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"rgba(255,255,255,.35)",cursor:"pointer",fontSize:16,padding:0,lineHeight:1}}>{showPw?"🙈":"👁"}</button>
+                <button onClick={()=>setSPw(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"rgba(255,255,255,.7)",cursor:"pointer",fontSize:16,padding:0,lineHeight:1}}>{showPw?"🙈":"👁"}</button>
               </div>
               {err&&<div style={{color:"#f87171",fontSize:12,textAlign:"center",padding:"7px 12px",background:"rgba(239,68,68,.1)",borderRadius:8}}>{err}</div>}
               <button onClick={()=>attempt(login,pass)} disabled={busy}
@@ -1498,7 +1522,7 @@ function SaBilling({allCo,DB,userCounts}){
     {allCo.map(co=>{const emps=SB_ENABLED?(userCounts[co.meta.id]||0):(DB[co.meta.id]?.users?.filter(u=>u.role==="employee").length||0);const tier=TIERED.find(t=>emps>=t.min&&emps<=t.max)||TIERED[0];return(
       <Card key={co.meta.id} style={{padding:20}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}><div><div style={{fontWeight:700,color:INK}}>{co.meta.name}</div><div style={{fontSize:11,color:MUTED}}>{emps} employees</div></div><span style={{fontFamily:FD,fontSize:18,fontWeight:700,color:G}}>{fmt(emps*tier.ppu)}/mo</span></div></Card>
     );})}
-    <Card style={{padding:20}}><div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Pricing Tiers</div>
+    <Card style={{padding:20}}><div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Pricing Tiers</div>
       <table style={{width:"100%"}}><thead><tr><th>Users</th><th>₹/user/mo</th></tr></thead><tbody>{TIERED.map(t=><tr key={t.min}><td style={{fontWeight:600,fontSize:12}}>{t.min}–{t.max===999?"50+":t.max}</td><td style={{color:INK,fontWeight:700,fontSize:12}}>{fmt(t.ppu)}</td></tr>)}</tbody></table>
     </Card>
   </div>);
@@ -1696,7 +1720,7 @@ function Profile({user,users,setUsers,onLogout,updateUserInSB,toast}){
 
       {/* Editable fields */}
       <Card style={{padding:20}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Contact Details</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Contact Details</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:14}} className="mob-grid-1">
           <div>
             <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Username</label>
@@ -1718,7 +1742,7 @@ function Profile({user,users,setUsers,onLogout,updateUserInSB,toast}){
 
       {/* Password change */}
       <Card style={{padding:20}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Change Password</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Change Password</div>
         {[["Current Password","cur"],["New Password","nw"],["Confirm New Password","cf"]].map(([l,k])=>(
           <div key={k} style={{marginBottom:11}}>
             <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>{l}</label>
@@ -1730,7 +1754,7 @@ function Profile({user,users,setUsers,onLogout,updateUserInSB,toast}){
       </Card>
       {/* Delegation — managers only */}
       {(user.role==="manager"||user.role==="admin")&&<Card style={{padding:20}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Approval Delegation</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Approval Delegation</div>
         <p style={{color:MUTED,fontSize:11,marginBottom:12}}>While on leave, delegate your approval authority to another manager temporarily. The delegate can approve/reject in your name until the date set.</p>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:14}} className="mob-grid-1">
           <div>
@@ -2841,7 +2865,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     ${overrides.length>0?`<h2>⚠ Edit Overrides (Audit Trail)</h2>
     ${overrides.length>0?'<div class="warn">'+overrides.length+' expense edit(s) were approved by managers this period. See detail below.</div>':''}
     <table><tr><th>Claim ID</th><th>Requested By</th><th>Approved By</th><th>Reason</th><th>Date</th></tr>
-    ${overrides.map(r=>`<tr><td>${r.claim_id||r.claimId}</td><td>${r.requester_name||r.requesterName}</td><td>${r.reviewer_name||r.reviewerName||"—"}</td><td>${r.reason}</td><td>${r.created_at?new Date(r.created_at).toLocaleDateString("en-IN"):""}</td></tr>`).join("")}
+    ${overrides.map(r=>`<tr><td>${r.claim_id||r.claimId}</td><td>${r.requester_name||r.requesterName}</td><td>${r.reviewer_name||r.reviewerName||"—"}</td><td>${r.reason}</td><td>${r.created_at?new Date(r.created_at).toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"}):""}</td></tr>`).join("")}
     </table>`:""}
     <div class="footer">XpensR by RB · This digest should be reviewed by the Finance team. All override entries require supporting justification.</div>
     </body></html>`);
@@ -2859,7 +2883,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       doc.setTextColor(126,217,87);doc.setFont("helvetica","bold");doc.setFontSize(14);doc.text("XpensR",M,14);
       doc.setTextColor(200,200,200);doc.setFontSize(9);doc.text("by RB",M+20,14);
       doc.setTextColor(255,255,255);doc.setFontSize(10);doc.text(title||"Expense Report",W/2,14,{align:"center"});
-      doc.setTextColor(150,150,150);doc.setFontSize(8);doc.text(subtitle||new Date().toLocaleDateString("en-IN"),W-M,14,{align:"right"});
+      doc.setTextColor(150,150,150);doc.setFontSize(8);doc.text(subtitle||new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"}),W-M,14,{align:"right"});
       y=28;
 
       // Summary
@@ -2897,7 +2921,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
       // Footer
       doc.setFont("helvetica","normal");doc.setFontSize(7.5);doc.setTextColor(150,150,150);
-      doc.text(`XpensR by RB · ${activeMeta?.name||""} · Generated ${new Date().toLocaleDateString("en-IN")}`,W/2,200,{align:"center"});
+      doc.text(`XpensR by RB · ${activeMeta?.name||""} · Generated ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})}`,W/2,200,{align:"center"});
 
       // Open PDF in new tab instead of forcing download
       const pdfUrl=doc.output("bloburl");
@@ -2911,7 +2935,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   const printSummary=(clms,empUser,trip)=>exportClaimsPDF(clms,
     trip?`Trip: ${trip.name}`:empUser?`Claims: ${empUser.name}`:"All Claims",
-    `${companyName||""} · ${new Date().toLocaleDateString("en-IN")}`
+    `${companyName||""} · ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})}`
   );
 
   const navItems=[
@@ -2992,7 +3016,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       <div className="mob-hide" style={{width:sidebar?222:60,background:DARK,display:"flex",flexDirection:"column",padding:sidebar?"20px 12px":"20px 8px",position:"sticky",top:0,height:"100vh",overflow:"hidden",transition:"width .22s ease",flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:sidebar?"space-between":"center",marginBottom:14,minHeight:48}}>
           {sidebar&&<div style={{overflow:"hidden",width:140}}><Logo width={140} dark/></div>}
-          <button onClick={()=>setSB(!sidebar)} style={{width:26,height:26,borderRadius:7,background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.1)",color:"rgba(255,255,255,.4)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,flexShrink:0}}>{sidebar?"◀":"▶"}</button>
+          <button onClick={()=>setSB(!sidebar)} style={{width:26,height:26,borderRadius:7,background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.1)",color:"rgba(255,255,255,.7)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,flexShrink:0}}>{sidebar?"◀":"▶"}</button>
         </div>
         {sidebar&&<div style={{background:"rgba(255,255,255,.06)",borderRadius:8,padding:"7px 10px",marginBottom:10}}><div style={{fontSize:9,color:G,fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:1}}>Workspace</div><div style={{color:"#fff",fontSize:11,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{activeMeta.name}</div></div>}
         {sidebar&&<div style={{background:co.policy.reimbursementMode?"#1e3a5f":"#1a3510",border:`1px solid ${co.policy.reimbursementMode?"#3b82f6":G}`,borderRadius:7,padding:"4px 9px",marginBottom:6,fontSize:9,fontWeight:600,color:co.policy.reimbursementMode?"#93c5fd":G}}>{user.role==="admin"?"🔑 Admin":user.role==="manager"?"👔 Manager":user.role==="finance"?"💼 Finance":"👤 Employee"}</div>}
@@ -3012,7 +3036,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           {sidebar?(
             <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:7,cursor:"pointer"}} onClick={()=>setSPro(true)} title="Edit profile">
               <div style={{width:28,height:28,borderRadius:"50%",background:canApprove?G:"#334155",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:700,fontSize:10,flexShrink:0,border:"2px solid rgba(255,255,255,.15)"}}>{user.avatar}</div>
-              <div style={{overflow:"hidden"}}><div style={{color:"#fff",fontSize:11,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{user.name.split(" ")[0]}</div><div style={{color:"rgba(255,255,255,.35)",fontSize:9,textTransform:"capitalize"}}>{user.role==="admin"?"Admin":user.role==="manager"?"Manager":user.role==="finance"?"Finance":"Employee"}</div></div>
+              <div style={{overflow:"hidden"}}><div style={{color:"#fff",fontSize:11,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{user.name.split(" ")[0]}</div><div style={{color:"rgba(255,255,255,.7)",fontSize:9,textTransform:"capitalize"}}>{user.role==="admin"?"Admin":user.role==="manager"?"Manager":user.role==="finance"?"Finance":"Employee"}</div></div>
             </div>
           ):(
             <div style={{display:"flex",justifyContent:"center",marginBottom:7}} onClick={()=>setSPro(true)}>
@@ -3022,7 +3046,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           <button onClick={()=>{
             try{localStorage.removeItem(SESSION_KEY);}catch{}
             window.location.replace("/");
-          }} style={{width:"100%",padding:"6px",background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.1)",borderRadius:6,color:"rgba(255,255,255,.35)",fontFamily:FB,fontSize:10,cursor:"pointer"}}>{sidebar?"Sign Out":"↩"}</button>
+          }} style={{width:"100%",padding:"6px",background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.1)",borderRadius:6,color:"rgba(255,255,255,.7)",fontFamily:FB,fontSize:10,cursor:"pointer"}}>{sidebar?"Sign Out":"↩"}</button>
         </div>
       </div>
 
@@ -3065,13 +3089,13 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
                 toast("✓ Monthly digest sent to finance team");
               }} style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">📊 Digest</Btn>}
             </>}
-            {isEmployee&&<button onClick={()=>setSFR(true)} title="Request Funds" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>💰</button>}
-            <button onClick={()=>setSCam(true)} title="Camera" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>📷</button>
-            <button onClick={()=>{setTab("inbox");markRead();}} style={{position:"relative",background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>🔔{myNotifs.length>0&&<span style={{position:"absolute",top:-4,right:-4,width:16,height:16,background:"#ef4444",borderRadius:"50%",color:"#fff",fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{myNotifs.length}</span>}</button>
-            <button onClick={()=>setSPrefs(true)} title="Display Settings (font size, dark mode)" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>{isDark?"☀":"🌙"}</button>
-            <button onClick={()=>setSSC(true)} title="Keyboard Shortcuts (?)" style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>⌨</button>
-            <button onClick={()=>setSHelp(true)} style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>❓</button>
-            {SB_ENABLED&&<button onClick={loadFromSB} style={{background:"none",border:`1px solid ${BDR}`,borderRadius:8,padding:"6px 9px",cursor:"pointer",fontSize:13}}>🔄</button>}
+            {isEmployee&&<button onClick={()=>setSFR(true)} title="Request Funds" style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>💰</button>}
+            <button onClick={()=>setSCam(true)} title="Camera" style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>📷</button>
+            <button onClick={()=>{setTab("inbox");markRead();}} style={{position:"relative",background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>🔔{myNotifs.length>0&&<span style={{position:"absolute",top:-4,right:-4,width:16,height:16,background:"#ef4444",borderRadius:"50%",color:"#fff",fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{myNotifs.length}</span>}</button>
+            <button onClick={()=>setSPrefs(true)} title="Display Settings (font size, dark mode)" style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>{isDark?"☀":"🌙"}</button>
+            <button onClick={()=>setSSC(true)} title="Keyboard Shortcuts (?)" style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>⌨</button>
+            <button onClick={()=>setSHelp(true)} style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>❓</button>
+            {SB_ENABLED&&<button onClick={loadFromSB} style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>🔄</button>}
           </div>
         </div>
 
@@ -3236,7 +3260,7 @@ function EmpDash({user,myUser,co,setTab}){
         <Btn onClick={()=>setTab("submit")}>＋ New Expense</Btn>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:12,marginBottom:14}}>
-        <Card style={{padding:20,background:`linear-gradient(135deg,${DARK},#2d5a1b)`}}>
+        <Card style={{padding:20,background:`linear-gradient(135deg,#1a5c2a,#2e8b4e)`}}>
           <div style={{fontSize:10,color:"rgba(255,255,255,.55)",fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>{co.policy.reimbursementMode?"Pending Reimbursement":"Wallet Balance"}</div>
           <div style={{fontFamily:FD,fontSize:28,fontWeight:700,color:"#ffffff",marginTop:5}}>{fmt(co.policy.reimbursementMode?myUser?.reimbursable||0:myUser?.balance||0)}</div>
           {!co.policy.reimbursementMode&&<div style={{marginTop:8}}><PBar value={approved} max={(myUser?.balance||0)+approved} h={3} color={G}/></div>}
@@ -3245,16 +3269,16 @@ function EmpDash({user,myUser,co,setTab}){
         <Card style={{padding:16}}><div style={{fontSize:20}}>⏳</div><div style={{fontFamily:FD,fontSize:20,fontWeight:700,color:"#f59e0b",marginTop:3}}>{claims.filter(c=>c.status==="Pending").length}</div><div style={{fontSize:11,color:MUTED}}>Pending</div></Card>
       </div>
       {activeTrip&&<Card style={{padding:16,marginBottom:14}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}><div><div style={{fontSize:10,color:MUTED,textTransform:"uppercase",letterSpacing:1}}>Active Trip</div><div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK}}>{activeTrip.name}</div></div><Badge s="Active" sm/></div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}><div><div style={{fontSize:10,color:MUTED,textTransform:"uppercase",letterSpacing:1}}>Active Trip</div><div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK}}>{activeTrip.name}</div></div><Badge s="Active" sm/></div>
         <div style={{display:"flex",gap:16,marginBottom:6}}>{[["Budget",fmt(activeTrip.budget)],["Spent",fmt(tripSpent)],["Left",fmt(Math.max(0,activeTrip.budget-tripSpent))]].map(([k,v])=><div key={k}><div style={{fontSize:9,color:MUTED}}>{k}</div><div style={{fontWeight:700,color:INK,fontSize:12}}>{v}</div></div>)}</div>
         <PBar value={tripSpent} max={activeTrip.budget}/>
       </Card>}
       <Card>
-        <div style={{padding:"12px 16px",borderBottom:`1px solid ${BDR}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK}}>Recent Claims</span><Btn v="outline" onClick={()=>setTab("claims")} style={{fontSize:10,padding:"4px 9px"}}>View All →</Btn></div>
+        <div style={{padding:"12px 16px",borderBottom:`1px solid ${BDR}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK}}>Recent Claims</span><Btn v="outline" onClick={()=>setTab("claims")} style={{fontSize:10,padding:"4px 9px"}}>View All →</Btn></div>
         <table style={{width:"100%"}}>
           <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Amount</th><th>Status</th></tr></thead>
           <tbody>{claims.slice(0,5).map(c=><tr key={c.id} className="rh">
-            <td style={{color:MUTED,fontSize:11}}>{c.date}</td>
+            <td style={{color:MUTED,fontSize:11}}>{fmtDate(c.date)}</td>
             <td style={{fontSize:12}}>{c.anomaly&&<span title="Anomaly" style={{marginRight:3}}>🔍</span>}{c.desc}</td>
             <td><span style={{background:GL,color:GD,padding:"1px 6px",borderRadius:4,fontSize:10,fontWeight:600}}>{c.category}</span></td>
             <td style={{fontWeight:700,fontSize:12}}>{fmt(c.amount)}</td>
@@ -3302,7 +3326,7 @@ function MgrDash({co,meta,setTab,getUser,myUserId}){
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:14}}>
         <Card>
-          <div style={{padding:"12px 16px",borderBottom:`1px solid ${BDR}`}}><span style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK}}>Employee Balances</span></div>
+          <div style={{padding:"12px 16px",borderBottom:`1px solid ${BDR}`}}><span style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK}}>Employee Balances</span></div>
           {emps.map(e=>{
             const approvedSpend=co.claims.filter(c=>c.empId===e.id&&c.status==="Approved").reduce((s,c)=>s+c.amount,0);
             const walletBalance=co.policy.reimbursementMode?(e.reimbursable||0):(e.balance||0);
@@ -3321,7 +3345,7 @@ function MgrDash({co,meta,setTab,getUser,myUserId}){
           );})}
         </Card>
         <Card style={{padding:18}}>
-          <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Department Budgets</div>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Department Budgets</div>
           {Object.entries(co.policy.departmentBudgets||{}).filter(([d,b])=>b>0&&(isAdmin||d===myDept)).map(([dept,budget])=>(
             <div key={dept} style={{marginBottom:10}}>
               <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}><span style={{color:MUTED}}>{dept}</span><span style={{fontWeight:600}}>{fmt(deptClaims.filter(c=>getUser(c.empId)?.dept===dept&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0).toLocaleString("en-IN"))} / {fmt(budget)}</span></div>
@@ -3389,7 +3413,7 @@ function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,subm
             const editWindowOpen=!isManager&&hasEditWindow(c.id);
             return(<tr key={c.id} className="rh" onClick={()=>setMdl({type:"detail",data:c})}>
               <td style={{fontFamily:"monospace",color:GD,fontSize:10,fontWeight:600}}>{c.id}</td>
-              <td style={{color:MUTED,fontSize:11}}>{c.date}</td>
+              <td style={{color:MUTED,fontSize:11}}>{fmtDate(c.date)}</td>
               {isManager&&<td><div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:22,height:22,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,fontWeight:700,color:GD}}>{e?.avatar}</div><span style={{fontSize:12}}>{e?.name}</span></div></td>}
               <td className="mob-hide" style={{fontSize:10,color:MUTED}}>{trip?.name?.slice(0,14)||"—"}</td>
               <td><span style={{background:GL,color:GD,padding:"1px 6px",borderRadius:4,fontSize:10,fontWeight:600}}>{CI[c.category]} {c.category}</span></td>
@@ -4114,7 +4138,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
         <Btn onClick={()=>setShowNew(!showNew)}>{showNew?"✕ Cancel":"＋ New Trip / Period"}</Btn>
       </div>
       {showNew&&<Card style={{padding:20,marginBottom:12,borderColor:G,background:GL}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>New Trip / Period</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>New Trip / Period</div>
         <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr",gap:10,marginBottom:10}} className="mob-grid-1">
           <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Name *</label><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Delhi Trip Apr 2026" style={inpS}/></div>
           <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Type</label><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})} style={{...inpS,appearance:"none"}}><option value="trip">Trip</option><option value="period">Period</option></select></div>
@@ -4206,7 +4230,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                   <span style={{fontSize:9,background:"#f3f4f6",padding:"1px 5px",borderRadius:3,color:MUTED,textTransform:"capitalize"}}>{t.type}</span>
                   <span style={{fontSize:10,color:MUTED}}>{exp?"▲":"▼"}</span>
                 </div>
-                <div style={{fontSize:10,color:MUTED,marginTop:1}}>{t.startDate} → {t.endDate}</div>
+                <div style={{fontSize:10,color:MUTED,marginTop:1}}>{fmtDate(t.startDate)} → {fmtDate(t.endDate)}</div>
               </div>
               <div style={{display:"flex",gap:6,flexShrink:0}}>
                 {(isManager||isAdmin)&&t.status==="pending_approval"&&<>
@@ -4288,7 +4312,7 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
                 <div>
                   <div style={{fontWeight:700,color:INK,fontSize:13}}>{claimId}</div>
-                  <div style={{color:MUTED,fontSize:11,marginTop:1}}>by {req.requester_name||req.requesterName} · {req.created_at?new Date(req.created_at).toLocaleDateString("en-IN"):""}</div>
+                  <div style={{color:MUTED,fontSize:11,marginTop:1}}>by {req.requester_name||req.requesterName} · {req.created_at?new Date(req.created_at).toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"}):""}</div>
                   <div style={{background:"#fef3c7",borderRadius:6,padding:"6px 10px",marginTop:6,fontSize:12,color:"#92400e"}}><strong>Reason:</strong> {req.reason}</div>
                 </div>
                 <div style={{display:"flex",gap:7,flexShrink:0}}>
@@ -4302,14 +4326,14 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
       </div>}
       {/* ── Pending Trips ── */}
       {pendingTrips.length>0&&<Card style={{padding:16,marginBottom:16,borderColor:"#fcd34d",background:"#fffbeb"}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:"#92400e",marginBottom:10}}>⏳ Trips Awaiting Approval ({pendingTrips.length})</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:"#92400e",marginBottom:10}}>⏳ Trips Awaiting Approval ({pendingTrips.length})</div>
         {pendingTrips.map(t=>{
           const creator=getUser(t.createdBy);
           return(
             <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",background:"#fff",borderRadius:9,marginBottom:7,border:`1px solid #fcd34d`}}>
               <div>
                 <div style={{fontWeight:700,fontSize:13,color:INK}}>{t.name}</div>
-                <div style={{fontSize:11,color:MUTED}}>{t.startDate} → {t.endDate} · Created by {creator?.name||"Unknown"} ({creator?.dept||"—"})</div>
+                <div style={{fontSize:11,color:MUTED}}>{fmtDate(t.startDate)} → {fmtDate(t.endDate)} · Created by {creator?.name||"Unknown"} ({creator?.dept||"—"})</div>
               </div>
               <div style={{display:"flex",gap:7,flexShrink:0}}>
                 <Btn onClick={()=>approveTrip&&approveTrip(t)} style={{padding:"6px 12px",fontSize:11}}>✓ Approve Trip</Btn>
@@ -4364,7 +4388,7 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
                     {c.weekendFlag&&<span style={{background:"#dbeafe",color:"#1d4ed8",fontSize:9,padding:"1px 5px",borderRadius:4,fontWeight:700}}>📅 WKD</span>}
                   </div>
                   <div style={{fontWeight:600,color:INK,fontSize:13}}>{c.desc}</div>
-                  <div style={{fontSize:10,color:MUTED}}>{e?.name} · {c.category} · {trip?.name} · {c.date}</div>
+                  <div style={{fontSize:10,color:MUTED}}>{e?.name} · {c.category} · {trip?.name} · {fmtDate(c.date)}</div>
                   {c.anomaly&&c.anomalyReasons?.length>0&&<div style={{fontSize:10,color:"#7c3aed",marginTop:3,background:"#ede9fe",padding:"3px 7px",borderRadius:5}}>⚠ {c.anomalyReasons.join(" · ")}</div>}
                   {c.receipts?.length>0&&<div style={{display:"flex",gap:5,marginTop:6,flexWrap:"wrap",alignItems:"center"}}>
                     {c.receipts.map((r,i)=>(
@@ -4467,7 +4491,7 @@ function SpendingBehaviourChart({claims,users,getUser,isManager}){
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginTop:16}} className="mob-grid-1">
       {/* Top spenders */}
       <Card style={{padding:16}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>🏆 Top Spenders</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>🏆 Top Spenders</div>
         {topEmps.map(([empId,amt])=>{
           const u=getUser(empId);
           const pct=Math.round(amt/maxSpend*100);
@@ -4488,7 +4512,7 @@ function SpendingBehaviourChart({claims,users,getUser,isManager}){
       </Card>
       {/* Category breakdown */}
       <Card style={{padding:16}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>📊 Spending by Category</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>📊 Spending by Category</div>
         {topCats.map(([cat,amt])=>{
           const total=Object.values(catSpend).reduce((a,b)=>a+b,0)||1;
           const pct=Math.round(amt/total*100);
@@ -4546,13 +4570,13 @@ function Analytics({claims,trips,users,isManager,getUser,policy,printSummary,use
       <SpendingBehaviourChart claims={claims} users={users} getUser={getUser} isManager={isManager}/>
 
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:14}}>
-        {[{l:"Total Spent",v:fmt(total),i:"💰"},{l:"Avg Claim",v:fmt(approved.length?Math.round(total/approved.length):0),i:"📊"},{l:"Anomalies",v:anomalies.length,i:"🔍"},{l:"Auto-Approved",v:`${autoRate}%`,i:"⚡"}].map((s,i)=>(
+        {(isManager?[{l:"Total Spent",v:fmt(total),i:"💰"},{l:"Avg Claim",v:fmt(approved.length?Math.round(total/approved.length):0),i:"📊"},{l:"Anomalies",v:anomalies.length,i:"🔍"},{l:"Auto-Approved",v:`${autoRate}%`,i:"⚡"}]:[{l:"Total Spent",v:fmt(total),i:"💰"},{l:"Avg Claim",v:fmt(approved.length?Math.round(total/approved.length):0),i:"📊"},{l:"Claims",v:approved.length,i:"📋"},{l:"Trips",v:[...new Set(approved.map(c=>c.tripId))].length,i:"🗂️"}]).map((s,i)=>(
           <Card key={i} style={{padding:14}}><div style={{fontSize:20}}>{s.i}</div><div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK,marginTop:3}}>{s.v}</div><div style={{fontSize:10,color:MUTED,marginTop:1}}>{s.l}</div></Card>
         ))}
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr",gap:12,marginBottom:12}}>
         <Card style={{padding:18}}>
-          <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Spend by Category</div>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Spend by Category</div>
           {byCat.length===0?<div style={{color:MUTED,fontSize:12}}>No data for selected range</div>:byCat.map((d,i)=>(
             <div key={d.cat} style={{marginBottom:10}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}><span style={{fontSize:12,color:"var(--ink)"}}>{CI[d.cat]} {d.cat}</span><span style={{fontWeight:700,fontSize:12,color:INK}}>{fmt(d.amount)}</span></div>
@@ -4561,7 +4585,7 @@ function Analytics({claims,trips,users,isManager,getUser,policy,printSummary,use
           ))}
         </Card>
         <Card style={{padding:18}}>
-          <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Month-on-Month Trend</div>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Month-on-Month Trend</div>
           {monthly.length===0?<div style={{color:MUTED,fontSize:12}}>No data</div>:(
             <div style={{display:"flex",alignItems:"flex-end",gap:7,height:110}}>
               {monthly.map((d,i)=>(
@@ -4576,7 +4600,7 @@ function Analytics({claims,trips,users,isManager,getUser,policy,printSummary,use
         </Card>
       </div>
       {isManager&&leaderboard.some(r=>r.spent>0)&&<Card style={{padding:18,marginBottom:12}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Employee Spend Leaderboard</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Employee Spend Leaderboard</div>
         <table style={{width:"100%"}}>
           <thead><tr><th>#</th><th>Employee</th><th>Dept</th><th>Claims</th><th>Total</th><th>vs Dept Budget</th></tr></thead>
           <tbody>{leaderboard.filter(r=>r.spent>0).map((row,i)=>(
@@ -4591,17 +4615,17 @@ function Analytics({claims,trips,users,isManager,getUser,policy,printSummary,use
           ))}</tbody>
         </table>
       </Card>}
-      {anomalies.length>0&&<Card style={{padding:18}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:"#7c3aed",marginBottom:10}}>🔍 Anomaly Report</div>
+      {isManager&&anomalies.length>0&&<Card style={{padding:18}}>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:"#dc2626",marginBottom:10}}>🔍 Anomaly Report</div>
         {anomalies.map(c=>{const e=getUser(c.empId);return(<div key={c.id} style={{padding:"8px 0",borderBottom:`1px solid #f3f4f6`,display:"flex",gap:9,alignItems:"flex-start"}}>
           <span style={{fontFamily:"monospace",fontSize:10,color:GD,fontWeight:600,flexShrink:0}}>{c.id}</span>
-          <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600,color:INK}}>{c.desc} — {e?.name}</div><div style={{fontSize:10,color:"#7c3aed",marginTop:2}}>{(c.anomalyReasons||[]).join(" · ")}</div></div>
+          <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600,color:INK}}>{c.desc} — {e?.name}</div><div style={{fontSize:10,color:"#dc2626",marginTop:2}}>{(c.anomalyReasons||[]).join(" · ")}</div></div>
           <div style={{fontWeight:700,fontSize:12,color:INK,flexShrink:0}}>{fmt(c.amount)}</div>
           <Badge s={c.autoApproved&&c.status==="Approved"?"Auto-Approved":c.status} sm/>
         </div>);})}
       </Card>}
       <Card style={{padding:18,marginTop:12}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Trip Summary</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Trip Summary</div>
         {trips.map(t=>{const s=claims.filter(c=>c.tripId===t.id&&c.status!=="Rejected").reduce((a,c)=>a+c.amount,0);return(
           <div key={t.id} style={{marginBottom:12,paddingBottom:12,borderBottom:`1px solid ${BDR}`}}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}><span style={{fontSize:12,fontWeight:600,color:INK}}>{t.name}</span><Badge s={t.status==="active"?"Active":"Closed"} sm/></div>
@@ -4793,7 +4817,7 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
       </div>}
 
       {showAdd&&canAdd&&<Card style={{padding:18,marginBottom:14,borderColor:G,background:GL}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>New Employee</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>New Employee</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}}>
           <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Full Name *</label>
             <input value={form.name} onChange={handleNameChange} placeholder="Riya Mehta" style={inpS}/></div>
@@ -4944,7 +4968,7 @@ function EditRequestsTab({editRequests,claims,getUser,isManager,approveEditReque
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
                 <div>
                   <div style={{fontWeight:700,color:INK,fontSize:13}}>{req.claim_id||req.claimId}</div>
-                  <div style={{color:MUTED,fontSize:11,marginTop:1}}>by {req.requester_name||req.requesterName} · {req.created_at?new Date(req.created_at).toLocaleDateString("en-IN"):""}</div>
+                  <div style={{color:MUTED,fontSize:11,marginTop:1}}>by {req.requester_name||req.requesterName} · {req.created_at?new Date(req.created_at).toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"}):""}</div>
                   {claim&&<div style={{fontSize:11,color:"var(--ink)",marginTop:4}}>Claim: {claim.desc} — {fmt(claim.amount)}</div>}
                   <div style={{background:"#fef3c7",borderRadius:6,padding:"6px 10px",marginTop:6,fontSize:12,color:"#92400e"}}><strong>Reason:</strong> {req.reason}</div>
                 </div>
@@ -4976,7 +5000,7 @@ function EditRequestsTab({editRequests,claims,getUser,isManager,approveEditReque
                 <td style={{fontSize:11,color:MUTED,maxWidth:180}}>{req.reason}</td>
                 <td><Badge s={req.status==="Approved"?"Approved":"Rejected"} sm/></td>
                 <td style={{fontSize:11,color:MUTED}}>{req.reviewer_name||req.reviewerName||"—"}</td>
-                <td style={{fontSize:10,color:MUTED}}>{req.created_at?new Date(req.created_at).toLocaleDateString("en-IN"):""}</td>
+                <td style={{fontSize:10,color:MUTED}}>{req.created_at?new Date(req.created_at).toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"}):""}</td>
               </tr>
             ))}</tbody>
           </table>
@@ -5004,7 +5028,7 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         {/* Core */}
         <Card style={{padding:18}}>
-          <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Core Policy</div>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Core Policy</div>
           {[["Auto-Approve Limit (₹)","autoApproveLimit"],["Receipt Mandatory Above (₹)","receiptMandatoryAbove"],["Dual Approval Required Above (₹) — 0 to disable","dualApproveAbove"]].map(([l,k])=>(
             <div key={k} style={{marginBottom:12}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>{l}</label><input type="number" value={policy[k]||0} onChange={e=>setPolicy({...policy,[k]:parseFloat(e.target.value)||0})} style={inpS}/>
               {k==="dualApproveAbove"&&<div style={{fontSize:10,color:MUTED,marginTop:2}}>Manager + Admin both must approve</div>}
@@ -5028,7 +5052,7 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
         </Card>
         {/* Vendor */}
         <Card style={{padding:18}}>
-          <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Vendor Policy</div>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Vendor Policy</div>
           <div style={{display:"flex",gap:7,marginBottom:10}}>
             {["whitelist","blacklist"].map(m=><button key={m} onClick={()=>setVMode(m)} style={{flex:1,padding:"6px",borderRadius:7,border:`1.5px solid ${vMode===m?G:BDR}`,background:vMode===m?GL:"#fff",color:vMode===m?GD:MUTED,fontFamily:FB,fontSize:11,fontWeight:600,cursor:"pointer",textTransform:"capitalize"}}>{m==="whitelist"?"✓ Whitelist":"✗ Blacklist"}</button>)}
           </div>
@@ -5046,7 +5070,7 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
         </Card>
         {/* Category % */}
         <Card style={{padding:18}}>
-          <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>Category % Limits per Trip</div>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>Category % Limits per Trip</div>
           <div style={{fontSize:11,color:MUTED,marginBottom:10}}>Exceeding → sent to manager for approval</div>
           {CATS.map(cat=>(
             <div key={cat} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
@@ -5057,14 +5081,14 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
         </Card>
         {/* Dept budgets */}
         <Card style={{padding:18}}>
-          <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Department Budgets (₹/month)</div>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Department Budgets (₹/month)</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
             {DEPTS.map(dept=>(<div key={dept}><label style={{fontSize:9,color:MUTED,fontWeight:700,display:"block",marginBottom:2,textTransform:"uppercase"}}>{dept}</label><input type="number" value={policy.departmentBudgets?.[dept]||0} onChange={e=>setPolicy({...policy,departmentBudgets:{...(policy.departmentBudgets||{}),[dept]:parseFloat(e.target.value)||0}})} style={inpS}/></div>))}
           </div>
         </Card>
         {/* Scheduled reports */}
         <Card style={{padding:18}}>
-          <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Scheduled Email Reports</div>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Scheduled Email Reports</div>
           <Toggle on={policy.scheduledReports?.enabled} onClick={()=>setPolicy({...policy,scheduledReports:{...policy.scheduledReports,enabled:!policy.scheduledReports?.enabled}})} label="Enable Scheduled Reports" sub="Auto-email PDF reports"/>
           {policy.scheduledReports?.enabled&&<div style={{marginTop:10}}>
             <div style={{marginBottom:10}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Frequency</label>
@@ -5078,7 +5102,7 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
         </Card>
         {/* Subscription */}
         <Card style={{padding:18}}>
-          <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Subscription</div>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Subscription</div>
           <div style={{background:GL,border:`1px solid ${GM}`,borderRadius:9,padding:"10px 12px",marginBottom:12}}>
             <div style={{fontSize:9,color:GD,fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>Current Bill</div>
             <div style={{fontFamily:FD,fontSize:22,fontWeight:700,color:INK,marginTop:3}}>{fmt(emps*tier.ppu)}<span style={{fontSize:11,fontWeight:400,color:MUTED}}>/month</span></div>
@@ -5092,7 +5116,7 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
 
       {/* ── Expense Categories ── */}
       <Card style={{padding:18,marginTop:12}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Expense Categories</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Expense Categories</div>
         <p style={{color:MUTED,fontSize:11,marginBottom:12}}>Employees select from these categories when submitting expenses. "Other" is always available.</p>
         <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>
           {(policy.categories||DEFAULT_CATS).map((cat,i)=>(
@@ -5112,7 +5136,7 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
 
       {/* ── Notifications ── */}
       <Card style={{padding:18,marginTop:12}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Notifications</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Notifications</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}} className="mob-grid-1">
           <div>
             <div style={{fontSize:11,fontWeight:700,color:MUTED,marginBottom:8,textTransform:"uppercase"}}>📧 Email (via Resend)</div>
@@ -5141,7 +5165,7 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
 
       {/* ── Departments ── */}
       <Card style={{padding:18,marginTop:12}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Departments</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Departments</div>
         <p style={{color:MUTED,fontSize:11,marginBottom:12}}>Employees are assigned to these departments. Edit or add to match your company structure.</p>
         <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>
           {(policy.departments||DEFAULT_DEPTS).map((d,i)=>(
@@ -5160,7 +5184,7 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
 
       {/* ── Brand Color ── */}
       <Card style={{padding:18,marginTop:12}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Brand Color</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Brand Color</div>
         <p style={{color:MUTED,fontSize:11,marginBottom:14}}>Choose your company's accent color. Applied across the sidebar, buttons, and badges.</p>
         <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
           {["#7ED957","#2563eb","#7c3aed","#db2777","#ea580c","#0891b2","#16a34a","#dc2626","#f59e0b","#374151"].map(c=>(
@@ -5209,7 +5233,7 @@ function TripApprovalsTab({trips,getUser,approveTrip,rejectTrip,isAdmin}){
               <div style={{flex:1}}>
                 <div style={{fontFamily:FD,fontSize:15,fontWeight:700,color:INK,marginBottom:4}}>{t.name}</div>
                 <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:8}}>
-                  <span style={{fontSize:11,color:MUTED}}>📅 {t.startDate} → {t.endDate}</span>
+                  <span style={{fontSize:11,color:MUTED}}>📅 {fmtDate(t.startDate)} → {fmtDate(t.endDate)}</span>
                   <span style={{fontSize:11,color:MUTED}}>📁 {t.type}</span>
                   {t.currency&&t.currency!=="INR"&&<span style={{background:"#eff6ff",color:"#1d4ed8",padding:"1px 7px",borderRadius:4,fontSize:10,fontWeight:600}}>{t.currency}</span>}
                   {t.projectCode&&<span style={{background:GL,color:GD,padding:"1px 7px",borderRadius:4,fontSize:10,fontWeight:600}}>{t.projectCode}</span>}
@@ -5230,12 +5254,12 @@ function TripApprovalsTab({trips,getUser,approveTrip,rejectTrip,isAdmin}){
       })}
 
       {recent.length>0&&<>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,margin:"20px 0 10px"}}>Recently Decided</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,margin:"20px 0 10px"}}>Recently Decided</div>
         {recent.map(t=>(
           <div key={t.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",background:"#fff",borderRadius:9,marginBottom:7,border:`1px solid ${BDR}`,opacity:0.7}}>
             <div>
               <div style={{fontWeight:600,fontSize:13,color:INK}}>{t.name}</div>
-              <div style={{fontSize:10,color:MUTED}}>{getUser(t.createdBy)?.name||"Unknown"} · {t.startDate}</div>
+              <div style={{fontSize:10,color:MUTED}}>{getUser(t.createdBy)?.name||"Unknown"} · {fmtDate(t.startDate)}</div>
             </div>
             <Badge s={t.status==="active"?"Active":"Rejected"} sm/>
           </div>
@@ -5259,7 +5283,7 @@ function MyHistoryTab({user,trips,claims,getUser,exportClaimsPDF}){
     doc.setFillColor(15,28,9);doc.rect(0,0,W,26,"F");
     doc.setTextColor(126,217,87);doc.setFont("helvetica","bold");doc.setFontSize(16);doc.text("XpensR",M,16);
     doc.setTextColor(200,200,200);doc.setFontSize(9);doc.text("Client Reimbursement Claim",M+22,16);
-    doc.setTextColor(150,150,150);doc.text(new Date().toLocaleDateString("en-IN"),W-M,16,{align:"right"});
+    doc.setTextColor(150,150,150);doc.text(new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"}),W-M,16,{align:"right"});
     y=32;
     doc.setTextColor(20,20,20);doc.setFontSize(13);doc.setFont("helvetica","bold");
     doc.text("CLIENT REIMBURSEMENT CLAIM",W/2,y,{align:"center"});y+=7;
@@ -5289,7 +5313,7 @@ function MyHistoryTab({user,trips,claims,getUser,exportClaimsPDF}){
     doc.text("I hereby certify that the above expenses were incurred for business purposes",M,y);y+=5;
     doc.text("and are claimed for reimbursement as per company policy.",M,y);y+=12;
     doc.text("Signature: ________________________",M,y);
-    doc.text(`Date: ${new Date().toLocaleDateString("en-IN")}`,W-M,y,{align:"right"});
+    doc.text(`Date: ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})}`,W-M,y,{align:"right"});
     doc.setFontSize(7.5);doc.setTextColor(150,150,150);
     doc.text("Generated by XpensR by RB · claim-x-beta.vercel.app",W/2,286,{align:"center"});
     doc.save(`Claim_${trip.name.replace(/\s+/g,"_")}_${user.name.replace(/\s+/g,"_")}.pdf`);
@@ -5314,7 +5338,7 @@ function MyHistoryTab({user,trips,claims,getUser,exportClaimsPDF}){
                   <Badge s={t.status==="active"?"Active":t.status==="closed"?"Closed":t.status==="pending_approval"?"Pending":"Rejected"} sm/>
                   {t.tripMode==="client"&&<span style={{background:"#eff6ff",color:"#2563eb",fontSize:9,padding:"1px 7px",borderRadius:4,fontWeight:700}}>CLIENT</span>}
                 </div>
-                <div style={{fontSize:10,color:MUTED}}>{t.startDate} → {t.endDate}{t.projectCode&&` · ${t.projectCode}`}</div>
+                <div style={{fontSize:10,color:MUTED}}>{fmtDate(t.startDate)} → {fmtDate(t.endDate)}{t.projectCode&&` · ${t.projectCode}`}</div>
               </div>
               <div style={{textAlign:"right"}}>
                 <div style={{fontFamily:FD,fontSize:15,fontWeight:700,color:INK}}>{fmt(total)}</div>
@@ -5332,7 +5356,7 @@ function MyHistoryTab({user,trips,claims,getUser,exportClaimsPDF}){
                 <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 18px",borderBottom:`1px solid ${BDR}`,background:i%2===0?"transparent":"rgba(0,0,0,.01)"}}>
                   <div style={{flex:1}}>
                     <div style={{fontSize:12,fontWeight:600,color:INK}}>{c.desc}</div>
-                    <div style={{fontSize:10,color:MUTED}}>{c.date} · {c.category} · {c.vendor||"—"}</div>
+                    <div style={{fontSize:10,color:MUTED}}>{fmtDate(c.date)} · {c.category} · {c.vendor||"—"}</div>
                   </div>
                   <div style={{textAlign:"right"}}>
                     <div style={{fontWeight:700,fontSize:13,color:INK}}>{fmt(c.amount)}</div>
@@ -5366,7 +5390,7 @@ function TravelCalendar({trips,users,isAdmin,myDept}){
   return(
     <Card style={{padding:16,marginBottom:16}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-        <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK}}>✈ Travelling Today</div>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK}}>✈ Travelling Today</div>
         <span style={{fontSize:10,color:MUTED}}>{td}</span>
       </div>
       {travellers.length===0
@@ -5377,7 +5401,7 @@ function TravelCalendar({trips,users,isAdmin,myDept}){
               <div style={{width:26,height:26,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:GD,fontSize:9,flexShrink:0}}>{u.avatar||inits(u.name)}</div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontWeight:600,fontSize:12,color:INK}}>{u.name} <span style={{fontSize:10,color:MUTED}}>({u.dept||"—"})</span></div>
-                <div style={{fontSize:10,color:MUTED,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.name} · Returns {t.endDate}</div>
+                <div style={{fontSize:10,color:MUTED,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.name} · Returns {fmtDate(t.endDate)}</div>
               </div>
             </div>
           ))}
@@ -5452,7 +5476,7 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
     doc.setFont("helvetica","bold");doc.setFontSize(11);doc.setTextColor(20,20,20);
     doc.text(t.name||"",ML,y);y+=5;
     doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(100,100,100);
-    doc.text(`${t.startDate||""} → ${t.endDate||""} · ${t.tripMode==="reimbursement"?"Reimbursement Mode":"Balance Mode"} · Budget: ₹${(t.budget||0).toLocaleString("en-IN")} · Status: ${t.status||""}`,ML,y);y+=8;
+    doc.text(`${fmtDate(t.startDate)||""} → ${fmtDate(t.endDate)||""} · ${t.tripMode==="reimbursement"?"Reimbursement Mode":"Balance Mode"} · Budget: ₹${(t.budget||0).toLocaleString("en-IN")} · Status: ${t.status||""}`,ML,y);y+=8;
     // Table
     const cols=[{h:"Employee",w:34},{h:"Dept",w:22},{h:"Allocated",w:24},{h:"Topups",w:20},{h:"Total Funds",w:24},{h:"Approved",w:24},{h:"Rejected",w:24},{h:"Pending",w:22},{h:"Bal Today",w:26},{h:"Bal End-Trip",w:26},{h:"Mode",w:22}];
     doc.setFillColor(21,128,61);doc.rect(ML,y,CW,7,"F");
@@ -5484,7 +5508,7 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
     doc.text(`Total Approved: ₹${totApproved.toLocaleString("en-IN")}   Pending: ₹${totPending.toLocaleString("en-IN")}   To Recover: ₹${totRecover.toLocaleString("en-IN")}   To Pay: ₹${totPay.toLocaleString("en-IN")}`,ML,y);
     // Footer
     doc.setFont("helvetica","normal");doc.setFontSize(6.5);doc.setTextColor(150,150,150);
-    doc.text(`XpensR by RB · ${companyName||""} · Ledger as of ${new Date().toLocaleDateString("en-IN")}`,W/2,200,{align:"center"});
+    doc.text(`XpensR by RB · ${companyName||""} · Ledger as of ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})}`,W/2,200,{align:"center"});
     doc.output("dataurlnewwindow");
   };
 
@@ -5719,7 +5743,7 @@ function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn}){
                     <div style={{fontSize:13,fontWeight:600,color:INK}}>{t.name}
                       <span style={{marginLeft:6,fontSize:9,background:t.status==="active"?"#dcfce7":t.status==="closed"?"#f3f4f6":"#fef3c7",color:t.status==="active"?"#16a34a":t.status==="closed"?"#6b7280":"#92400e",padding:"1px 6px",borderRadius:4,fontWeight:700}}>{t.status}</span>
                     </div>
-                    <div style={{fontSize:10,color:MUTED}}>{t.startDate}→{t.endDate} · {approved.length} approved, {rejected.length} rejected, {pending.length} pending</div>
+                    <div style={{fontSize:10,color:MUTED}}>{fmtDate(t.startDate)}→{fmtDate(t.endDate)} · {approved.length} approved, {rejected.length} rejected, {pending.length} pending</div>
                   </div>
                   <div style={{textAlign:"right",flexShrink:0}}>
                     <div style={{fontWeight:700,fontSize:13,color:balance>0?"#dc2626":balance<0?"#16a34a":MUTED}}>
@@ -5748,7 +5772,7 @@ function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn}){
                     </tr></thead>
                     <tbody>{[...approved,...rejected,...pending].sort((a,b)=>b.amount-a.amount).map((c,i)=>(
                       <tr key={c.id} style={{borderBottom:`1px solid ${BDR}`,background:i%2===0?"transparent":"rgba(0,0,0,.01)"}}>
-                        <td style={{padding:"4px 6px",color:MUTED,fontSize:10}}>{c.date}</td>
+                        <td style={{padding:"4px 6px",color:MUTED,fontSize:10}}>{fmtDate(c.date)}</td>
                         <td style={{padding:"4px 6px",color:INK,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.desc}</td>
                         <td style={{padding:"4px 6px",color:MUTED}}>{c.category}</td>
                         <td style={{padding:"4px 6px"}}><Badge s={c.status} sm/></td>
@@ -5875,7 +5899,7 @@ function SettlementsTab({trips,claims,topups,users,getUser,isAdmin,myDept,cid,sb
                   style={{display:"flex",alignItems:"center",gap:10,padding:"10px 18px 10px 28px",cursor:"pointer"}}>
                   <div style={{flex:1}}>
                     <div style={{fontSize:13,fontWeight:600,color:INK}}>{t.name} {t.settled_at&&<span style={{fontSize:9,background:"#dcfce7",color:"#16a34a",padding:"1px 6px",borderRadius:4,marginLeft:5}}>✓ Settled</span>}</div>
-                    <div style={{fontSize:10,color:MUTED}}>{t.startDate} → {t.endDate} · {isBalance?"Balance":"Reimbursement"}</div>
+                    <div style={{fontSize:10,color:MUTED}}>{fmtDate(t.startDate)} → {fmtDate(t.endDate)} · {isBalance?"Balance":"Reimbursement"}</div>
                   </div>
                   <div style={{textAlign:"right",flexShrink:0}}>
                     <div style={{fontSize:12,fontWeight:700,color:settlement>0?"#dc2626":settlement<0?"#16a34a":MUTED}}>
@@ -5905,7 +5929,7 @@ function SettlementsTab({trips,claims,topups,users,getUser,isAdmin,myDept,cid,sb
                     <thead><tr><th style={{textAlign:"left",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase"}}>Date</th><th style={{textAlign:"left",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase"}}>Description</th><th style={{textAlign:"left",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase"}}>Category</th><th style={{textAlign:"right",padding:"4px 6px",color:MUTED,fontSize:9,textTransform:"uppercase"}}>Amount</th></tr></thead>
                     <tbody>{tc.map(c=>(
                       <tr key={c.id} style={{borderTop:`1px solid ${BDR}`}}>
-                        <td style={{padding:"4px 6px",color:MUTED}}>{c.date}</td>
+                        <td style={{padding:"4px 6px",color:MUTED}}>{fmtDate(c.date)}</td>
                         <td style={{padding:"4px 6px",color:INK}}>{c.desc?.slice(0,25)||"—"}</td>
                         <td style={{padding:"4px 6px",color:MUTED}}>{c.category}</td>
                         <td style={{padding:"4px 6px",textAlign:"right",fontWeight:600,color:INK}}>{fmt(c.amount)}</td>
@@ -5959,7 +5983,7 @@ function FinanceTab({claims,trips,getUser,users,isAdmin,policy,onExportPDF}){
             const trip=trips.find(t=>t.id===c.tripId);
             return(<tr key={c.id} className="rh">
               <td style={{fontFamily:"monospace",color:GD,fontSize:10,fontWeight:600}}>{c.id}</td>
-              <td style={{color:MUTED,fontSize:11}}>{c.date}</td>
+              <td style={{color:MUTED,fontSize:11}}>{fmtDate(c.date)}</td>
               <td style={{fontSize:12}}>{e?.name||"—"}</td>
               <td><span style={{background:GL,color:GD,padding:"1px 6px",borderRadius:4,fontSize:10}}>{e?.dept||"—"}</span></td>
               <td style={{fontSize:10,color:MUTED}}>{trip?.name?.slice(0,16)||"—"}</td>
@@ -6210,10 +6234,10 @@ Be concise, helpful, and use bullet points when listing steps. If you can't help
       <div style={{background:`linear-gradient(135deg,${DARK},#2d5a1b)`,padding:"14px 16px",borderRadius:"16px 16px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{display:"flex",alignItems:"center",gap:9}}>
           <div style={{width:32,height:32,borderRadius:"50%",background:"linear-gradient(135deg,#7ED957,#5CB83A)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>🤖</div>
-          <div><div style={{color:"#fff",fontWeight:700,fontSize:13}}>XpensR Assistant</div><div style={{color:"rgba(255,255,255,.5)",fontSize:10}}>AI-powered · {msgs.length-1} messages</div></div>
+          <div><div style={{color:"#fff",fontWeight:700,fontSize:13}}>XpensR Assistant</div><div style={{color:"rgba(255,255,255,.8)",fontSize:10}}>AI-powered · {msgs.length-1} messages</div></div>
         </div>
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
-          <button onClick={resetChat} title="Clear chat history" style={{background:"none",border:"1px solid rgba(255,255,255,.2)",color:"rgba(255,255,255,.5)",borderRadius:6,padding:"3px 8px",fontSize:10,cursor:"pointer"}}>↺ Reset</button>
+          <button onClick={resetChat} title="Clear chat history" style={{background:"none",border:"1px solid rgba(255,255,255,.2)",color:"rgba(255,255,255,.8)",borderRadius:6,padding:"3px 8px",fontSize:10,cursor:"pointer"}}>↺ Reset</button>
           <button onClick={onClose} style={{background:"none",border:"none",color:"rgba(255,255,255,.6)",fontSize:18,cursor:"pointer"}}>✕</button>
         </div>
       </div>
@@ -6527,7 +6551,7 @@ function EditClaimInline({claim,trips,cid,sbEnabled,onClose}){
   };
   return(
     <div style={{marginTop:14,borderTop:`2px solid ${G}`,paddingTop:14}}>
-      <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>✏ Edit Claim</div>
+      <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>✏ Edit Claim</div>
       {claim.status==="Approved"&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"7px 11px",marginBottom:10,fontSize:11,color:"#92400e"}}>
         <strong>Edit window granted.</strong> After saving, this claim will return to Pending status and require re-approval.
       </div>}
