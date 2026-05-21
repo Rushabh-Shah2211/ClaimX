@@ -3052,7 +3052,7 @@ function MgrDash({co,meta,setTab,getUser,myUserId}){
           {Object.entries(co.policy.departmentBudgets||{}).filter(([d,b])=>b>0&&(isAdmin||d===myDept)).map(([dept,budget])=>(
             <div key={dept} style={{marginBottom:10}}>
               <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}><span style={{color:MUTED}}>{dept}</span><span style={{fontWeight:600}}>{fmt(deptClaims.filter(c=>getUser(c.empId)?.dept===dept&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0).toLocaleString("en-IN"))} / {fmt(budget)}</span></div>
-              <PBar value={deptSpend[dept]||0} max={budget} h={5}/>
+              <PBar value={deptClaims.filter(c=>getUser(c.empId)?.dept===dept&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0)} max={budget} h={5}/>
             </div>
           ))}
           {activeTrip&&<div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${BDR}`}}>
