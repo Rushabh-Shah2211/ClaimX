@@ -1596,8 +1596,10 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       setCoData(data);
       // Also refresh edit requests after company data loads
       if(SB_ENABLED){
-        const{data:erData}=await supabase.from("edit_requests").select("*").eq("company_id",cid).order("created_at",{ascending:false});
-        if(erData)setEditRequests(erData);
+        try{
+          const{data:erData,error:erErr}=await supabase.from("edit_requests").select("*").eq("company_id",cid).order("created_at",{ascending:false});
+          if(!erErr&&erData)setEditRequests(erData.map(r=>({...r,claimId:r.claim_id||r.claimId,requestedBy:r.requested_by||r.requestedBy,requesterName:r.requester_name||r.requesterName,windowOpen:r.window_open||r.windowOpen,windowExpires:r.window_expires||r.windowExpires})));
+        }catch(erEx){console.warn("edit_requests init:",erEx.message);}
       }
     }catch(e){setSbError(e.message);}
     finally{setLoadingData(false);}
@@ -1655,6 +1657,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const[showTutorial,setShowTutorial]=useState(false);
   const closeTutorial=()=>setShowTutorial(false);
   const[showChatbot,setShowChatbot]=useState(false);
+  const[showMobMore,setShowMobMore]=useState(false);
 
   // Keyboard shortcuts
   useEffect(()=>{
@@ -1866,8 +1869,19 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   const loadEditRequests=async()=>{
     if(!SB_ENABLED){return;}
-    const{data}=await supabase.from("edit_requests").select("*").eq("company_id",cid).order("created_at",{ascending:false});
-    if(data)setEditRequests(data);
+    try{
+      const{data,error}=await supabase.from("edit_requests").select("*").eq("company_id",cid).order("created_at",{ascending:false});
+      if(error){console.warn("edit_requests:",error.message);return;}
+      if(data)setEditRequests(data.map(r=>({
+        ...r,
+        // Normalise snake_case → camelCase so component can use either
+        claimId:r.claim_id||r.claimId,
+        requestedBy:r.requested_by||r.requestedBy,
+        requesterName:r.requester_name||r.requesterName,
+        windowOpen:r.window_open||r.windowOpen,
+        windowExpires:r.window_expires||r.windowExpires,
+      })));
+    }catch(e){console.warn("loadEditRequests:",e.message);}
   };
 
   const submitEditRequest=async(claim,reason)=>{
@@ -2663,8 +2677,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         </nav>
         <div style={{paddingTop:10,borderTop:"1px solid rgba(255,255,255,.08)"}}>
           {sidebar?(
-            <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:7,cursor:"pointer"}} onClick={()=>setSPro(true)}>
-              <div style={{width:28,height:28,borderRadius:"50%",background:canApprove?G:"#334155",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:700,fontSize:10,flexShrink:0}}>{user.avatar}</div>
+            <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:7,cursor:"pointer"}} onClick={()=>setSPro(true)} title="Edit profile">
+              <div style={{width:28,height:28,borderRadius:"50%",background:canApprove?G:"#334155",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:700,fontSize:10,flexShrink:0,border:"2px solid rgba(255,255,255,.15)"}}>{user.avatar}</div>
               <div style={{overflow:"hidden"}}><div style={{color:"#fff",fontSize:11,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{user.name.split(" ")[0]}</div><div style={{color:"rgba(255,255,255,.35)",fontSize:9,textTransform:"capitalize"}}>{user.role==="admin"?"Admin":user.role==="manager"?"Manager":user.role==="finance"?"Finance":"Employee"}</div></div>
             </div>
           ):(
@@ -2808,23 +2822,67 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       {modal&&modal.type!=="editRequest"&&<ClaimModal modal={modal} setMdl={setMdl} handleDecision={handleDecision} getUser={getUser} trips={co.trips} claims={co.claims} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}} userId={user.id} userName={user.name} addCommentToSB={addCommentToSB} sbEnabled={SB_ENABLED} cid={cid} editRequests={editRequests} onEditRequest={submitEditRequest} onApproveEditRequest={approveEditRequest} onRejectEditRequest={rejectEditRequest} isAdmin={isAdmin}/>}
 
       {/* MOBILE BOTTOM NAV */}
-      <div style={{display:"none",position:"fixed",bottom:0,left:0,right:0,background:DARK,borderTop:"1px solid rgba(255,255,255,.1)",padding:"6px 0 10px",zIndex:100,justifyContent:"space-around"}} className="mob-bottom-nav">
+      {/* ── MOBILE BOTTOM NAV ─────────────────────────────────────────────── */}
+      {/* Avatar tap → profile (mobile) */}
+      <div style={{display:"none",position:"fixed",bottom:0,left:0,right:0,background:DARK,borderTop:"1px solid rgba(255,255,255,.12)",padding:"6px 0 env(safe-area-inset-bottom,8px)",zIndex:100,justifyContent:"space-around"}} className="mob-bottom-nav">
         {[
           {id:"dashboard",icon:"▦",label:"Home"},
           ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"Expense"}]:[]),
           ...(canApprove?[{id:"approvals",icon:"✓",label:"Approve",badge:pendingClaims.length+pendingTopups.length}]:[]),
-          {id:"claims",icon:"📋",label:"Claims"},
-          {id:"inbox",icon:"🔔",label:"Inbox",badge:myNotifs.length},
-          {id:"more",icon:"⋯",label:"More"},
+          {id:"trips",icon:"🗂",label:"Trips"},
+          {id:"claims",icon:"📋",label:isAdmin?"All":"My"},
+          {id:"_more",icon:"⋯",label:"More"},
         ].map(item=>(
-          <button key={item.id} onClick={()=>item.id==="more"?setSPro(true):setTab(item.id)}
+          <button key={item.id} onClick={()=>{
+            if(item.id==="_more")setShowMobMore(true);
+            else setTab(item.id);
+          }}
             style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2,background:"none",border:"none",cursor:"pointer",padding:"4px 2px",position:"relative",minWidth:0}}>
             <span style={{fontSize:17,lineHeight:1,color:tab===item.id?primaryColor:"rgba(255,255,255,.45)"}}>{item.icon}</span>
             <span style={{fontSize:9,color:tab===item.id?primaryColor:"rgba(255,255,255,.4)",fontFamily:FB,fontWeight:tab===item.id?700:400}}>{item.label}</span>
-            {item.badge>0&&<span style={{position:"absolute",top:0,right:"25%",width:14,height:14,background:"#ef4444",borderRadius:"50%",color:"#fff",fontSize:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{item.badge}</span>}
+            {(item.badge||0)>0&&<span style={{position:"absolute",top:0,right:"20%",width:14,height:14,background:"#ef4444",borderRadius:"50%",color:"#fff",fontSize:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{item.badge}</span>}
           </button>
         ))}
       </div>
+
+      {/* ── MOBILE MORE SHEET ─────────────────────────────────────────────── */}
+      {showMobMore&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:200,display:"flex",flexDirection:"column",justifyContent:"flex-end"}} onClick={()=>setShowMobMore(false)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:"18px 18px 0 0",padding:"10px 0 30px",maxHeight:"80vh",overflow:"auto"}}>
+            {/* Handle */}
+            <div style={{width:36,height:4,background:"#e5e7eb",borderRadius:2,margin:"0 auto 14px"}}/>
+            <div style={{padding:"0 16px 8px",fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",letterSpacing:1}}>All Options</div>
+            {[
+              {id:"dashboard",icon:"▦",label:"Dashboard"},
+              ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
+              {id:"trips",icon:"🗂",label:"Trips / Periods"},
+              ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:pendingClaims.length+pendingTopups.length}]:[]),
+              ...(canApprove?[{id:"editreqs",icon:"✏️",label:"Edit Requests",badge:editRequests.filter(r=>r.status==="Pending").length||undefined}]:[]),
+              {id:"claims",icon:"📋",label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"},
+              ...(canApprove?[{id:"settlements",icon:"💳",label:"Settlements"}]:[]),
+              ...(canApprove?[{id:"topup",icon:"💰",label:"Top-ups"}]:[]),
+              {id:"analytics",icon:"📊",label:"Analytics"},
+              {id:"inbox",icon:"🔔",label:"Inbox",badge:myNotifs.length},
+              ...(isAdmin?[{id:"employees",icon:"👥",label:"Employees"}]:[]),
+              ...(isAdmin?[{id:"policy",icon:"⚙️",label:"Policy & Settings"}]:[]),
+              ...(canApprove?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
+              {id:"help",icon:"❓",label:"Help & Tutorial"},
+              {id:"_profile",icon:"👤",label:"My Profile"},
+            ].map(item=>(
+              <button key={item.id} onClick={()=>{
+                setShowMobMore(false);
+                if(item.id==="_profile")setSPro(true);
+                else setTab(item.id);
+              }}
+                style={{width:"100%",display:"flex",alignItems:"center",gap:14,padding:"12px 20px",background:"none",border:"none",cursor:"pointer",textAlign:"left",position:"relative"}}>
+                <span style={{fontSize:20,width:28,textAlign:"center",lineHeight:1}}>{item.icon}</span>
+                <span style={{fontSize:14,color:INK,fontFamily:FB,flex:1}}>{item.label}</span>
+                {(item.badge||0)>0&&<span style={{background:"#ef4444",color:"#fff",borderRadius:10,fontSize:10,fontWeight:700,padding:"1px 7px",minWidth:18,textAlign:"center"}}>{item.badge}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -5767,15 +5825,11 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
           {/* Never show auto-approved status to employees — just show "Approved" */}
           <Badge s={c.status==="Approved"||c.status==="Auto-Approved"?"Approved":c.status}/>
           <div style={{display:"flex",gap:7}}>
-            {/* Edit request: only for own approved claims, no auto-approved reveal */}
-            {/* Pending claims - employee can edit directly */}
+            {/* Pending: employee edits directly */}
             {c.status==="Pending"&&c.empId===userId&&(
               <Btn v="outline" onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Edit</Btn>
             )}
-            {/* Approved claims - must request edit */}
-            {c.status==="Pending"&&c.empId===userId&&(
-              <Btn v="outline" onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Edit</Btn>
-            )}
+            {/* Approved: must request an edit window */}
             {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&onEditRequest&&(
               <Btn v="warning" onClick={()=>setMdl({type:"editRequest",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Request Edit</Btn>
             )}
