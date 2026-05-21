@@ -3037,7 +3037,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       </div>
 
       {modal?.type==="editRequest"&&<EditRequestModal claim={modal.data} userId={user.id} userName={user.name} cid={cid} onClose={()=>setMdl(null)} onSubmit={submitEditRequest} sbEnabled={SB_ENABLED}/>}
-      {modal&&modal.type!=="editRequest"&&<ClaimModal modal={modal} setMdl={setMdl} handleDecision={handleDecision} getUser={getUser} trips={co.trips} claims={co.claims} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}} userId={user.id} userName={user.name} addCommentToSB={addCommentToSB} sbEnabled={SB_ENABLED} cid={cid} editRequests={editRequests} onEditRequest={submitEditRequest} onApproveEditRequest={approveEditRequest} onRejectEditRequest={rejectEditRequest} isAdmin={isAdmin} isManager={isManager}/>}
+      {modal&&modal.type!=="editRequest"&&<ClaimModal modal={modal} setMdl={setMdl} handleDecision={handleDecision} getUser={getUser} trips={co.trips} claims={co.claims} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}} userId={user.id} userName={user.name} addCommentToSB={addCommentToSB} sbEnabled={SB_ENABLED} cid={cid} editRequests={editRequests} onEditRequest={submitEditRequest} onApproveEditRequest={approveEditRequest} onRejectEditRequest={rejectEditRequest} isAdmin={isAdmin} isManager={isManager} hasEditWindow={hasEditWindow}/>}
 
       {/* MOBILE BOTTOM NAV */}
       {/* ── MOBILE BOTTOM NAV ─────────────────────────────────────────────── */}
@@ -3287,8 +3287,8 @@ function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,subm
                   <Btn onClick={()=>setMdl({type:"approve",data:c})} style={{padding:"4px 8px",fontSize:10}}>✓</Btn>
                   <Btn v="danger" onClick={()=>setMdl({type:"reject",data:c})} style={{padding:"4px 8px",fontSize:10}}>✗</Btn>
                 </div>}
-                {canRequestEdit&&<button onClick={()=>{setReqEdit(c);setEditReason("");}} style={{background:"none",border:"1px solid #fcd34d",color:"#92400e",borderRadius:5,padding:"3px 7px",fontSize:10,cursor:"pointer"}} title="Request edit">✏ Edit</button>}
-                {editWindowOpen&&<span style={{background:"#dcfce7",color:"#16a34a",padding:"2px 7px",borderRadius:5,fontSize:10,fontWeight:700}}>✓ Edit OK</span>}
+                {canRequestEdit&&<button onClick={()=>{setReqEdit(c);setEditReason("");}} style={{background:"none",border:"1px solid #fcd34d",color:"#92400e",borderRadius:5,padding:"3px 7px",fontSize:10,cursor:"pointer"}} title="Request edit">✏ Request Edit</button>}
+                {editWindowOpen&&<button onClick={e=>{e.stopPropagation();setMdl({type:"editClaim",data:c});}} style={{background:"#dcfce7",color:"#16a34a",border:"1px solid #86efac",borderRadius:5,padding:"3px 7px",fontSize:10,cursor:"pointer",fontWeight:700}} title="Edit window approved — click to edit">✏ Edit Now</button>}
               </td>
             </tr>);
           })}</tbody>
@@ -6399,10 +6399,12 @@ function EditClaimInline({claim,trips,cid,sbEnabled,onClose}){
     if(!form.category||!form.desc||!form.amount){alert("Category, description and amount required.");return;}
     setBusy(true);
     try{
-      const patch={date:form.date,category:form.category,description:form.desc,vendor:form.vendor,amount:parseFloat(form.amount),notes:form.notes,gst_amount:parseFloat(form.gstAmount)||0};
+      const patch={date:form.date,category:form.category,description:form.desc,vendor:form.vendor,amount:parseFloat(form.amount),notes:form.notes,gst_amount:parseFloat(form.gstAmount)||0,status:"Pending"};
       if(sbEnabled){
         const{error}=await supabase.from("claims").update(patch).eq("id",claim.id);
         if(error)throw new Error(error.message);
+        // Close the edit window — mark request as used so it can't be edited again
+        await supabase.from("edit_requests").update({window_open:false}).eq("claim_id",claim.id).eq("status","Approved");
       }
       onClose();
       window.location.reload();
@@ -6412,6 +6414,9 @@ function EditClaimInline({claim,trips,cid,sbEnabled,onClose}){
   return(
     <div style={{marginTop:14,borderTop:`2px solid ${G}`,paddingTop:14}}>
       <div style={{fontFamily:FD,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>✏ Edit Claim</div>
+      {claim.status==="Approved"&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"7px 11px",marginBottom:10,fontSize:11,color:"#92400e"}}>
+        <strong>Edit window granted.</strong> After saving, this claim will return to Pending status and require re-approval.
+      </div>}
       {trip&&<div style={{fontSize:10,color:MUTED,marginBottom:8}}>Trip: <strong>{trip.name}</strong> · {trip.startDate} → {trip.endDate}</div>}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:9}}>
         <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Date</label>
@@ -6441,7 +6446,7 @@ function EditClaimInline({claim,trips,cid,sbEnabled,onClose}){
   );
 }
 
-function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled,cid,editRequests,onEditRequest,onApproveEditRequest,onRejectEditRequest,isAdmin=false,isManager=false}){
+function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled,cid,editRequests,onEditRequest,onApproveEditRequest,onRejectEditRequest,isAdmin=false,isManager=false,hasEditWindow}){
   const [remarks,setRemarks]=useState("");
   const [comment,setComment]=useState("");
   const [receiptsWithUrls,setRWU]=useState(null);
@@ -6563,11 +6568,17 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
         {type==="detail"&&<div style={{marginTop:11}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
             <Badge s={c.status==="Approved"||c.status==="Auto-Approved"?"Approved":c.status}/>
-            <div style={{display:"flex",gap:7}}>
+            <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+              {/* Pending: direct edit */}
               {c.status==="Pending"&&c.empId===userId&&(
                 <Btn v="outline" onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Edit</Btn>
               )}
-              {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&onEditRequest&&(
+              {/* Approved with open edit window: edit now */}
+              {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&hasEditWindow&&hasEditWindow(c.id)&&(
+                <Btn onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11,background:"#16a34a",color:"#fff"}}>✏ Edit Now <span style={{fontSize:9,opacity:.8}}>(window open)</span></Btn>
+              )}
+              {/* Approved without window: request edit */}
+              {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&onEditRequest&&!(hasEditWindow&&hasEditWindow(c.id))&&(
                 <Btn v="warning" onClick={()=>setMdl({type:"editRequest",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Request Edit</Btn>
               )}
               <Btn v="outline" onClick={()=>setMdl(null)} style={{fontSize:11}}>Close</Btn>
