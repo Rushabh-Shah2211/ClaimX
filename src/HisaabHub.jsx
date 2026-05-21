@@ -181,7 +181,7 @@ const mapClaim=r=>r?({id:r.id,companyId:r.company_id,tripId:r.trip_id,empId:r.em
 const mapPolicy=r=>r?({autoApproveLimit:parseFloat(r.auto_approve_limit)||5000,reimbursementMode:r.reimbursement_mode||false,receiptMandatoryAbove:parseFloat(r.receipt_mandatory_above)||0,weekendRequiresApproval:r.weekend_requires_approval||false,multiLevelApproval:r.multi_level_approval||false,approvalLevels:r.approval_levels||[],vendorWhitelist:r.vendor_whitelist||[],vendorBlacklist:r.vendor_blacklist||[],departmentBudgets:r.department_budgets||{},categoryPct:r.category_pct||{},scheduledReports:r.scheduled_reports||[],primaryColor:r.primary_color||"#7ED957",departments:r.departments||DEFAULT_DEPTS,categories:r.categories||DEFAULT_CATS,dualApproveAbove:parseFloat(r.dual_approve_above)||0}):null;
 const mapNotif=r=>r?({id:r.id,userId:r.user_id,text:r.text,type:r.type,read:r.read,time:new Date(r.created_at).toLocaleString()}):null;
 const mapAudit=r=>r?({id:r.id,action:r.action,claimId:r.claim_id,by:r.by_user_id,byName:r.by_name,at:new Date(r.created_at).toLocaleString(),remarks:r.remarks}):null;
-const mapTopup=r=>r?({id:r.id,empId:r.emp_id,amount:parseFloat(r.amount),reason:r.reason,date:r.date,status:r.status}):null;
+const mapTopup=r=>r?({id:r.id,empId:r.emp_id,amount:parseFloat(r.amount),reason:r.reason,date:r.date,status:r.status,tripId:r.trip_id||null,companyId:r.company_id}):null;
 
 // ─── SB: load full company data ───────────────────────────────────────────────
 async function sbLoadCompany(cid){
@@ -2169,15 +2169,36 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     // - Admin can approve directly (bypassing manager step)
     // - Admin can reject at any stage
     const isDualNeeded=needsDualApproval(claim.amount);
+    // Multi-level approval: check approvalLevels for this amount
+    const policy=co.policy;
+    const useMultiLevel=policy.multiLevelApproval&&(policy.approvalLevels||[]).length>0;
     let finalStatus=decision;
-    if(decision==="Approved"&&isDualNeeded){
-      // Dual approval: manager goes first → "Manager Approved", then admin does final approval
-      if(user.role==="manager"&&claim.status==="Pending"){
-        finalStatus="Manager Approved"; // manager first leg
+    if(decision==="Approved"){
+      if(useMultiLevel){
+        // Find the required approval role for this amount
+        const sorted=[...(policy.approvalLevels||[])].sort((a,b)=>parseFloat(a.upTo)-parseFloat(b.upTo));
+        const requiredLevel=sorted.find(l=>claim.amount<=parseFloat(l.upTo));
+        const highestLevel=sorted[sorted.length-1];
+        const myLevel=sorted.findIndex(l=>l.role===user.role);
+        const maxLevel=sorted.length-1;
+        if(requiredLevel){
+          const requiredLevelIdx=sorted.indexOf(requiredLevel);
+          // If my level is below the required level, only partially approve
+          if(myLevel<requiredLevelIdx||(user.role==="manager"&&requiredLevel.role==="admin")){
+            finalStatus="Manager Approved";
+          }
+          // Admin always gives final approval
+        }
+        // Additional check: if amount > all upTo thresholds, needs highest approver
+        if(!requiredLevel&&user.role==="manager"){
+          finalStatus="Manager Approved";
+        }
+      } else if(isDualNeeded){
+        // Simple dual approval fallback
+        if(user.role==="manager"&&claim.status==="Pending"){
+          finalStatus="Manager Approved";
+        }
       }
-      // Admin can give final approval only if manager already approved (or admin acts alone)
-      // If claim is still "Pending" and admin approves, treat as full approval
-      // If claim is "Manager Approved" and admin approves, that's full approval
     }
     const isFullyApproved=finalStatus==="Approved";
 
@@ -2647,7 +2668,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     {id:"claims",    icon:"📋", label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"},
     ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
     {id:"trips",     icon:"🗂️", label:"Trips / Periods"},
-    ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[{id:"topup",icon:"💰",label:"Top-up"}]),
+    ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[]),
+    {id:"topup",icon:"💰",label:"Top-up"},
     // Trip approvals merged into main Approvals tab - no separate tab
     // Edit Requests merged into Approvals tab
     {id:"analytics", icon:"📊", label:"Analytics"},
@@ -2685,7 +2707,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {showChatbot?"✕":"🤖"}
       </button>
       {/* Floating + button for quick actions */}
-      {showFab&&<div style={{position:"fixed",bottom:132,right:22,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:10,zIndex:798}}>
+      {showFab&&<div style={{position:"fixed",bottom:254,right:22,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:10,zIndex:798}}>
         {hasPerm("submit")&&<div style={{display:"flex",alignItems:"center",gap:8}}>
           <span style={{background:"rgba(0,0,0,.7)",color:"#fff",fontSize:11,padding:"4px 10px",borderRadius:6,whiteSpace:"nowrap"}}>New Expense</span>
           <button onClick={()=>{setShowFab(false);setTab("submit");}} style={{width:42,height:42,borderRadius:"50%",background:G,color:"#fff",border:"none",fontSize:18,cursor:"pointer",boxShadow:"0 3px 12px rgba(126,217,87,.4)"}}>📤</button>
@@ -2699,7 +2721,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           <button onClick={()=>{setShowFab(false);setTab("topup");}} style={{width:42,height:42,borderRadius:"50%",background:"#f59e0b",color:"#fff",border:"none",fontSize:18,cursor:"pointer",boxShadow:"0 3px 12px rgba(245,158,11,.4)"}}>💰</button>
         </div>}
       </div>}
-      <button onClick={()=>setShowFab(p=>!p)} style={{position:"fixed",bottom:128,right:20,width:44,height:44,borderRadius:"50%",background:showFab?"#dc2626":INK,color:"#fff",border:"none",fontSize:20,cursor:"pointer",boxShadow:"0 4px 14px rgba(0,0,0,.3)",zIndex:798,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
+      <button onClick={()=>setShowFab(p=>!p)} style={{position:"fixed",bottom:200,right:20,width:44,height:44,borderRadius:"50%",background:showFab?"#dc2626":INK,color:"#fff",border:"none",fontSize:20,cursor:"pointer",boxShadow:"0 4px 14px rgba(0,0,0,.3)",zIndex:798,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
         {showFab?"✕":"＋"}
       </button>
       {showProf&&(
@@ -3558,6 +3580,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
       }catch(e){fail++;}
     }
     setForms([blankForm()]);setIdx(0);
+    try{localStorage.removeItem("claimx_draft_v1");}catch{}
     if(fail>0)alert(`${ok} submitted, ${fail} failed.`);
   };
 
@@ -3731,11 +3754,12 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
             try{
               await submitClaim({...fm,tripId});
               // Only clear form on TRUE success (submitClaim didn't throw)
+              // Clear this form on success, clear ALL drafts if all blank
               const newForms=forms.map((x,i)=>i===idx?blankForm():x);
               setForms(newForms);
               setIdx(0);
-              if(newForms.every(f=>!f.category&&!f.desc&&!f.amount))
-                try{localStorage.removeItem("claimx_draft_v1");}catch{}
+              // Always clear draft after submission — don't restore stale data
+              try{localStorage.removeItem("claimx_draft_v1");}catch{}
             }catch(e){
               // Do NOT clear form — show error and let user fix it
               alert("Submission failed: "+(e?.message||String(e)));
@@ -4028,11 +4052,14 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
       </div>
       {pendingTopups.length>0&&<div style={{marginBottom:16}}>
         <div style={{fontSize:10,fontWeight:700,color:"#d97706",textTransform:"uppercase",letterSpacing:1,marginBottom:7}}>💰 Top-Up Requests</div>
-        {pendingTopups.map(req=>{const e=getUser(req.empId);return(
+        {pendingTopups.map(req=>{const e=getUser(req.empId);const reqTrip=trips.find(t=>t.id===req.tripId);return(
           <Card key={req.id} style={{padding:14,marginBottom:7,borderColor:"#fcd34d"}}>
             <div style={{display:"flex",alignItems:"center",gap:9}}>
               <div style={{width:30,height:30,borderRadius:"50%",background:"#fef3c7",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:"#d97706",fontSize:12}}>{e?.avatar}</div>
-              <div style={{flex:1}}><div style={{fontWeight:600,color:INK,fontSize:13}}>{e?.name} — Top-Up Request</div><div style={{fontSize:11,color:MUTED}}>{req.reason} · {req.date}</div></div>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:600,color:INK,fontSize:13}}>{e?.name} — Top-Up Request</div>
+                <div style={{fontSize:11,color:MUTED}}>{req.reason} · {req.date}{reqTrip?` · Trip: ${reqTrip.name}`:""}</div>
+              </div>
               <div style={{fontFamily:FD,fontSize:16,fontWeight:700,color:"#d97706",marginRight:7}}>{fmt(req.amount)}</div>
               <Btn onClick={()=>handleTopup(req,"Approved")} style={{padding:"5px 11px",fontSize:11}}>✓ Approve</Btn>
               <Btn v="danger" onClick={()=>handleTopup(req,"Rejected")} style={{padding:"5px 9px",fontSize:11}}>✗</Btn>
@@ -6050,7 +6077,7 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
           <div style={{fontSize:14,fontWeight:700,color:INK,marginTop:2}}>{c.desc}</div>
           <div style={{fontFamily:FD,fontSize:22,fontWeight:700,color:INK,marginTop:3}}>{fmt(c.amount)}{c.origCur&&c.origCur!=="INR"&&<span style={{fontSize:11,fontWeight:400,color:MUTED}}> ({c.origCur} {c.origAmount})</span>}</div>
         </div>
-        {[["Employee",e?.name],["Date",c.date+(c.weekendFlag?" 📅":"")],["Category",`${CI[c.category]||""} ${c.category}`],["Trip",trip?.name],["Vendor",c.vendor||"—"],["Notes",c.notes||"—"],...(c.remarks?[["Remarks",c.remarks]]:[])].map(([k,v])=>(
+        {[["Employee",e?.name],["Date",c.date+(c.weekendFlag?" 📅":"")],["Category",`${CI[c.category]||""} ${c.category}`],["Trip",trip?.name],["Vendor",c.vendor||"—"],["Notes",c.notes||"—"],...(c.remarks&&(isAdmin||isManager||!c.remarks.includes("anomaly"))?[["Remarks",c.remarks]]:[])].map(([k,v])=>(
           <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid #f3f4f6`,fontSize:12}}><span style={{color:MUTED}}>{k}</span><span style={{fontWeight:600,color:INK,maxWidth:260,textAlign:"right"}}>{v}</span></div>
         ))}
         {/* GST Bifurcation — visible to manager/admin/finance */}
