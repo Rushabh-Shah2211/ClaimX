@@ -1,4 +1,4 @@
-import React,{ useState, useRef, useEffect, useCallback, Component, createContext, useContext } from "react";
+import React,{ useState, useRef, useEffect, useCallback, useMemo, Component, createContext, useContext } from "react";
 import { jsPDF } from "jspdf";
 import { createClient } from "@supabase/supabase-js";
 
@@ -1771,6 +1771,43 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     c.status==="Pending" ||
     (c.status==="Manager Approved"&&isAdmin) // admin sees manager-approved for final sign-off
   );
+
+  // Claims this specific manager/admin should approve (respects delegation)
+  // Used for badge count — only show MY pending, not all company pending
+  const myPendingClaims=useMemo(()=>{
+    if(isAdmin)return pendingClaims; // admin sees all
+    if(!isManager)return [];
+    return pendingClaims.filter(c=>{
+      const emp=getUser(c.empId);
+      if(!emp)return false;
+      // Claims in my dept
+      const inMyDept=emp.dept===myUser?.dept;
+      // Claims delegated TO me (some other manager delegated to me)
+      const delegatedToMe=co.users.some(u=>
+        u.role==="manager"&&u.delegateTo===user.id&&
+        (!u.delegateUntil||u.delegateUntil>=today())&&
+        emp.dept===u.dept
+      );
+      return inMyDept||delegatedToMe;
+    });
+  },[pendingClaims,isAdmin,isManager,co.users,user.id,myUser?.dept]);
+
+  // Claims to show in ApprovalsTab for this user (includes delegated claims)
+  const approvableClaimsForMe=useMemo(()=>{
+    if(isAdmin)return pendingClaims;
+    if(!isManager)return [];
+    return pendingClaims.filter(c=>{
+      const emp=getUser(c.empId);
+      if(!emp)return false;
+      const inMyDept=emp.dept===myUser?.dept;
+      const delegatedToMe=co.users.some(u=>
+        u.role==="manager"&&u.delegateTo===user.id&&
+        (!u.delegateUntil||u.delegateUntil>=today())&&
+        emp.dept===u.dept
+      );
+      return inMyDept||delegatedToMe;
+    });
+  },[pendingClaims,co.users,user.id,myUser?.dept,isAdmin,isManager]);
   const pendingTopups=co.topups.filter(t=>t.status==="Pending");
 
   // ── sbCreateTrip — defined once, used by both TripsTab and SubmitTab ─────────
@@ -2606,7 +2643,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     {id:"claims",    icon:"📋", label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"},
     ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
     {id:"trips",     icon:"🗂️", label:"Trips / Periods"},
-    ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:pendingClaims.length+pendingTopups.length}]:[{id:"topup",icon:"💰",label:"Top-up"}]),
+    ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[{id:"topup",icon:"💰",label:"Top-up"}]),
     // Trip approvals merged into main Approvals tab - no separate tab
     ...(canApprove?[{id:"editreqs",icon:"✏️",label:"Edit Requests",badge:editRequests.filter(r=>r.status==="Pending").length||undefined}]:[]),
     {id:"analytics", icon:"📊", label:"Analytics"},
@@ -2788,7 +2825,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           }}
         />}
         {tab==="approvals"&&canApprove&&<>
-          <ApprovalsTab pendingClaims={isAdmin?pendingClaims:pendingClaims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept;})} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users}/>
+          <ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users}/>
           {editRequests.length>0&&<Card style={{padding:16,marginTop:16}}>
             <div style={{fontFamily:FD,fontSize:14,fontWeight:700,color:INK,marginBottom:12}}>✏ Edit Requests {editRequests.filter(r=>r.status==="Pending").length>0&&<span style={{background:"#fef3c7",color:"#92400e",fontSize:11,padding:"1px 7px",borderRadius:10,marginLeft:7,fontFamily:FB}}>{editRequests.filter(r=>r.status==="Pending").length} pending</span>}</div>
             <EditRequestsPanel editRequests={editRequests} claims={co.claims} getUser={getUser} cid={cid} toast={toast} sbEnabled={SB_ENABLED} onApprove={approveEditRequest} onReject={rejectEditRequest}/>
@@ -2806,7 +2843,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="settlements"&&canApprove&&<SettlementsTab trips={co.trips} claims={co.claims} users={co.users} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} cid={cid} sbEnabled={SB_ENABLED}/>}
         {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}/>}
         {tab==="trip_approvals"&&canApprove&&<TripApprovalsTab trips={co.trips} getUser={getUser} approveTrip={approveTrip} rejectTrip={rejectTrip} isAdmin={isAdmin}/>}
-        {tab==="editreqs"&&canApprove&&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id}/>}
+        {tab==="editreqs"&&canApprove&&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id} reload={loadEditRequests}/>}
         {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={co.users} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin}/>}
         {tab==="policy"&&isAdmin&&<Policy policy={co.policy} setPolicy={setCoPolicy} savePolicy={savePolicyToSB} toast={toast} users={co.users} sbEnabled={SB_ENABLED}/>}
         {tab==="help"&&<div>
@@ -2828,7 +2865,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {[
           {id:"dashboard",icon:"▦",label:"Home"},
           ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"Expense"}]:[]),
-          ...(canApprove?[{id:"approvals",icon:"✓",label:"Approve",badge:pendingClaims.length+pendingTopups.length}]:[]),
+          ...(canApprove?[{id:"approvals",icon:"✓",label:"Approve",badge:myPendingClaims.length+pendingTopups.length}]:[]),
           {id:"trips",icon:"🗂",label:"Trips"},
           {id:"claims",icon:"📋",label:isAdmin?"All":"My"},
           {id:"_more",icon:"⋯",label:"More"},
@@ -2856,7 +2893,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               {id:"dashboard",icon:"▦",label:"Dashboard"},
               ...(hasPerm("submit")?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
               {id:"trips",icon:"🗂",label:"Trips / Periods"},
-              ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:pendingClaims.length+pendingTopups.length}]:[]),
+              ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[]),
               ...(canApprove?[{id:"editreqs",icon:"✏️",label:"Edit Requests",badge:editRequests.filter(r=>r.status==="Pending").length||undefined}]:[]),
               {id:"claims",icon:"📋",label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"},
               ...(canApprove?[{id:"settlements",icon:"💳",label:"Settlements"}]:[]),
@@ -4506,7 +4543,9 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
 }
 
 // ─── EDIT REQUESTS TAB ────────────────────────────────────────────────────────
-function EditRequestsTab({editRequests,claims,getUser,isManager,approveEditRequest,rejectEditRequest,hasEditWindow,userId}){
+function EditRequestsTab({editRequests,claims,getUser,isManager,approveEditRequest,rejectEditRequest,hasEditWindow,userId,reload}){
+  // Reload on mount to always show fresh data
+  useEffect(()=>{if(reload)reload();},[]);
   const pending=editRequests.filter(r=>r.status==="Pending");
   const resolved=editRequests.filter(r=>r.status!=="Pending");
 
@@ -5646,7 +5685,54 @@ function HelpManual({userRole,onClose,inline=false}){
 }
 // ─── EDIT REQUEST MODAL ───────────────────────────────────────────────────────
 
-// ─── EDIT CLAIM INLINE ────────────────────────────────────────────────────────
+// ─── EDIT REQUEST MODAL ───────────────────────────────────────────────────────
+// Employee submits a request to edit an approved claim
+function EditRequestModal({claim,userId,userName,cid,onClose,onSubmit,sbEnabled}){
+  const[reason,setReason]=useState("");
+  const[busy,setBusy]=useState(false);
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:26,width:"min(480px,96vw)",boxShadow:"0 24px 60px rgba(0,0,0,.2)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+          <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>Request Edit Approval</div>
+          <button onClick={onClose} style={{background:"none",border:"none",fontSize:18,cursor:"pointer",color:MUTED}}>✕</button>
+        </div>
+        {/* Claim summary */}
+        <div style={{background:GL,borderRadius:9,padding:"10px 13px",marginBottom:14}}>
+          <div style={{fontWeight:700,fontSize:12,color:INK,marginBottom:3}}>{claim.desc}</div>
+          <div style={{fontSize:10,color:MUTED}}>{claim.id} · {fmt(claim.amount)} · {claim.category} · {claim.date}</div>
+          <div style={{fontSize:10,color:"#16a34a",marginTop:3,fontWeight:600}}>{claim.status}</div>
+        </div>
+        {/* Process steps */}
+        <div style={{background:"#f0fde9",borderRadius:8,padding:"8px 11px",marginBottom:14,fontSize:11,color:GD}}>
+          <div style={{fontWeight:700,marginBottom:4}}>How it works:</div>
+          <div>1. You submit a reason for the edit request</div>
+          <div>2. Your manager reviews and approves a 24-hour edit window</div>
+          <div>3. You edit the claim and resubmit for approval</div>
+          <div>4. Claim goes through normal approval workflow again</div>
+        </div>
+        <div style={{marginBottom:14}}>
+          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:5,textTransform:"uppercase"}}>Reason for edit request *</label>
+          <textarea value={reason} onChange={e=>setReason(e.target.value)} rows={3}
+            placeholder="e.g. Incorrect amount entered, wrong category selected, need to attach missing receipt…"
+            style={{width:"100%",padding:"10px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,fontFamily:FB,resize:"vertical",outline:"none",boxSizing:"border-box",background:"var(--input-bg,#fafff8)"}}/>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn onClick={async()=>{
+            if(!reason.trim()){alert("Please provide a reason for the edit request.");return;}
+            setBusy(true);
+            try{await onSubmit(claim,reason);onClose();}
+            catch(e){alert("Failed: "+e.message);}
+            finally{setBusy(false);}
+          }} disabled={busy||!reason.trim()} style={{flex:1,padding:11}}>{busy?"Submitting…":"Submit Request →"}</Btn>
+          <button onClick={onClose} style={{padding:"11px 18px",borderRadius:8,border:`1px solid ${BDR}`,background:"transparent",color:MUTED,cursor:"pointer",fontSize:13}}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function EditClaimInline({claim,trips,cid,sbEnabled,onClose}){
   const[form,setForm]=useState({
     date:claim.date||today(),category:claim.category||"",
