@@ -670,6 +670,7 @@ const Toggle=({on,onClick,label,sub})=>(
 // ─── LOGO ─────────────────────────────────────────────────────────────────────
 const Logo=({width=200,dark=false})=>(
   <svg width={width} viewBox="0 0 680 220" xmlns="http://www.w3.org/2000/svg">
+    {/* Hexagon frame */}
     <polygon points="90,48 126,27 162,48 162,90 126,111 90,90" fill="none" stroke="#7ED957" strokeWidth="2.2"/>
     <polygon points="98,53 126,36 154,53 154,85 126,102 98,85" fill="#7ED957" opacity="0.12"/>
     {[[126,69,90,48],[126,69,126,27],[126,69,162,48],[126,69,162,90],[126,69,126,111],[126,69,90,90]].map(([x1,y1,x2,y2],i)=>
@@ -678,10 +679,10 @@ const Logo=({width=200,dark=false})=>(
     <circle cx="126" cy="69" r="4" fill={dark?"#fff":"#1a1a1a"}/>
     {[[90,48,"#7ED957"],[126,27,"#5ab83e"],[162,48,"#7ED957"],[162,90,"#5ab83e"],[126,111,"#7ED957"],[90,90,"#5ab83e"]].map(([cx,cy,f],i)=>
       <circle key={i} cx={cx} cy={cy} r="4" fill={f}/>)}
-    <text x="192" y="98"  fontFamily="'Playfair Display',serif" fontWeight="900" fontSize="58" fill={dark?"#fff":"#1a1a1a"} letterSpacing="-2">Claim</text>
-    <text x="192" y="145" fontFamily="'Sora',sans-serif"         fontWeight="300" fontSize="42" fill="#7ED957" letterSpacing="4">X</text>
-    <line x1="192" y1="158" x2="480" y2="158" stroke="#7ED957" strokeWidth="0.8" opacity="0.4"/>
-    <text x="192" y="178" fontFamily="'Sora',sans-serif"         fontWeight="400" fontSize="13" fill="#7ED957" opacity="0.75" letterSpacing="3">by RB</text>
+    {/* XpensR text */}
+    <text x="192" y="100" fontFamily="'Playfair Display',serif" fontWeight="900" fontSize="68" fill={dark?"#fff":"#1a1a1a"} letterSpacing="-2">XpensR</text>
+    <line x1="192" y1="115" x2="560" y2="115" stroke="#7ED957" strokeWidth="0.8" opacity="0.4"/>
+    <text x="192" y="138" fontFamily="'Sora',sans-serif" fontWeight="400" fontSize="14" fill="#7ED957" opacity="0.8" letterSpacing="3">by RB</text>
   </svg>
 );
 
@@ -755,7 +756,7 @@ const COOKIE_POLICY=`**Cookies and similar technologies** (localStorage, session
 
 **Functional (can be declined — functionality reduced):**
 - \`xpensr_prefs_v1\` — Display preferences: dark mode, font size (1 year)
-- \`claimx_offline_queue\` — Queues claims when offline (temporary, until synced)
+- \`xpensr_offline_queue\` — Queues claims when offline (temporary, until synced)
 - \`xpensr_db\` — Offline data cache (session)
 
 **Analytics:** None currently.
@@ -1134,37 +1135,48 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
         <p style={{color:"rgba(255,255,255,.2)",fontSize:11}}>XpensR is a product of RB Finsol. All rights reserved.</p>
       </footer>
 
-      {/* ── LOGIN MODAL ── */}
       {showLogin&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(6px)"}} onClick={e=>{if(e.target===e.currentTarget)setShowLogin(false);}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:`linear-gradient(145deg,${DARK} 0%,#0a1f06 100%)`,borderRadius:20,padding:32,width:"min(420px,96vw)",boxShadow:"0 32px 80px rgba(0,0,0,.5)",border:"1px solid rgba(255,255,255,.08)",position:"relative"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:`linear-gradient(145deg,${DARK} 0%,#0a1f06 100%)`,borderRadius:20,padding:"32px 32px 28px",width:"min(440px,96vw)",boxShadow:"0 32px 80px rgba(0,0,0,.5)",border:"1px solid rgba(255,255,255,.08)",position:"relative"}}>
             <button onClick={()=>setShowLogin(false)} style={{position:"absolute",top:14,right:16,background:"none",border:"none",color:"rgba(255,255,255,.4)",fontSize:20,cursor:"pointer",lineHeight:1}}>✕</button>
+            {/* Logo */}
             <div style={{textAlign:"center",marginBottom:24}}>
-              <div style={{fontFamily:"'Playfair Display',serif",fontSize:28,fontWeight:800,color:"#7ED957",letterSpacing:-0.5}}>XpensR</div>
-              <div style={{fontSize:10,color:"rgba(255,255,255,.3)",letterSpacing:2,textTransform:"uppercase",marginTop:2}}>Sign in to your workspace</div>
+              <Logo width={160} dark/>
+              <div style={{fontSize:10,color:"rgba(255,255,255,.3)",letterSpacing:2,textTransform:"uppercase",marginTop:6}}>Sign in to your workspace</div>
             </div>
-            <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+              <input type="text" value={login} onChange={e=>{setLogin(e.target.value);setErr("");}}
+                onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)}
+                placeholder="username  ·  email  ·  mobile"
+                className="login-inp"
+                style={{width:"100%",padding:"13px 16px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}
+                autoComplete="username"/>
               <div style={{position:"relative"}}>
-                <input type="text" value={login} onChange={e=>{setLogin(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)}
-                  placeholder="username  or  email@company.in  or  9123456789"
+                <input type={showPw?"text":"password"} value={pass} onChange={e=>{setPass(e.target.value);setErr("");}}
+                  onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)}
+                  placeholder="password"
                   className="login-inp"
-                  style={{width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.06)",color:"#ffffff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}
-                  autoComplete="username"/>
-              </div>
-              <div style={{position:"relative"}}>
-                <input type={showPw?"text":"password"} value={pass} onChange={e=>{setPass(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)}
-                  placeholder="your password" className="login-inp"
-                  style={{width:"100%",padding:"12px 40px 12px 14px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.06)",color:"#ffffff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}
+                  style={{width:"100%",padding:"13px 40px 13px 16px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}
                   autoComplete="current-password"/>
-                <button onClick={()=>setSPw(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"rgba(255,255,255,.35)",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>{showPw?"🙈":"👁"}</button>
+                <button onClick={()=>setSPw(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"rgba(255,255,255,.35)",cursor:"pointer",fontSize:16,padding:0,lineHeight:1}}>{showPw?"🙈":"👁"}</button>
               </div>
-              {err&&<div style={{color:"#f87171",fontSize:12,textAlign:"center",padding:"6px 10px",background:"rgba(239,68,68,.1)",borderRadius:7}}>{err}</div>}
-              <button onClick={()=>attempt(login,pass)} disabled={busy} style={{background:"#7ED957",color:"#0f1c09",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:FB,marginTop:4}}>
+              {err&&<div style={{color:"#f87171",fontSize:12,textAlign:"center",padding:"7px 12px",background:"rgba(239,68,68,.1)",borderRadius:8}}>{err}</div>}
+              <button onClick={()=>attempt(login,pass)} disabled={busy}
+                style={{background:"#7ED957",color:"#0f1c09",border:"none",borderRadius:10,padding:"14px",fontSize:14,fontWeight:700,cursor:busy?"not-allowed":"pointer",fontFamily:FB,marginTop:2,opacity:busy?.7:1}}>
                 {busy?"Signing in…":"Sign In →"}
               </button>
-              {SB_ENABLED&&<button onClick={googleLogin} disabled={busy} style={{background:"rgba(255,255,255,.06)",color:"rgba(255,255,255,.7)",border:"1px solid rgba(255,255,255,.12)",borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:FB}}>
-                <span style={{marginRight:8}}>🔐</span>Admin: Sign in with Google
-              </button>}
+              {SB_ENABLED&&<>
+                <div style={{display:"flex",alignItems:"center",gap:10,margin:"2px 0"}}>
+                  <div style={{flex:1,height:1,background:"rgba(255,255,255,.1)"}}/>
+                  <span style={{fontSize:11,color:"rgba(255,255,255,.3)"}}>or</span>
+                  <div style={{flex:1,height:1,background:"rgba(255,255,255,.1)"}}/>
+                </div>
+                <button onClick={googleLogin} disabled={busy}
+                  style={{background:"rgba(255,255,255,.06)",color:"rgba(255,255,255,.75)",border:"1px solid rgba(255,255,255,.14)",borderRadius:10,padding:"13px",fontSize:13,cursor:"pointer",fontFamily:FB,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+                  <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+                  Sign in with Google
+                </button>
+              </>}
             </div>
           </div>
         </div>
@@ -1309,7 +1321,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
       {/* Content */}
       <div style={{flex:1,padding:"28px 32px",overflow:"auto"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
-          <div><h1 style={{fontFamily:FD,fontSize:24,fontWeight:700,color:"#1e2736"}}>ClaimX Control Centre</h1><p style={{color:MUTED,fontSize:13,marginTop:3}}>Manage companies and users · Company data is private</p></div>
+          <div><h1 style={{fontFamily:FD,fontSize:24,fontWeight:700,color:"#1e2736"}}>XpensR Control Centre</h1><p style={{color:MUTED,fontSize:13,marginTop:3}}>Manage companies and users · Company data is private</p></div>
           {tab==="companies"&&<Btn onClick={()=>setMdl({type:"newCo"})}>＋ New Company</Btn>}
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:22}}>
@@ -2163,7 +2175,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       if(erErr){
         console.error("edit_requests insert error:",erErr.message);
         if(erErr.message?.includes("does not exist")||erErr.code==="42P01"){
-          toast("Edit requests table not set up — run claimx_missing_tables.sql in Supabase","error");
+          toast("Edit requests table not set up — run xpensr_missing_tables.sql in Supabase","error");
           return;
         }
         toast("Failed to submit: "+erErr.message,"error");
@@ -2462,7 +2474,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       if(emp?.email&&co.policy?.notifyEmailOnApprove!==false){
         emailAlert(
           emp.email,
-          `Claim ${finalStatus} — ${fmt(claim.amount)} | ClaimX`,
+          `Expense ${finalStatus} — ${fmt(claim.amount)} | XpensR`,
           `Your expense claim ${claimId} for ${fmt(claim.amount)} has been ${finalStatus.toLowerCase()}.${remarks?" Remarks: "+remarks:""}`,
           claimEmailHtml(isFullyApproved?"Approved":"Rejected",claim,remarks,activeMeta?.name)
         );
@@ -2735,7 +2747,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const rows=[["ID","Date","Employee","Dept","Vendor","Trip","Category","Description","Orig Amt","Orig Cur","INR Amt","Status","Auto","Anomaly","Remarks"]];
     co.claims.forEach(c=>{const e=getUser(c.empId);const t=co.trips.find(tr=>tr.id===c.tripId);rows.push([c.id,c.date,e?.name||"",e?.dept||"",c.vendor||"",t?.name||"",c.category,c.desc,c.origAmount||c.amount,c.origCur||"INR",c.amount,c.status,c.autoApproved?"Yes":"No",c.anomaly?"Yes":"No",c.remarks]);});
     const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
-    const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`ClaimX_${cid}_${today()}.csv`;a.click();toast("📊 CSV exported");
+    const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`XpensR_${cid}_${today()}.csv`;a.click();toast("📊 CSV exported");
   };
   const exportTally=()=>{
     const xml=`<?xml version="1.0" encoding="UTF-8"?>\n<ENVELOPE>\n  <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>\n  <BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME></REQUESTDESC><REQUESTDATA>\n`+co.claims.filter(c=>c.status==="Approved").map(c=>{const e=getUser(c.empId);return`    <TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER VCHTYPE="Payment" ACTION="Create"><DATE>${c.date.replace(/-/g,"")}</DATE><NARRATION>${c.desc} - ${e?.name||""}</NARRATION><VOUCHERTYPENAME>Payment</VOUCHERTYPENAME><ALLLEDGERENTRIES.LIST><LEDGERNAME>${c.category}</LEDGERNAME><AMOUNT>-${c.amount}</AMOUNT></ALLLEDGERENTRIES.LIST></VOUCHER></TALLYMESSAGE>`;}).join("\n")+`\n  </REQUESTDATA></IMPORTDATA></BODY>\n</ENVELOPE>`;
@@ -2806,14 +2818,14 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const byDept={};
     approved.forEach(c=>{const e=getUser(c.empId);const d=e?.dept||"Unknown";byDept[d]=(byDept[d]||0)+c.amount;});
     const w=window.open("","_blank");
-    w.document.write(`<!DOCTYPE html><html><head><title>ClaimX Monthly Digest ${month}</title>
+    w.document.write(`<!DOCTYPE html><html><head><title>XpensR Monthly Digest ${month}</title>
     <style>body{font-family:sans-serif;max-width:800px;margin:30px auto;color:#111;font-size:13px}
     h1{font-size:20px;color:#0f1c09}h2{font-size:14px;margin:20px 0 8px;color:#5CB83A;border-bottom:2px solid #e8f0e5;padding-bottom:4px}
     table{width:100%;border-collapse:collapse;margin:10px 0}th{background:#f0fde9;padding:7px 10px;font-size:11px;text-align:left}
     td{padding:7px 10px;border-bottom:1px solid #f3f4f6;font-size:12px}.total{font-weight:700;color:#16a34a}
     .warn{background:#fef3c7;color:#92400e;padding:8px 12px;border-radius:6px;margin:8px 0;font-size:12px}
     .footer{font-size:10px;color:#9ca3af;margin-top:20px;border-top:1px solid #f3f4f6;padding-top:10px}</style></head><body>
-    <h1>📊 ClaimX Monthly Digest — ${month}</h1>
+    <h1>📊 XpensR Monthly Digest — ${month}</h1>
     <p style="color:#6b7280">Company: ${activeMeta.name} · Generated: ${new Date().toLocaleString("en-IN")}</p>
     <h2>Summary</h2>
     <table><tr><th>Metric</th><th>Value</th></tr>
@@ -2923,14 +2935,14 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   ];
 
   return(
-    <div className="claimx-root" data-dark={String(isDark)} style={{display:"flex",minHeight:"100vh",fontFamily:FB,background:isDark?"#0f172a":"#f5faf3",color:isDark?"#f0f9ff":"#1a2e12",transition:"background .2s,color .2s"}}>
+    <div className="xpensr-root" data-dark={String(isDark)} style={{display:"flex",minHeight:"100vh",fontFamily:FB,background:isDark?"#0f172a":"#f5faf3",color:isDark?"#f0f9ff":"#1a2e12",transition:"background .2s,color .2s"}}>
       <style>{GLSTYLE+`.login-inp::placeholder{color:rgba(255,255,255,0.28)!important;font-weight:300}.login-inp::-webkit-input-placeholder{color:rgba(255,255,255,0.28)!important}`}</style>
       <style>{`
         /* Font size scaling — zoom scales EVERYTHING including inline px styles */
-        .claimx-root { zoom: ${(appFontSize/13).toFixed(3)}; }
+        .xpensr-root { zoom: ${(appFontSize/13).toFixed(3)}; }
         @supports not (zoom: 1) {
           /* Firefox fallback — transform scale */
-          .claimx-root { transform: scale(${(appFontSize/13).toFixed(3)}); transform-origin: top left; width: ${(100*(13/appFontSize)).toFixed(1)}%; }
+          .xpensr-root { transform: scale(${(appFontSize/13).toFixed(3)}); transform-origin: top left; width: ${(100*(13/appFontSize)).toFixed(1)}%; }
         }
       `}</style>
       {notif&&<div style={{position:"fixed",top:20,right:20,zIndex:1000,padding:"12px 18px",borderRadius:12,fontWeight:600,fontSize:13,background:notif.t==="error"?"#fee2e2":notif.t==="warn"?"#fef3c7":"#dcfce7",color:notif.t==="error"?"#dc2626":notif.t==="warn"?"#92400e":"#15803d",boxShadow:"0 4px 20px #0002",maxWidth:320}}>{notif.msg}</div>}
@@ -3048,7 +3060,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
                     <table style="width:100%;border-collapse:collapse;margin-top:16px"><thead><tr style="background:#f0fde9"><th style="padding:8px;text-align:left">Employee</th><th style="padding:8px;text-align:left">Total</th></tr></thead><tbody>${topRows}</tbody></table>
                   </div></div>`;
                 for(const u of financeUsers){
-                  if(u.email)await emailAlert(u.email,`ClaimX Monthly Digest — ${thisMonth}`,`Expense digest for ${thisMonth}`,html);
+                  if(u.email)await emailAlert(u.email,`XpensR Monthly Digest — ${thisMonth}`,`Expense digest for ${thisMonth}`,html);
                 }
                 toast("✓ Monthly digest sent to finance team");
               }} style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">📊 Digest</Btn>}
@@ -5123,7 +5135,7 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
           </div>
         </div>
         <div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"8px 12px",fontSize:11,color:"#92400e"}}>
-          💡 Required WhatsApp templates: <strong>claimx_claim_approved</strong>, <strong>claimx_claim_rejected</strong>, <strong>claimx_trip_summary</strong> — submit these to Interakt for approval before enabling.
+          💡 Required WhatsApp templates: <strong>xpensr_claim_approved</strong>, <strong>xpensr_claim_rejected</strong>, <strong>xpensr_trip_summary</strong> — submit these to Interakt for approval before enabling.
         </div>
       </Card>
 
@@ -6124,7 +6136,7 @@ function AIChatbot({user,co,onClose}){
   const CHAT_KEY="xpensr_chat_"+user?.id;
   const[msgs,setMsgs]=useState(()=>{
     try{const s=localStorage.getItem(CHAT_KEY);if(s)return JSON.parse(s);}catch{}
-    return[{role:"assistant",content:"Hi! I'm ClaimX Assistant. Ask me anything about submitting expenses, approving claims, creating trips, or any other feature. How can I help?"}];
+    return[{role:"assistant",content:"Hi! I'm XpensR Assistant. Ask me anything about submitting expenses, approving claims, creating trips, or any other feature. How can I help?"}];
   });
   const[input,setInput]=useState("");
   const[busy,setBusy]=useState(false);
@@ -6144,7 +6156,7 @@ function AIChatbot({user,co,onClose}){
     try{localStorage.removeItem(CHAT_KEY);}catch{}
   };
 
-  const CONTEXT=`You are ClaimX Assistant, a helpful support bot for XpensR by RB — a cloud-based expense management app.
+  const CONTEXT=`You are XpensR Assistant, a helpful support bot for XpensR by RB — a cloud-based expense management app.
 Key features: expense claims submission with AI OCR, trip management with budgets, multi-level approval (employee→manager→admin), settlements, GST ITC tracking, analytics, dark mode, keyboard shortcuts.
 User: ${user?.name||"Unknown"}, Role: ${user?.role||"employee"}, Company: ${co?.meta?.name||"Unknown"}.
 Active trips: ${(co?.trips||[]).filter(t=>t.status==="active").length}.
@@ -6184,7 +6196,7 @@ Be concise, helpful, and use bullet points when listing steps. If you can't help
       await fetch("/api/email",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
           to:"support@rbshah.co.in",
-          subject:`ClaimX Human Support Request — ${humanForm.name}`,
+          subject:`XpensR Human Support Request — ${humanForm.name}`,
           html:`<p><strong>User:</strong> ${humanForm.name} (${user?.role})</p><p><strong>Email:</strong> ${humanForm.email}</p><p><strong>Company:</strong> ${co?.meta?.name}</p><p><strong>Message:</strong> ${humanForm.msg}</p>`
         })});
     }catch(e){}
@@ -6198,7 +6210,7 @@ Be concise, helpful, and use bullet points when listing steps. If you can't help
       <div style={{background:`linear-gradient(135deg,${DARK},#2d5a1b)`,padding:"14px 16px",borderRadius:"16px 16px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{display:"flex",alignItems:"center",gap:9}}>
           <div style={{width:32,height:32,borderRadius:"50%",background:"linear-gradient(135deg,#7ED957,#5CB83A)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>🤖</div>
-          <div><div style={{color:"#fff",fontWeight:700,fontSize:13}}>ClaimX Assistant</div><div style={{color:"rgba(255,255,255,.5)",fontSize:10}}>AI-powered · {msgs.length-1} messages</div></div>
+          <div><div style={{color:"#fff",fontWeight:700,fontSize:13}}>XpensR Assistant</div><div style={{color:"rgba(255,255,255,.5)",fontSize:10}}>AI-powered · {msgs.length-1} messages</div></div>
         </div>
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
           <button onClick={resetChat} title="Clear chat history" style={{background:"none",border:"1px solid rgba(255,255,255,.2)",color:"rgba(255,255,255,.5)",borderRadius:6,padding:"3px 8px",fontSize:10,cursor:"pointer"}}>↺ Reset</button>
@@ -6250,7 +6262,7 @@ Be concise, helpful, and use bullet points when listing steps. If you can't help
 
 const TUTORIAL_STEPS = {
   employee:[
-    {icon:"🎉",title:"Welcome to ClaimX!",body:"ClaimX makes expense management effortless. Let's take a quick tour of your account."},
+    {icon:"🎉",title:"Welcome to XpensR!",body:"XpensR makes expense management effortless. Let's take a quick tour of your account."},
     {icon:"✈️",title:"Trips & Periods",body:"Before submitting expenses, your manager creates a Trip and assigns you to it. Each trip has a budget and date range."},
     {icon:"📤",title:"Submit Expenses",body:"Tap '+ New Expense' to file a claim. Upload your invoice and AI will auto-fill the details. You can submit multiple invoices at once."},
     {icon:"📋",title:"Track Your Claims",body:"The Claims tab shows all your submissions with approval status. Approved claims update your wallet balance automatically."},
@@ -6260,7 +6272,7 @@ const TUTORIAL_STEPS = {
     {icon:"✅",title:"You're all set!",body:"That's it! Start by going to the Submit tab to file your first expense. Your manager will approve it quickly."},
   ],
   manager:[
-    {icon:"🎉",title:"Welcome to ClaimX!",body:"As a Manager, you can create trips, approve expenses, and monitor your team's spending."},
+    {icon:"🎉",title:"Welcome to XpensR!",body:"As a Manager, you can create trips, approve expenses, and monitor your team's spending."},
     {icon:"🗂️",title:"Create a Trip",body:"Go to Trips tab → Create Trip. Set a budget, date range, and assign employees. They can only submit claims within trip dates."},
     {icon:"✓",title:"Approve Expenses",body:"Pending claims appear in the Approvals tab with a badge count. Review each claim — amounts above auto-approve limit need your sign-off."},
     {icon:"🗺️",title:"Trip Approvals",body:"When employees create their own trips, they appear in Trip Approvals for your review. Approve to activate, reject to decline."},
@@ -6270,7 +6282,7 @@ const TUTORIAL_STEPS = {
     {icon:"✅",title:"You're all set!",body:"Start by creating your first trip in the Trips tab and assigning your team members."},
   ],
   admin:[
-    {icon:"🎉",title:"Welcome to ClaimX!",body:"As Admin, you have full access to all company data, approvals, policy settings, and financial exports."},
+    {icon:"🎉",title:"Welcome to XpensR!",body:"As Admin, you have full access to all company data, approvals, policy settings, and financial exports."},
     {icon:"⚙️",title:"Set Company Policy",body:"Go to Policy tab first. Set auto-approve limits, receipt thresholds, categories, and departments for your company."},
     {icon:"👥",title:"Add Managers & Staff",body:"In Employees tab, create managers first. Managers can then create their own team members."},
     {icon:"🗂️",title:"Trips & Budgets",body:"Create trips with budgets. You can assign any combination of employees and managers. Trip currency and category limits can be set per trip."},
