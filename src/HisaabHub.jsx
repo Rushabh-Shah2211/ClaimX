@@ -1688,6 +1688,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     }catch(e){setSbError(e.message);}
     finally{setLoadingData(false);}
   },[cid]);
+  loadFromSBRef.current=loadFromSB;
 
   useEffect(()=>{
     if(!cid){setSbError("No company assigned to your account.");setLoadingData(false);return;}
@@ -1751,7 +1752,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       if(e.key==="?"||e.key==="/"){e.preventDefault();setSSC(p=>!p);return;}
       if(e.key==="Escape"){setMdl(null);setSSC(false);setSFR(false);return;}
       if(e.ctrlKey||e.metaKey||e.altKey)return;
-      const map={n:"submit",a:"approvals",c:"claims",t:"trips",d:"dashboard",f:"finance_view",i:"inbox",b:"balances",s:"settlements",u:"topup",y:"analytics",h:"help"};
+      const map={n:"submit",a:"approvals",c:"claims",t:"trips",d:"dashboard",f:"finance_view",i:"inbox",b:"balances",l:"ledger",s:"settlements",u:"topup",y:"analytics",h:"help"};
       if(map[e.key.toLowerCase()]){e.preventDefault();setTab(map[e.key.toLowerCase()]);}
     };
     window.addEventListener("keydown",handler);
@@ -1797,6 +1798,17 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const canApproveCheck=["manager","approver"].includes(user.role);
     if(n>0&&canApproveCheck)sendPush("ClaimX",`${n} claim${n!==1?"s":""} await your approval`);
   },[!!coData]);
+
+  // Reload approvals data when switching to approvals tab
+  // Use refs to avoid stale closure issues (loadFromSB/loadEditRequests defined later)
+  const loadFromSBRef=useRef(null);
+  const loadEditRequestsRef=useRef(null);
+  useEffect(()=>{
+    if(tab==="approvals"&&SB_ENABLED){
+      if(loadFromSBRef.current)loadFromSBRef.current();
+      if(loadEditRequestsRef.current)loadEditRequestsRef.current();
+    }
+  },[tab]); // eslint-disable-line
 
   // ── ALL hooks above this line — early return is safe below ───────────────
   const co=coData;
@@ -2052,14 +2064,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       })));
     }catch(e){console.warn("loadEditRequests:",e.message);}
   };
-
-  // Reload edit requests + all data when switching to approvals tab
-  useEffect(()=>{
-    if(tab==="approvals"&&SB_ENABLED){
-      loadFromSB();
-      loadEditRequests();
-    }
-  },[tab]); // eslint-disable-line react-hooks/exhaustive-deps
+  loadEditRequestsRef.current=loadEditRequests;
 
   const submitEditRequest=async(claim,reason)=>{
     const reqId=uid();
@@ -2996,6 +3001,9 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               if(patch.categoryLimits!==undefined)dbPatch.category_limits=patch.categoryLimits;
               if(patch.employeeBudgets!==undefined)dbPatch.employee_budgets=patch.employeeBudgets;
               if(patch.status!==undefined)dbPatch.status=patch.status;
+              if(patch.tripMode!==undefined)dbPatch.trip_mode=patch.tripMode;
+              if(patch.currency!==undefined)dbPatch.currency=patch.currency;
+              if(patch.projectCode!==undefined)dbPatch.project_code=patch.projectCode;
               const{error}=await supabase.from("trips").update(dbPatch).eq("id",tripId);
               if(error)throw new Error(error.message);
               // Handle assignedTo changes via trip_assignments table
@@ -3029,6 +3037,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
         {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={isAdmin?(co.auditLog||[]):(co.auditLog||[]).filter(e=>{const u=getUser(e.userId||e.by);return u?.dept===myUser?.dept;})} claims={co.claims} getUser={getUser}/>}
         {tab==="my_history"&&!isManager&&!isAdmin&&<MyHistoryTab user={user} trips={co.trips} claims={co.claims} getUser={getUser} exportClaimsPDF={exportClaimsPDF}/>}
+        {tab==="ledger"&&canApprove&&<TripLedgerTab trips={co.trips} claims={co.claims} topups={co.topups} users={co.users} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} companyName={activeMeta?.name||""}/>}
         {tab==="balances"&&canApprove&&<BalancesTab trips={co.trips} claims={co.claims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept)} getUser={getUser} isAdmin={isAdmin} fmt={fmt}/>}
         {tab==="settlements"&&canApprove&&<SettlementsTab trips={co.trips} claims={co.claims} topups={co.topups} users={co.users} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} cid={cid} sbEnabled={SB_ENABLED}/>}
         {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}/>}
@@ -3086,7 +3095,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[]),
               // Edit Requests merged into Approvals tab
               {id:"claims",icon:"📋",label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"},
-              ...(canApprove?[{id:"balances",icon:"⚖️",label:"Balances"}]:[]),
+              ...(canApprove?[{id:"ledger",icon:"📒",label:"Trip Ledger"}]:[]),
+    ...(canApprove?[{id:"balances",icon:"⚖️",label:"Balances"}]:[]),
     ...(canApprove?[{id:"settlements",icon:"💳",label:"Settlements"}]:[]),
               ...(canApprove?[{id:"topup",icon:"💰",label:"Top-ups"}]:[]),
               {id:"analytics",icon:"📊",label:"Analytics"},
@@ -3313,7 +3323,9 @@ function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin}){
   const[form,setForm]=useState({
     name:trip.name,startDate:trip.startDate,endDate:trip.endDate,
     projectCode:trip.projectCode||"",currency:trip.currency||"INR",
+    tripMode:trip.tripMode||"balance",
     assignedTo:[...(trip.assignedTo||[])],
+    categoryLimits:trip.categoryLimits||{},
   });
   const[busy,setBusy]=useState(false);
   const inpS={width:"100%",padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB};
@@ -3321,7 +3333,7 @@ function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin}){
     if(!form.name?.trim()||!form.endDate){alert("Name and end date required");return;}
     setBusy(true);
     try{
-      await onSave(trip.id,{name:form.name,startDate:form.startDate,endDate:form.endDate,projectCode:form.projectCode,currency:form.currency,assignedTo:form.assignedTo});
+      await onSave(trip.id,{name:form.name,startDate:form.startDate,endDate:form.endDate,projectCode:form.projectCode,currency:form.currency,assignedTo:form.assignedTo,tripMode:form.tripMode,categoryLimits:form.categoryLimits});
       onClose();
     }catch(e){alert("Update failed: "+e.message);}
     finally{setBusy(false);}
@@ -3335,6 +3347,18 @@ function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin}){
         </div>
         {!isAdmin&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"7px 11px",marginBottom:12,fontSize:11,color:"#92400e"}}>Changes will be saved directly. Admin approval not required for managers.</div>}
         <div style={{marginBottom:11}}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Trip Name</label><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} style={inpS}/></div>
+        {/* Trip Mode — critical for settlement calculations */}
+        <div style={{marginBottom:11}}>
+          <label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:6,textTransform:"uppercase"}}>Mode</label>
+          <div style={{display:"flex",gap:9}}>
+            {[{v:"balance",l:"💼 Balance Mode",d:"Employee uses pre-loaded wallet"},{v:"reimbursement",l:"💸 Reimbursement",d:"Company reimburses after trip"}].map(({v,l,d})=>(
+              <div key={v} onClick={()=>setForm({...form,tripMode:v})} style={{flex:1,padding:"10px",border:`2px solid ${form.tripMode===v?G:BDR}`,borderRadius:8,cursor:"pointer",textAlign:"center",background:form.tripMode===v?"#f0fde9":"var(--card)"}}>
+                <div style={{fontSize:12,fontWeight:700,color:INK}}>{l}</div>
+                <div style={{fontSize:9,color:MUTED,marginTop:2}}>{d}</div>
+              </div>
+            ))}
+          </div>
+        </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:11}}>
           <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Start Date</label><input type="date" value={form.startDate} onChange={e=>setForm({...form,startDate:e.target.value})} style={inpS}/></div>
           <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>End Date</label><input type="date" value={form.endDate} min={form.startDate} onChange={e=>setForm({...form,endDate:e.target.value})} style={inpS}/></div>
@@ -5264,7 +5288,244 @@ function TravelCalendar({trips,users,isAdmin,myDept}){
   );
 }
 
-// ─── BALANCES TAB ─────────────────────────────────────────────────────────────
+// ─── TRIP LEDGER TAB ──────────────────────────────────────────────────────────
+function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,companyName}){
+  const[selectedTrip,setSelectedTrip]=useState(null);
+  const[search,setSearch]=useState("");
+
+  // Filter trips by dept for manager
+  const visibleTrips=trips.filter(t=>{
+    if(isAdmin)return true;
+    const assigned=(t.assignedTo||[]);
+    return assigned.some(id=>getUser(id)?.dept===myDept)||
+           getUser(t.createdBy)?.dept===myDept;
+  }).filter(t=>!search||t.name?.toLowerCase().includes(search.toLowerCase()));
+
+  const trip=selectedTrip?trips.find(t=>t.id===selectedTrip):null;
+
+  // Build ledger rows for a trip
+  const buildLedger=(t)=>{
+    const assigned=[...(t.assignedTo||[])];
+    const isBalance=t.tripMode!=="reimbursement";
+    return assigned.map(uid=>{
+      const u=getUser(uid);
+      if(!u)return null;
+      const empClaims=claims.filter(c=>c.empId===uid&&c.tripId===t.id);
+      const approvedClaims=empClaims.filter(c=>c.status==="Approved");
+      const rejectedClaims=empClaims.filter(c=>c.status==="Rejected");
+      const pendingClaims=empClaims.filter(c=>c.status==="Pending");
+      const approvedAmt=approvedClaims.reduce((s,c)=>s+c.amount,0);
+      const rejectedAmt=rejectedClaims.reduce((s,c)=>s+c.amount,0);
+      const pendingAmt=pendingClaims.reduce((s,c)=>s+c.amount,0);
+      const empTopups=(topups||[]).filter(tp=>tp.empId===uid&&tp.tripId===t.id&&tp.status==="Approved").reduce((s,tp)=>s+tp.amount,0);
+      const allocated=(t.employeeBudgets?.[uid]?.allocated||0)+(t.employeeBudgets?.[uid]?.topups||0)||Math.round((t.budget||0)/Math.max(assigned.length,1));
+      const totalFunds=allocated+empTopups;
+      const balanceAsOfNow=isBalance?(totalFunds-approvedAmt):-approvedAmt;
+      const balanceAtTripEnd=isBalance?(totalFunds-approvedAmt-pendingAmt):-( approvedAmt+pendingAmt);
+      return{user:u,allocated,empTopups,totalFunds,approvedAmt,rejectedAmt,pendingAmt,approvedCount:approvedClaims.length,rejectedCount:rejectedClaims.length,pendingCount:pendingClaims.length,balanceAsOfNow,balanceAtTripEnd,isBalance};
+    }).filter(Boolean);
+  };
+
+  const exportLedgerCSV=(t,rows)=>{
+    const headers=["Employee","Dept","Allocated Budget","Topups Approved","Total Funds","Claims Approved (₹)","Claims Rejected (₹)","Claims Pending (₹)","Balance As-Of-Date","Balance End-Of-Trip","Mode"];
+    const csvRows=[headers.join(","),...rows.map(r=>[
+      `"${r.user.name}"`,r.user.dept||"",r.allocated,r.empTopups,r.totalFunds,
+      r.approvedAmt,r.rejectedAmt,r.pendingAmt,r.balanceAsOfNow,r.balanceAtTripEnd,
+      r.isBalance?"Balance":"Reimbursement"
+    ].join(","))];
+    const blob=new Blob([csvRows.join("\n")],{type:"text/csv"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+    a.download=`trip_ledger_${t.name?.replace(/\s+/g,"_")||t.id}.csv`;a.click();
+  };
+
+  const exportLedgerPDF=async(t,rows)=>{
+    const{jsPDF}=await import("jspdf").catch(()=>({jsPDF:window.jsPDF}));
+    const doc=new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
+    const W=297,ML=12,CW=W-2*ML;
+    let y=10;
+    // Header
+    doc.setFillColor(15,28,9);doc.rect(0,0,W,20,"F");
+    doc.setFont("helvetica","bold");doc.setFontSize(12);doc.setTextColor(126,217,87);
+    doc.text("ClaimX by RB — Trip Ledger",ML,13);
+    doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(180,200,170);
+    doc.text(companyName||"",W-ML,13,{align:"right"});
+    y=26;
+    // Trip info
+    doc.setFont("helvetica","bold");doc.setFontSize(11);doc.setTextColor(20,20,20);
+    doc.text(t.name||"",ML,y);y+=5;
+    doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(100,100,100);
+    doc.text(`${t.startDate||""} → ${t.endDate||""} · ${t.tripMode==="reimbursement"?"Reimbursement Mode":"Balance Mode"} · Budget: ₹${(t.budget||0).toLocaleString("en-IN")} · Status: ${t.status||""}`,ML,y);y+=8;
+    // Table
+    const cols=[{h:"Employee",w:34},{h:"Dept",w:22},{h:"Allocated",w:24},{h:"Topups",w:20},{h:"Total Funds",w:24},{h:"Approved",w:24},{h:"Rejected",w:24},{h:"Pending",w:22},{h:"Bal Today",w:26},{h:"Bal End-Trip",w:26},{h:"Mode",w:22}];
+    doc.setFillColor(21,128,61);doc.rect(ML,y,CW,7,"F");
+    doc.setFont("helvetica","bold");doc.setFontSize(7);doc.setTextColor(255,255,255);
+    let tx=ML+1;cols.forEach(col=>{doc.text(col.h,tx,y+4.5);tx+=col.w;});y+=8;
+    rows.forEach((r,idx)=>{
+      doc.setFillColor(idx%2===0?250:244,idx%2===0?254:250,idx%2===0?244:238);
+      doc.rect(ML,y,CW,6.5,"F");
+      doc.setFont("helvetica","normal");doc.setFontSize(7);doc.setTextColor(30,30,30);
+      tx=ML+1;
+      const vals=[r.user.name?.slice(0,16)||"",r.user.dept||"",`₹${r.allocated.toLocaleString("en-IN")}`,r.empTopups>0?`₹${r.empTopups.toLocaleString("en-IN")}`:"-",`₹${r.totalFunds.toLocaleString("en-IN")}`,`₹${r.approvedAmt.toLocaleString("en-IN")} (${r.approvedCount})`,r.rejectedAmt>0?`₹${r.rejectedAmt.toLocaleString("en-IN")} (${r.rejectedCount})`:"-",r.pendingAmt>0?`₹${r.pendingAmt.toLocaleString("en-IN")} (${r.pendingCount})`:"-"];
+      const balColor=r.balanceAsOfNow>0?[180,30,30]:r.balanceAsOfNow<0?[21,100,50]:[80,80,80];
+      vals.forEach((v,i)=>{doc.text(String(v),tx,y+4.5);tx+=cols[i].w;});
+      // Balance cols with colour
+      doc.setTextColor(...balColor);doc.setFont("helvetica","bold");
+      doc.text(r.balanceAsOfNow>0?`↩${fmt(r.balanceAsOfNow)}`:r.balanceAsOfNow<0?`↪${fmt(-r.balanceAsOfNow)}`:"Settled",tx,y+4.5);tx+=cols[8].w;
+      doc.text(r.balanceAtTripEnd>0?`↩${fmt(r.balanceAtTripEnd)}`:r.balanceAtTripEnd<0?`↪${fmt(-r.balanceAtTripEnd)}`:"Settled",tx,y+4.5);
+      doc.setTextColor(30,30,30);doc.setFont("helvetica","normal");
+      doc.text(r.isBalance?"Balance":"Reimb",tx+cols[9].w,y+4.5);
+      y+=7;if(y>180){doc.addPage();y=14;}
+    });
+    // Summary
+    y+=4;
+    const totApproved=rows.reduce((s,r)=>s+r.approvedAmt,0);
+    const totPending=rows.reduce((s,r)=>s+r.pendingAmt,0);
+    const totRecover=rows.filter(r=>r.balanceAsOfNow>0).reduce((s,r)=>s+r.balanceAsOfNow,0);
+    const totPay=rows.filter(r=>r.balanceAsOfNow<0).reduce((s,r)=>s+Math.abs(r.balanceAsOfNow),0);
+    doc.setFont("helvetica","bold");doc.setFontSize(8);doc.setTextColor(20,20,20);
+    doc.text(`Total Approved: ₹${totApproved.toLocaleString("en-IN")}   Pending: ₹${totPending.toLocaleString("en-IN")}   To Recover: ₹${totRecover.toLocaleString("en-IN")}   To Pay: ₹${totPay.toLocaleString("en-IN")}`,ML,y);
+    // Footer
+    doc.setFont("helvetica","normal");doc.setFontSize(6.5);doc.setTextColor(150,150,150);
+    doc.text(`ClaimX by RB · ${companyName||""} · Ledger as of ${new Date().toLocaleDateString("en-IN")}`,W/2,200,{align:"center"});
+    doc.output("dataurlnewwindow");
+  };
+
+  const ledgerRows=trip?buildLedger(trip):[];
+
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
+        <div>
+          <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>📒 Trip Ledger</h1>
+          <p style={{color:MUTED,fontSize:12,marginTop:2}}>Employee-wise fund flow, claims, and net balance for each trip</p>
+        </div>
+      </div>
+
+      {/* Trip selector */}
+      <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search trips…" style={{padding:"8px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,fontFamily:FB,width:220}}/>
+        <select value={selectedTrip||""} onChange={e=>setSelectedTrip(e.target.value||null)}
+          style={{padding:"8px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,fontFamily:FB,minWidth:200,appearance:"none"}}>
+          <option value="">— Select a trip to view ledger —</option>
+          {visibleTrips.map(t=>(
+            <option key={t.id} value={t.id}>{t.name} ({t.status}) — {t.tripMode==="reimbursement"?"Reimb":"Balance"}</option>
+          ))}
+        </select>
+        {trip&&<>
+          <Btn v="outline" onClick={()=>exportLedgerCSV(trip,ledgerRows)} style={{fontSize:11,padding:"6px 12px"}}>⬇ CSV</Btn>
+          <Btn v="outline" onClick={()=>exportLedgerPDF(trip,ledgerRows)} style={{fontSize:11,padding:"6px 12px"}}>📄 PDF</Btn>
+        </>}
+      </div>
+
+      {!trip&&<Card style={{padding:32,textAlign:"center"}}>
+        <div style={{fontSize:36,marginBottom:8}}>📒</div>
+        <div style={{color:MUTED,fontSize:13}}>Select a trip above to view its employee ledger</div>
+        <div style={{color:MUTED,fontSize:11,marginTop:4}}>{visibleTrips.length} trip{visibleTrips.length!==1?"s":""} available</div>
+      </Card>}
+
+      {trip&&<>
+        {/* Trip summary bar */}
+        <Card style={{padding:14,marginBottom:12,borderLeft:`4px solid ${G}`}}>
+          <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"center"}}>
+            <div><div style={{fontSize:11,fontWeight:700,color:INK}}>{trip.name}</div><div style={{fontSize:10,color:MUTED}}>{trip.startDate} → {trip.endDate}</div></div>
+            <div style={{padding:"4px 10px",borderRadius:12,background:trip.tripMode==="reimbursement"?"#dbeafe":"#dcfce7",color:trip.tripMode==="reimbursement"?"#1d4ed8":"#16a34a",fontSize:10,fontWeight:700}}>
+              {trip.tripMode==="reimbursement"?"💸 Reimbursement Mode":"💼 Balance Mode"}
+            </div>
+            <div style={{fontSize:11,color:MUTED}}>Budget: <strong style={{color:INK}}>{fmt(trip.budget||0)}</strong></div>
+            <div style={{fontSize:11,color:MUTED}}>Status: <strong style={{color:INK}}>{trip.status}</strong></div>
+            <div style={{fontSize:11,color:MUTED}}>{ledgerRows.length} employees</div>
+          </div>
+        </Card>
+
+        {/* Ledger table */}
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:900}}>
+            <thead>
+              <tr style={{background:GD}}>
+                {[
+                  ["Employee","left",160],["Dept","left",90],
+                  ["Allocated","right",100],["Topups Rcvd","right",100],["Total Funds","right",100],
+                  ["Approved","right",100],["Rejected","right",90],["Pending","right",90],
+                  ["Balance Today","right",110],["Balance at End","right",110],
+                ].map(([h,a,w])=>(
+                  <th key={h} style={{padding:"8px 10px",color:"#fff",fontWeight:700,fontSize:10,textTransform:"uppercase",textAlign:a,minWidth:w}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {ledgerRows.length===0&&<tr><td colSpan={10} style={{padding:24,textAlign:"center",color:MUTED}}>No employees assigned to this trip</td></tr>}
+              {ledgerRows.map((r,idx)=>(
+                <tr key={r.user.id} style={{background:idx%2===0?"var(--card)":"var(--bg,#f8faf6)",borderBottom:`1px solid ${BDR}`}}>
+                  <td style={{padding:"10px 10px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{width:28,height:28,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:GD,fontSize:10,flexShrink:0}}>{r.user.avatar||inits(r.user.name)}</div>
+                      <div><div style={{fontWeight:600,color:INK}}>{r.user.name}</div><div style={{fontSize:10,color:MUTED}}>{r.user.role}</div></div>
+                    </div>
+                  </td>
+                  <td style={{padding:"10px 10px",color:MUTED,fontSize:11}}>{r.user.dept||"—"}</td>
+                  <td style={{padding:"10px 10px",textAlign:"right",fontWeight:600,color:INK}}>{fmt(r.allocated)}</td>
+                  <td style={{padding:"10px 10px",textAlign:"right",color:r.empTopups>0?"#16a34a":MUTED}}>
+                    {r.empTopups>0?<span style={{fontWeight:600}}>+{fmt(r.empTopups)}</span>:"—"}
+                  </td>
+                  <td style={{padding:"10px 10px",textAlign:"right",fontWeight:700,color:INK}}>{fmt(r.totalFunds)}</td>
+                  <td style={{padding:"10px 10px",textAlign:"right"}}>
+                    <div style={{fontWeight:600,color:"#16a34a"}}>{fmt(r.approvedAmt)}</div>
+                    <div style={{fontSize:9,color:MUTED}}>{r.approvedCount} invoice{r.approvedCount!==1?"s":""}</div>
+                  </td>
+                  <td style={{padding:"10px 10px",textAlign:"right"}}>
+                    {r.rejectedAmt>0?<><div style={{fontWeight:600,color:"#dc2626"}}>{fmt(r.rejectedAmt)}</div><div style={{fontSize:9,color:MUTED}}>{r.rejectedCount} invoice{r.rejectedCount!==1?"s":""}</div></>:<span style={{color:MUTED}}>—</span>}
+                  </td>
+                  <td style={{padding:"10px 10px",textAlign:"right"}}>
+                    {r.pendingAmt>0?<><div style={{fontWeight:600,color:"#f59e0b"}}>{fmt(r.pendingAmt)}</div><div style={{fontSize:9,color:MUTED}}>{r.pendingCount} invoice{r.pendingCount!==1?"s":""}</div></>:<span style={{color:MUTED}}>—</span>}
+                  </td>
+                  <td style={{padding:"10px 10px",textAlign:"right"}}>
+                    <div style={{fontWeight:700,fontSize:13,color:r.balanceAsOfNow>0?"#dc2626":r.balanceAsOfNow<0?"#16a34a":MUTED}}>
+                      {r.balanceAsOfNow>0?`↩ ${fmt(r.balanceAsOfNow)}`:r.balanceAsOfNow<0?`↪ ${fmt(-r.balanceAsOfNow)}`:"Settled"}
+                    </div>
+                    <div style={{fontSize:9,color:MUTED}}>{r.isBalance?"to recover":"to pay"}</div>
+                  </td>
+                  <td style={{padding:"10px 10px",textAlign:"right"}}>
+                    <div style={{fontWeight:700,fontSize:13,color:r.balanceAtTripEnd>0?"#7c3aed":r.balanceAtTripEnd<0?"#0891b2":MUTED}}>
+                      {r.balanceAtTripEnd>0?`↩ ${fmt(r.balanceAtTripEnd)}`:r.balanceAtTripEnd<0?`↪ ${fmt(-r.balanceAtTripEnd)}`:"Settled"}
+                    </div>
+                    <div style={{fontSize:9,color:MUTED}}>incl. pending</div>
+                  </td>
+                </tr>
+              ))}
+              {/* Summary row */}
+              {ledgerRows.length>0&&(()=>{
+                const totAlloc=ledgerRows.reduce((s,r)=>s+r.allocated,0);
+                const totTop=ledgerRows.reduce((s,r)=>s+r.empTopups,0);
+                const totFunds=ledgerRows.reduce((s,r)=>s+r.totalFunds,0);
+                const totApp=ledgerRows.reduce((s,r)=>s+r.approvedAmt,0);
+                const totRej=ledgerRows.reduce((s,r)=>s+r.rejectedAmt,0);
+                const totPend=ledgerRows.reduce((s,r)=>s+r.pendingAmt,0);
+                const totBal=ledgerRows.reduce((s,r)=>s+r.balanceAsOfNow,0);
+                const totEnd=ledgerRows.reduce((s,r)=>s+r.balanceAtTripEnd,0);
+                return(
+                  <tr style={{background:GL,borderTop:`2px solid ${G}`,fontWeight:700}}>
+                    <td style={{padding:"10px 10px",color:GD,fontWeight:700}}>TOTAL</td>
+                    <td style={{padding:"10px 10px"}}/>
+                    <td style={{padding:"10px 10px",textAlign:"right",color:INK}}>{fmt(totAlloc)}</td>
+                    <td style={{padding:"10px 10px",textAlign:"right",color:totTop>0?"#16a34a":MUTED}}>{totTop>0?"+"+fmt(totTop):"—"}</td>
+                    <td style={{padding:"10px 10px",textAlign:"right",color:INK}}>{fmt(totFunds)}</td>
+                    <td style={{padding:"10px 10px",textAlign:"right",color:"#16a34a"}}>{fmt(totApp)}</td>
+                    <td style={{padding:"10px 10px",textAlign:"right",color:totRej>0?"#dc2626":MUTED}}>{totRej>0?fmt(totRej):"—"}</td>
+                    <td style={{padding:"10px 10px",textAlign:"right",color:totPend>0?"#f59e0b":MUTED}}>{totPend>0?fmt(totPend):"—"}</td>
+                    <td style={{padding:"10px 10px",textAlign:"right",color:totBal>0?"#dc2626":totBal<0?"#16a34a":MUTED,fontWeight:700}}>{totBal>0?`↩ ${fmt(totBal)}`:totBal<0?`↪ ${fmt(-totBal)}`:"Settled"}</td>
+                    <td style={{padding:"10px 10px",textAlign:"right",color:totEnd>0?"#7c3aed":totEnd<0?"#0891b2":MUTED,fontWeight:700}}>{totEnd>0?`↩ ${fmt(totEnd)}`:totEnd<0?`↪ ${fmt(-totEnd)}`:"Settled"}</td>
+                  </tr>
+                );
+              })()}
+            </tbody>
+          </table>
+        </div>
+      </>}
+    </div>
+  );
+}
+
+
 function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn}){
   const f=fmtFn||fmt;
   const[expandedEmp,setExpandedEmp]=useState(null);
@@ -5736,6 +5997,7 @@ const SHORTCUTS=[
   {key:"F",label:"Finance",           desc:"Finance view & exports"},
   {key:"I",label:"Inbox",             desc:"Open notifications inbox"},
   {key:"B",label:"Balances",          desc:"Employee balance summary"},
+  {key:"L",label:"Trip Ledger",        desc:"Employee-wise trip fund flow & settlement"},
   {key:"S",label:"Settlements",       desc:"Trip settlement tracker"},
   {key:"U",label:"Top-up",            desc:"Request wallet top-up"},
   {key:"Y",label:"Analytics",         desc:"Analytics & charts"},
