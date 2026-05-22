@@ -171,8 +171,12 @@ const setRLSContext=async(userId)=>{
 // Mappers: snake_case DB → camelCase app
 const mapUser=r=>r?({id:r.id,cid:r.company_id,companyId:r.company_id,name:r.name,email:r.email||"",username:r.username||"",mobile:r.mobile||"",role:r.role,avatar:r.avatar,dept:r.dept,balance:parseFloat(r.balance)||0,reimbursable:parseFloat(r.reimbursable)||0,delegateTo:r.delegate_to||null,isSuspended:r.is_suspended||false,authType:r.auth_type||"custom",
   // Phase 1: Grade system
-  grade:parseInt(r.grade)||0,                // 0 = no grade (legacy), 1-10
-  gradeLabel:r.grade_label||"",              // "Sr Engineer", "VP" etc.
+  grade:parseInt(r.grade)||0,
+  gradeLabel:r.grade_label||"",
+  // Phase 1b: Group system
+  groupId:r.group_id||null,       // UUID of the group (from employee_groups table)
+  groupName:r.group_name||"",     // Denormalized for display
+  reportingTo:r.reporting_to||null,// manager's user_id (within-group manager)
 }):null;
 const mapTrip=r=>r?({
   id:r.id, companyId:r.company_id, name:r.name, type:r.type,
@@ -239,6 +243,11 @@ function resolveApprover(submitterId, allUsers, policy, amount=0){
 
   // If grade system is off — fall back to legacy manager/admin
   if(!policy?.gradeBased || !(policy?.approvalHierarchy?.length>0)){
+    // Check group-level reporting first
+    if(submitter.reportingTo){
+      const directMgr=allUsers.find(u=>u.id===submitter.reportingTo&&!u.isSuspended);
+      if(directMgr&&directMgr.id!==submitterId) return [directMgr.id];
+    }
     const mgr = allUsers.find(u=>u.role==="manager"&&u.dept===submitter.dept&&!u.isSuspended&&u.id!==submitterId);
     const admin = allUsers.filter(u=>u.role==="admin"&&!u.isSuspended);
     return [...(mgr?[mgr.id]:[]), ...admin.map(a=>a.id)];
@@ -247,40 +256,51 @@ function resolveApprover(submitterId, allUsers, policy, amount=0){
   const hier = [...(policy.approvalHierarchy||[])].sort((a,b)=>a.level-b.level);
   const submitterGrade = submitter.grade||0;
 
-  // Find minimum grade needed to approve this amount
+  // If submitter has a direct reporting-to set, use that as first approver
+  // (overrides grade-based routing for the first level only)
+  if(submitter.reportingTo){
+    const directMgr=allUsers.find(u=>u.id===submitter.reportingTo&&!u.isSuspended);
+    if(directMgr&&directMgr.id!==submitterId){
+      const mgrGrade=directMgr.grade||0;
+      if(mgrGrade>submitterGrade){
+        // Direct manager has higher grade — check if their ceiling covers this amount
+        const mgrHier=hier.find(h=>h.level===mgrGrade);
+        const mgrCeiling=mgrHier?.ceiling||0;
+        if(mgrCeiling===0||mgrCeiling>=amount) return [directMgr.id];
+        // Manager's ceiling insufficient — go to grade above
+      }
+    }
+  }
+
+  // Grade-based routing
   const minGradeNeeded = (()=>{
-    // Find the lowest grade whose ceiling >= amount (0 ceiling = unlimited)
     for(const h of hier){
       if(h.level > submitterGrade && (h.ceiling===0||h.ceiling>=amount)) return h.level;
     }
-    // If no level has sufficient ceiling, escalate to top
     return hier[hier.length-1]?.level||99;
   })();
 
-  // The approver must be: grade > submitterGrade AND grade >= minGradeNeeded
-  // (Can never be same grade as submitter — self-approval block)
   const requiredGrade = Math.max(submitterGrade+1, minGradeNeeded);
 
-  // Find active users at requiredGrade in same dept (or any dept if dept match fails)
+  // Find active users at requiredGrade — prefer same group, then same dept, then any
   const candidates = allUsers.filter(u=>
     u.grade===requiredGrade &&
     !u.isSuspended &&
     u.id!==submitterId
   );
 
-  // Prefer same dept
+  const sameGroup = submitter.groupId ? candidates.filter(u=>u.groupId===submitter.groupId) : [];
   const sameDept = candidates.filter(u=>u.dept===submitter.dept);
-  const approvers = sameDept.length>0 ? sameDept : candidates;
+  const approvers = sameGroup.length>0 ? sameGroup : sameDept.length>0 ? sameDept : candidates;
 
   if(approvers.length > 0) return approvers.map(u=>u.id);
 
-  // Skip to next available grade above
+  // Skip to next available grade
   for(const h of hier.filter(h=>h.level > requiredGrade)){
     const nextCandidates = allUsers.filter(u=>u.grade===h.level&&!u.isSuspended&&u.id!==submitterId);
     if(nextCandidates.length>0) return nextCandidates.map(u=>u.id);
   }
 
-  // Final fallback: all admins
   return allUsers.filter(u=>u.role==="admin"&&!u.isSuspended).map(u=>u.id);
 }
 
@@ -382,7 +402,7 @@ async function sbLoadCompany(cid){
   const safe=async(q,fallback=[])=>{try{const{data,error}=await q;if(error){console.warn("sbLoadCompany query error:",error.message);return fallback;}return data||fallback;}catch(e){console.warn("sbLoadCompany exception:",e.message);return fallback;}};
   const safeSingle=async(q,fallback=null)=>{try{const{data,error}=await q;if(error){console.warn("sbLoadCompany single error:",error.message);return fallback;}return data||fallback;}catch(e){return fallback;}};
 
-  const [meta,users,trips,claims,topups,audit,notifs,policy,tripLegs,diemComps]=await Promise.all([
+  const [meta,users,trips,claims,topups,audit,notifs,policy,tripLegs,diemComps,empGroups]=await Promise.all([
     safeSingle(supabase.from("companies").select("*").eq("id",cid).single()),
     safe(supabase.from("users").select("*").eq("company_id",cid)),
     safe(supabase.from("trips").select("*,trip_assignments(user_id)").eq("company_id",cid).order("created_at",{ascending:false})),
@@ -393,12 +413,22 @@ async function sbLoadCompany(cid){
     safeSingle(supabase.from("policy").select("*").eq("company_id",cid).single()),
     safe(supabase.from("trip_legs").select("*").eq("company_id",cid).order("leg_num",{ascending:true})),
     safe(supabase.from("diem_computations").select("*").eq("company_id",cid)),
+    safe(supabase.from("employee_groups").select("*").eq("company_id",cid)),
   ]);
+
+  // Build group lookup for denormalized group_name
+  const groupMap=Object.fromEntries((empGroups||[]).map(g=>[g.id,g.name]));
 
   // Attach legs to trips
   const tripsWithLegs=(trips||[]).map(t=>({
     ...t,
     trip_legs:(tripLegs||[]).filter(l=>l.trip_id===t.id),
+  }));
+
+  // Attach group_name to users (denormalized)
+  const usersWithGroups=(users||[]).map(u=>({
+    ...u,
+    group_name:groupMap[u.group_id]||"",
   }));
 
   // Fetch signed URLs for all receipts in parallel so images show immediately
@@ -418,7 +448,7 @@ async function sbLoadCompany(cid){
 
   return{
     meta:meta?{id:meta.id,name:meta.name,industry:meta.industry,plan:meta.plan,maxUsers:meta.max_users,status:meta.status,createdOn:meta.created_on}:null,
-    users:(users||[]).map(mapUser),
+    users:usersWithGroups.map(mapUser),
     trips:tripsWithLegs.map(mapTrip),
     claims:mappedClaims,
     topups:(topups||[]).map(mapTopup),
@@ -426,6 +456,7 @@ async function sbLoadCompany(cid){
     notifications:(notifs||[]).map(mapNotif),
     policy:mapPolicy(policy)||mkPolicy(),
     diemComps:(diemComps||[]),
+    empGroups:(empGroups||[]).map(g=>({id:g.id,name:g.name,dept:g.dept,managerId:g.manager_id,description:g.description})),
   };
 }
 
@@ -2908,6 +2939,14 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       if(error)throw new Error(error.message);
       if(data?.error)throw new Error(data.error);
       userId=data?.id||data;
+      // Patch grade/gradeLabel/groupId after RPC (RPC doesn't have these params)
+      if(userId&&(userData.grade||userData.gradeLabel||userData.groupId)){
+        await supabase.from("users").update({
+          grade:userData.grade||0,
+          grade_label:userData.gradeLabel||"",
+          group_id:userData.groupId||null,
+        }).eq("id",userId);
+      }
     }catch(rpcErr){
       console.warn("create_employee RPC failed:",rpcErr.message,". Trying direct insert...");
       // Fallback: direct INSERT
@@ -2918,7 +2957,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         name:userData.name, email:userData.email||null,
         username:userData.username.toLowerCase(),
         mobile:userData.mobile||null,
-        password_hash:password, // plain — user should reset
+        password_hash:password,
         role:userData.role||"employee",
         avatar:av,
         dept:userData.dept||"Operations",
@@ -2926,15 +2965,15 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         reimbursable:0,
         auth_type:"custom",
         is_suspended:false,
+        grade:userData.grade||0,
+        grade_label:userData.gradeLabel||"",
+        group_id:userData.groupId||null,
       });
       if(insErr)throw new Error("RPC: "+rpcErr.message+". Direct insert: "+insErr.message+". Please check Supabase permissions.");
       userId=newId;
     }
 
-    // Reload data (non-fatal)
     try{await loadFromSB();}catch(e){console.warn("loadFromSB after add:",e);}
-
-    // Show success toast
     toast(`✓ ${userData.name} added · Login: ${userData.username.toLowerCase()}`);
     return userId;
   };
@@ -2949,6 +2988,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     if(patch.balance!==undefined)     dbPatch.balance=patch.balance;
     if(patch.grade!==undefined)        dbPatch.grade=patch.grade;
     if(patch.gradeLabel!==undefined)   dbPatch.grade_label=patch.gradeLabel;
+    if(patch.groupId!==undefined)      dbPatch.group_id=patch.groupId;
+    if(patch.reportingTo!==undefined)  dbPatch.reporting_to=patch.reportingTo;
     if(patch.isSuspended!==undefined) dbPatch.is_suspended=patch.isSuspended;
     if(patch.delegateTo!==undefined)  dbPatch.delegate_to=patch.delegateTo;
     if(patch.delegateUntil!==undefined) dbPatch.delegate_until=patch.delegateUntil??null; // null clears it
@@ -3409,7 +3450,26 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}/>}
         {tab==="trip_approvals"&&canApprove&&<TripApprovalsTab trips={co.trips} getUser={getUser} approveTrip={approveTrip} rejectTrip={rejectTrip} isAdmin={isAdmin}/>}
         {tab==="editreqs"&&canApprove&&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id} reload={loadEditRequests}/>}
-        {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept||u.id===user.id)} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin}/>}
+        {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept||u.id===user.id)} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin}
+          empGroups={co.empGroups||[]}
+          sbSaveGroup={async(g)=>{
+            if(SB_ENABLED){
+              const{error}=await supabase.from("employee_groups").upsert({id:g.id,company_id:cid,name:g.name,dept:g.dept||null,manager_id:g.managerId||null});
+              if(error)throw new Error(error.message);
+              await loadFromSB();
+            }
+            toast("✓ Group saved: "+g.name);
+          }}
+          sbDeleteGroup={async(groupId)=>{
+            if(SB_ENABLED){
+              // Remove group from members first
+              await supabase.from("users").update({group_id:null,reporting_to:null}).eq("group_id",groupId);
+              await supabase.from("employee_groups").delete().eq("id",groupId);
+              await loadFromSB();
+            }
+            toast("Group deleted");
+          }}
+        />}
         {tab==="policy"&&isAdmin&&<Policy policy={co.policy} setPolicy={setCoPolicy} savePolicy={savePolicyToSB} toast={toast} users={co.users} sbEnabled={SB_ENABLED}/>}
         {tab==="help"&&<div>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
@@ -5057,29 +5117,32 @@ function Audit({auditLog,claims,getUser}){
 }
 
 // ─── EMPLOYEES TAB ────────────────────────────────────────────────────────────
-function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,updateUserInSB,sbEnabled,companyDepts,isAdmin}){
+function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,updateUserInSB,sbEnabled,companyDepts,isAdmin,empGroups,sbSaveGroup,sbDeleteGroup}){
   const depts=companyDepts||policy?.departments||DEFAULT_DEPTS;
+  const hierarchy=policy?.approvalHierarchy||[];
   const creatableRoles=isAdmin
-    ?ROLES.filter(r=>["manager","finance","employee"].includes(r.id))   // admin creates manager/finance/employee
-    :ROLES.filter(r=>["finance","employee"].includes(r.id));             // manager creates employee/finance only
-  // Admin accounts are free (1 per company, created by SA)
-  // All managers + employees + finance count toward the limit
+    ?ROLES.filter(r=>["manager","finance","employee"].includes(r.id))
+    :ROLES.filter(r=>["finance","employee"].includes(r.id));
   const countedUsers=users.filter(u=>u.role!=="admin");
-  const emps=users.filter(u=>u.role!=="admin"); // show all non-admin in table
+  const emps=users.filter(u=>u.role!=="admin");
   const activeEmps=countedUsers.filter(u=>!u.isSuspended);
   const maxUsers=companyMeta.maxUsers||0;
   const canAdd=activeEmps.length<maxUsers;
-  const slotsLeft=Math.max(0,maxUsers-activeEmps.length);
 
-  const[showAdd,  setShowAdd] =useState(false);
-  const[editEmp,  setEditEmp] =useState(null);
-  const[delEmp,   setDelEmp]  =useState(null);
-  const[resetEmp, setResetEmp]=useState(null); // password reset
-  const[newPwVal, setNewPwVal]=useState("");
-  const[busy,     setBusy]    =useState(false);
-  const[form,     setForm]    =useState({name:"",username:"",mobile:"",email:"",dept:depts[0]||"Operations",balance:"",password:"",role:"employee"});
-  const[editForm, setEF]      =useState({});
+  const[tab,setLocalTab]=useState("employees"); // employees | groups
+  const[showAdd,setShowAdd]=useState(false);
+  const[editEmp,setEditEmp]=useState(null);
+  const[busy,setBusy]=useState(false);
+  const[form,setForm]=useState({name:"",username:"",mobile:"",email:"",dept:depts[0]||"Operations",balance:"",password:"",role:"employee",grade:"",gradeLabel:"",groupId:"",reportingTo:""});
+  const[editForm,setEF]=useState({});
+  const[showNewGroup,setShowNewGroup]=useState(false);
+  const[groupForm,setGroupForm]=useState({name:"",dept:depts[0]||"",managerId:""});
   const inpS={padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB,width:"100%"};
+  const sS={...inpS,appearance:"none"};
+
+  // ── Grade helper ─────────────────────────────────────────────────────────
+  const gradeOptions=[{value:"",label:"No grade"},...hierarchy.sort((a,b)=>a.level-b.level).map(h=>({value:String(h.level),label:`L${h.level} — ${h.label||"Level "+h.level}`}))];
+  const gradeForLevel=level=>hierarchy.find(h=>h.level===parseInt(level));
 
   const handleNameChange=e=>{
     const n=e.target.value;
@@ -5087,39 +5150,33 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
   };
 
   const add=async()=>{
-    if(!form.name||!form.username||!form.password){toast("Name, username and password are required","error");return;}
+    if(!form.name||!form.username||!form.password){toast("Name, username and password required","error");return;}
     if(form.password.length<4){toast("Password must be at least 4 characters","error");return;}
-    if(!canAdd){toast(`Active limit (${maxUsers}) reached. Suspend an existing user first.`,"error");return;}
-    if(users.find(u=>u.username?.toLowerCase()===form.username.toLowerCase())){toast("Username already taken in this company","error");return;}
+    if(!canAdd){toast(`Active limit (${maxUsers}) reached.`,"error");return;}
+    if(users.find(u=>u.username?.toLowerCase()===form.username.toLowerCase())){toast("Username already taken","error");return;}
     setBusy(true);
     try{
-      if(sbEnabled&&addUserToSB){
-        await addUserToSB(
-          {name:form.name,username:form.username.toLowerCase().trim(),email:form.email||null,mobile:form.mobile||null,role:form.role,dept:form.dept,balance:parseFloat(form.balance)||0},
-          form.password
-        );
-        // addUserToSB handles toast on success — just reset form
-      } else {
-        const newEmp={id:"emp_"+uid(),cid:companyMeta.id,name:form.name,username:form.username.toLowerCase().trim(),email:form.email||"",mobile:form.mobile||"",password:form.password,role:form.role,avatar:inits(form.name),dept:form.dept,balance:parseFloat(form.balance)||0,reimbursable:0,delegateTo:null,isSuspended:false,authType:"custom"};
-        setUsers(p=>[...p,newEmp]);
-        toast(`✓ ${form.name} added`);
-      }
-      setForm({name:"",username:"",mobile:"",email:"",dept:depts[0]||"Operations",balance:"",password:"",role:creatableRoles[creatableRoles.length-1]?.id||"employee"});
+      const gradeNum=parseInt(form.grade)||0;
+      const gradeLbl=gradeNum>0?(form.gradeLabel||(gradeForLevel(form.grade)?.label||"")):form.gradeLabel||"";
+      const ud={name:form.name,username:form.username.toLowerCase().trim(),email:form.email||null,mobile:form.mobile||null,role:form.role,dept:form.dept,balance:parseFloat(form.balance)||0,grade:gradeNum,gradeLabel:gradeLbl,groupId:form.groupId||null,reportingTo:form.reportingTo||null};
+      if(sbEnabled&&addUserToSB){await addUserToSB(ud,form.password);}
+      else{setUsers(p=>[...p,{id:"emp_"+uid(),cid:companyMeta.id,...ud,avatar:inits(form.name),reimbursable:0,delegateTo:null,isSuspended:false,authType:"custom",groupName:(empGroups||[]).find(g=>g.id===form.groupId)?.name||""}]);}
+      setForm({name:"",username:"",mobile:"",email:"",dept:depts[0]||"Operations",balance:"",password:"",role:"employee",grade:"",gradeLabel:"",groupId:"",reportingTo:""});
       setShowAdd(false);
-    }catch(e){
-      toast(e.message||"Failed to create user","error");
-    }
+    }catch(e){toast(e.message||"Failed","error");}
     finally{setBusy(false);}
   };
 
-  const openEdit=e=>{setEditEmp(e);setEF({name:e.name,dept:e.dept,role:e.role,balance:String(e.balance||0),mobile:e.mobile||"",password:"",grade:String(e.grade||0),gradeLabel:e.gradeLabel||""});};
+  const openEdit=e=>{setEditEmp(e);setEF({name:e.name,dept:e.dept,role:e.role,balance:String(e.balance||0),mobile:e.mobile||"",password:"",grade:String(e.grade||""),gradeLabel:e.gradeLabel||"",groupId:e.groupId||"",reportingTo:e.reportingTo||""});};
   const saveEdit=async()=>{
     setBusy(true);
     try{
-      const patch={name:editForm.name,dept:editForm.dept,role:editForm.role,balance:parseFloat(editForm.balance)||0,mobile:editForm.mobile||undefined,grade:parseInt(editForm.grade)||0,gradeLabel:editForm.gradeLabel||""};
+      const gradeNum=parseInt(editForm.grade)||0;
+      const gradeLbl=gradeNum>0?(editForm.gradeLabel||(gradeForLevel(editForm.grade)?.label||"")):editForm.gradeLabel||"";
+      const patch={name:editForm.name,dept:editForm.dept,role:editForm.role,balance:parseFloat(editForm.balance)||0,mobile:editForm.mobile||undefined,grade:gradeNum,gradeLabel:gradeLbl,groupId:editForm.groupId||null,reportingTo:editForm.reportingTo||null};
       if(editForm.password)patch.password=editForm.password;
       if(sbEnabled&&updateUserInSB){await updateUserInSB(editEmp.id,patch);}
-      else{setUsers(p=>p.map(u=>u.id===editEmp.id?{...u,...patch,avatar:inits(editForm.name)}:u));}
+      else{setUsers(p=>p.map(u=>u.id===editEmp.id?{...u,...patch,avatar:inits(editForm.name),groupName:(empGroups||[]).find(g=>g.id===editForm.groupId)?.name||""}:u));}
       toast("✓ "+editForm.name+" updated");setEditEmp(null);
     }catch(e){toast(e.message,"error");}
     finally{setBusy(false);}
@@ -5128,267 +5185,240 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
   const toggleSuspend=async emp=>{
     const ns=!emp.isSuspended;
     if(!ns&&activeEmps.length>=maxUsers){toast("Cannot activate — active limit reached","error");return;}
-    try{
-      if(sbEnabled&&updateUserInSB){await updateUserInSB(emp.id,{isSuspended:ns});}
-      else{setUsers(p=>p.map(u=>u.id===emp.id?{...u,isSuspended:ns}:u));}
-      toast(ns?"⏸ "+emp.name+" suspended":"▶ "+emp.name+" activated");
-    }catch(e){toast(e.message,"error");}
+    if(sbEnabled&&updateUserInSB)await updateUserInSB(emp.id,{isSuspended:ns});
+    else setUsers(p=>p.map(u=>u.id===emp.id?{...u,isSuspended:ns}:u));
+    toast(ns?"Suspended — "+emp.name:"Activated — "+emp.name);
   };
 
-  const deleteEmp=async emp=>{
-    try{
-      if(sbEnabled){
-        const{error}=await supabase.from("users").delete().eq("id",emp.id);
-        if(error)throw new Error(error.message);
-        // Update local state immediately
-        setUsers(p=>p.filter(u=>u.id!==emp.id));
-      }else{
-        setUsers(p=>p.filter(u=>u.id!==emp.id));
-      }
-      toast(emp.name+" removed","warn");
-    }catch(e){
-      toast("Delete failed: "+e.message,"error");
-    }
-    setDelEmp(null);
+  const addGroup=async()=>{
+    if(!groupForm.name.trim()){toast("Group name required","error");return;}
+    const g={id:uid(),name:groupForm.name.trim(),dept:groupForm.dept,managerId:groupForm.managerId||null,company_id:companyMeta.id};
+    if(sbEnabled&&sbSaveGroup){await sbSaveGroup(g);}
+    toast("✓ Group created: "+g.name);
+    setGroupForm({name:"",dept:depts[0]||"",managerId:""});
+    setShowNewGroup(false);
   };
 
-  const resetPassword=async()=>{
-    if(!newPwVal||newPwVal.length<4){toast("Password must be at least 4 characters","error");return;}
-    setBusy(true);
-    try{
-      if(sbEnabled){
-        const{data,error}=await supabase.rpc("reset_user_password",{p_user_id:resetEmp.id,p_new_password:newPwVal});
-        if(error)throw new Error(error.message);
-        if(data?.error)throw new Error(data.error);
-      } else {
-        setUsers(p=>p.map(u=>u.id===resetEmp.id?{...u,password:newPwVal}:u));
-      }
-      toast("✓ Password reset for "+resetEmp.name);
-      setResetEmp(null);setNewPwVal("");
-    }catch(e){toast(e.message,"error");}
-    finally{setBusy(false);}
-  };
+  const groups=empGroups||[];
+  const managersAndAbove=users.filter(u=>u.grade>0||["manager","admin"].includes(u.role));
 
   return(
     <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-        <div>
-          <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Employees</h1>
-          <p style={{color:MUTED,fontSize:11,marginTop:3}}>
-            {activeEmps.length} active · {emps.filter(u=>u.isSuspended).length} suspended · max <strong style={{color:INK}}>{maxUsers}</strong> active allowed
-            {" · "}<span style={{color:canAdd?GD:"#dc2626",fontWeight:700}}>{canAdd?slotsLeft+" slot"+(slotsLeft!==1?"s":"")+" free":"No slots — suspend to free one"}</span>
-          </p>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Employees & Groups</h1>
+        <div style={{display:"flex",gap:8}}>
+          {[["employees","👤 Employees"],["groups","👥 Groups"]].map(([id,label])=>(
+            <button key={id} onClick={()=>setLocalTab(id)} style={{padding:"6px 14px",borderRadius:7,border:`1.5px solid ${tab===id?G:BDR}`,background:tab===id?G:"transparent",color:tab===id?"#fff":INK,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:FB}}>
+              {label}
+            </button>
+          ))}
         </div>
-        <Btn onClick={()=>{if(!canAdd){toast("Active limit reached. Suspend an employee to free a slot.","error");return;}setShowAdd(!showAdd);}} v={canAdd?"primary":"outline"}>{showAdd?"✕ Cancel":"＋ Add Employee"}</Btn>
       </div>
 
-      {!canAdd&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:9,padding:"10px 14px",marginBottom:12,fontSize:12,color:"#92400e"}}>
-        ⚠ Active limit of <strong>{maxUsers}</strong> reached. Suspend an existing employee to free a slot, or ask your Admin to increase the limit.
-      </div>}
+      {/* ── EMPLOYEES TAB ── */}
+      {tab==="employees"&&<>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <div style={{fontSize:12,color:MUTED}}>{activeEmps.length}/{maxUsers} active · {Math.max(0,maxUsers-activeEmps.length)} slots remaining</div>
+          <Btn onClick={()=>setShowAdd(p=>!p)} disabled={!canAdd}>{showAdd?"✕ Cancel":"+ Add Employee"}</Btn>
+        </div>
 
-      {showAdd&&canAdd&&<Card style={{padding:18,marginBottom:14,borderColor:G,background:GL}}>
-        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>New Employee</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}}>
-          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Full Name *</label>
-            <input value={form.name} onChange={handleNameChange} placeholder="Riya Mehta" style={inpS}/></div>
-          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Username * (for login)</label>
-            <input value={form.username} onChange={e=>setForm({...form,username:e.target.value.toLowerCase().replace(/\s+/g,"")})} placeholder="riya.mehta" style={inpS}/></div>
-          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Password *</label>
-            <input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="min 4 chars" style={inpS}/></div>
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10,marginBottom:12}}>
-          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Mobile (optional)</label>
-            <input value={form.mobile} onChange={e=>setForm({...form,mobile:e.target.value})} placeholder="9876543210" style={inpS}/></div>
-          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Department</label>
-            <select value={form.dept} onChange={e=>setForm({...form,dept:e.target.value})} style={{...inpS,appearance:"none"}}>{depts.map(d=><option key={d}>{d}</option>)}</select></div>
-          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Role</label>
-            <select value={form.role} onChange={e=>setForm({...form,role:e.target.value})} style={{...inpS,appearance:"none"}}>{creatableRoles.map(r=><option key={r.id} value={r.id}>{r.label}</option>)}</select></div>
-          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Wallet ₹</label>
-            <input type="number" value={form.balance} onChange={e=>setForm({...form,balance:e.target.value})} placeholder="0" style={inpS}/></div>
-        </div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
-          <div style={{background:"rgba(126,217,87,0.15)",border:"1px solid "+GM,borderRadius:7,padding:"7px 12px",fontSize:11,color:GD,flex:1}}>
-            💡 Employee logs in with <strong>username + password</strong>. Mobile is an optional alternative login.
+        {showAdd&&<Card style={{padding:20,marginBottom:14}}>
+          <div style={{fontFamily:FD,fontSize:15,fontWeight:700,color:INK,marginBottom:12}}>New Employee</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Full Name *</label><input value={form.name} onChange={handleNameChange} style={inpS} placeholder="Ravi Sharma"/></div>
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Username *</label><input value={form.username} onChange={e=>setForm(f=>({...f,username:e.target.value}))} style={inpS} placeholder="ravi.sharma"/></div>
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Password *</label><input type="password" value={form.password} onChange={e=>setForm(f=>({...f,password:e.target.value}))} style={inpS} placeholder="min 4 chars"/></div>
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Mobile</label><input value={form.mobile} onChange={e=>setForm(f=>({...f,mobile:e.target.value}))} style={inpS} placeholder="optional"/></div>
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Email</label><input type="email" value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} style={inpS} placeholder="optional"/></div>
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Wallet ₹</label><input type="number" value={form.balance} onChange={e=>setForm(f=>({...f,balance:e.target.value}))} style={inpS} placeholder="0"/></div>
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Role</label>
+              <select value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))} style={sS}>
+                {creatableRoles.map(r=><option key={r.id} value={r.id}>{r.label}</option>)}
+              </select></div>
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Department</label>
+              <select value={form.dept} onChange={e=>setForm(f=>({...f,dept:e.target.value}))} style={sS}>
+                {depts.map(d=><option key={d}>{d}</option>)}
+              </select></div>
+
+            {/* Grade — linked to approval hierarchy */}
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Grade {hierarchy.length>0?"(links to approval levels)":"(set levels in Policy first)"}</label>
+              <select value={form.grade} onChange={e=>{
+                const level=e.target.value;
+                const h=gradeForLevel(level);
+                setForm(f=>({...f,grade:level,gradeLabel:h?.label||f.gradeLabel}));
+              }} style={sS} disabled={hierarchy.length===0}>
+                {gradeOptions.map(g=><option key={g.value} value={g.value}>{g.label}</option>)}
+              </select>
+              {hierarchy.length===0&&<div style={{fontSize:10,color:"#f59e0b",marginTop:2}}>⚠ No approval levels defined. Go to Policy → Grade System to define levels first.</div>}
+            </div>
+
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Grade Label (override)</label><input value={form.gradeLabel} onChange={e=>setForm(f=>({...f,gradeLabel:e.target.value}))} style={inpS} placeholder="e.g. Sr Engineer"/></div>
+
+            {/* Group — within-dept grouping */}
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Group {groups.length===0?"(create groups in Groups tab)":""}</label>
+              <select value={form.groupId} onChange={e=>setForm(f=>({...f,groupId:e.target.value}))} style={sS} disabled={groups.length===0}>
+                <option value="">No group</option>
+                {groups.filter(g=>!form.dept||g.dept===form.dept||!g.dept).map(g=><option key={g.id} value={g.id}>{g.name} {g.dept?`(${g.dept})`:""}</option>)}
+              </select></div>
+
+            {/* Reporting to — direct manager within group */}
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Reporting To (group manager)</label>
+              <select value={form.reportingTo} onChange={e=>setForm(f=>({...f,reportingTo:e.target.value}))} style={sS}>
+                <option value="">Department default</option>
+                {managersAndAbove.filter(u=>u.dept===form.dept||!form.dept).map(u=><option key={u.id} value={u.id}>{u.name} {u.gradeLabel?`(${u.gradeLabel})`:`(${u.role})`}</option>)}
+              </select></div>
           </div>
-          <Btn onClick={add} disabled={busy} style={{padding:"9px 20px",flexShrink:0}}>{busy?"Adding…":"Add Employee →"}</Btn>
-        </div>
-      </Card>}
+          <div style={{display:"flex",gap:8}}>
+            <Btn onClick={add} disabled={busy}>{busy?"Adding…":"Add Employee →"}</Btn>
+            <Btn v="outline" onClick={()=>setShowAdd(false)}>Cancel</Btn>
+          </div>
+        </Card>}
 
-      {/* Edit modal */}
-      {editEmp&&(
-        <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,backdropFilter:"blur(3px)"}} onClick={()=>setEditEmp(null)}>
-          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:28,width:"min(480px,96vw)",boxShadow:"0 24px 60px #0003"}}>
-            <h3 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK,marginBottom:16}}>Edit — {editEmp.name}</h3>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:14}}>
-              {[["Full Name","text",editForm.name,v=>setEF({...editForm,name:v}),""],
-                ["Mobile","text",editForm.mobile,v=>setEF({...editForm,mobile:v}),"optional"],
-                ["Wallet ₹","number",editForm.balance,v=>setEF({...editForm,balance:v}),""],
-                ["Grade (1–10, 0=none)","number",editForm.grade,v=>setEF({...editForm,grade:v}),"e.g. 5"],
-                ["Grade Label","text",editForm.gradeLabel,v=>setEF({...editForm,gradeLabel:v}),"e.g. Sr Engineer"],
-              ].map(([l,t,v,fn,ph])=>(
-                <div key={l}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>{l}</label>
-                  <input type={t} value={v} onChange={e=>fn(e.target.value)} placeholder={ph} style={inpS}/></div>
+        {/* Employee list */}
+        <Card style={{overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead><tr style={{background:GL}}>
+              {["Employee","Dept / Group","Grade","Role","Wallet","Status","Actions"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:"left",color:GD,fontWeight:700,fontSize:10,textTransform:"uppercase"}}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {emps.map((e,idx)=>(
+                <tr key={e.id} style={{borderTop:`1px solid ${BDR}`,background:e.isSuspended?"var(--hover-bg,#f9fafb)":"var(--card,#fff)"}}>
+                  <td style={{padding:"9px 10px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{width:30,height:30,borderRadius:"50%",background:e.isSuspended?"#e5e7eb":GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:e.isSuspended?MUTED:GD,fontSize:10}}>{e.avatar}</div>
+                      <div>
+                        <div style={{fontWeight:600,color:e.isSuspended?MUTED:INK}}>{e.name}</div>
+                        <div style={{fontSize:10,color:MUTED}}>{e.username}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td style={{padding:"9px 10px"}}>
+                    <div style={{fontWeight:500,color:INK}}>{e.dept}</div>
+                    {e.groupName&&<div style={{fontSize:10,color:MUTED}}>👥 {e.groupName}</div>}
+                    {e.reportingTo&&<div style={{fontSize:10,color:MUTED}}>↑ {users.find(u=>u.id===e.reportingTo)?.name||"—"}</div>}
+                  </td>
+                  <td style={{padding:"9px 10px"}}>
+                    {e.grade>0?<span style={{background:GL,color:GD,padding:"2px 8px",borderRadius:10,fontSize:10,fontWeight:700}}>L{e.grade} {e.gradeLabel}</span>:<span style={{color:MUTED,fontSize:10}}>—</span>}
+                  </td>
+                  <td style={{padding:"9px 10px",color:INK,textTransform:"capitalize"}}>{e.role}</td>
+                  <td style={{padding:"9px 10px",fontWeight:600,color:INK}}>{fmt(e.balance)}</td>
+                  <td style={{padding:"9px 10px"}}><span style={{background:e.isSuspended?"#fee2e2":"#dcfce7",color:e.isSuspended?"#991b1b":"#166534",padding:"2px 8px",borderRadius:10,fontSize:10,fontWeight:600}}>{e.isSuspended?"Suspended":"Active"}</span></td>
+                  <td style={{padding:"9px 10px"}}>
+                    <div style={{display:"flex",gap:5}}>
+                      <button onClick={()=>openEdit(e)} style={{padding:"4px 9px",border:`1px solid ${BDR}`,borderRadius:5,background:"none",cursor:"pointer",fontSize:11,color:INK}}>Edit</button>
+                      {isAdmin&&<button onClick={()=>toggleSuspend(e)} style={{padding:"4px 9px",border:`1px solid ${e.isSuspended?"#6ee7b7":"#fca5a5"}`,borderRadius:5,background:"none",cursor:"pointer",fontSize:11,color:e.isSuspended?"#065f46":"#991b1b"}}>{e.isSuspended?"Activate":"Suspend"}</button>}
+                    </div>
+                  </td>
+                </tr>
               ))}
-              <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Department</label>
-                <select value={editForm.dept} onChange={e=>setEF({...editForm,dept:e.target.value})} style={{...inpS,appearance:"none"}}>{depts.map(d=><option key={d}>{d}</option>)}</select></div>
-              <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Role</label>
-                <select value={editForm.role} onChange={e=>setEF({...editForm,role:e.target.value})} style={{...inpS,appearance:"none"}}>{creatableRoles.map(r=><option key={r.id} value={r.id}>{r.label}</option>)}</select></div>
-            </div>
-            <div style={{display:"flex",gap:9}}><Btn onClick={saveEdit} disabled={busy} style={{flex:1,padding:11}}>{busy?"Saving…":"Save Changes"}</Btn><Btn v="outline" onClick={()=>setEditEmp(null)}>Cancel</Btn></div>
-          </div>
-        </div>
-      )}
-
-      {/* Password reset modal */}
-      {resetEmp&&(
-        <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,backdropFilter:"blur(3px)"}} onClick={()=>{setResetEmp(null);setNewPwVal("");}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:14,padding:26,width:"min(380px,96vw)",boxShadow:"0 24px 60px #0003"}}>
-            <h3 style={{fontFamily:FD,fontSize:16,fontWeight:700,color:INK,marginBottom:6}}>Reset Password</h3>
-            <p style={{color:MUTED,fontSize:12,marginBottom:16}}>Set a new password for <strong>{resetEmp.name}</strong> ({resetEmp.username||resetEmp.email})</p>
-            <input type="text" value={newPwVal} onChange={e=>setNewPwVal(e.target.value)} placeholder="New password (min 4 chars)" style={inpS} autoFocus/>
-            <div style={{display:"flex",gap:8,marginTop:14}}>
-              <Btn onClick={resetPassword} disabled={busy||!newPwVal} style={{flex:1,padding:10}}>{busy?"Resetting…":"Set Password"}</Btn>
-              <Btn v="outline" onClick={()=>{setResetEmp(null);setNewPwVal("");}}>Cancel</Btn>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Delete confirm */}
-      {delEmp&&(
-        <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600}} onClick={()=>setDelEmp(null)}>
-          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:14,padding:24,width:"min(380px,96vw)",textAlign:"center"}}>
-            <div style={{fontSize:32,marginBottom:8}}>⚠️</div>
-            <div style={{fontFamily:FD,fontSize:15,fontWeight:700,color:INK,marginBottom:5}}>Delete {delEmp.name}?</div>
-            <div style={{color:MUTED,fontSize:12,marginBottom:6}}>Their expense history stays intact but they lose access.</div>
-            <div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"8px 12px",marginBottom:16,fontSize:11,color:"#92400e"}}>
-              💡 Suspending is safer — frees a slot, keeps history, can be undone.
-            </div>
-            <div style={{display:"flex",gap:8,justifyContent:"center"}}>
-              <Btn v="warning" onClick={()=>{toggleSuspend(delEmp);setDelEmp(null);}}>⏸ Suspend Instead</Btn>
-              <Btn v="danger" onClick={()=>deleteEmp(delEmp)}>Delete Permanently</Btn>
-              <Btn v="outline" onClick={()=>setDelEmp(null)}>Cancel</Btn>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <Card>
-        <table style={{width:"100%"}}>
-          <thead><tr><th>Employee</th><th>Username</th><th>Role</th><th>Dept</th><th>Balance</th><th>Claims</th><th>Status</th><th>Actions</th></tr></thead>
-          <tbody>{emps.length===0?(
-            <tr><td colSpan={8} style={{padding:36,textAlign:"center",color:MUTED,fontSize:13}}>No employees yet. Click ＋ Add Employee above to get started.</td></tr>
-          ):emps.map(e=>{
-            const ec=claims.filter(c=>c.empId===e.id);
-            const role=ROLES.find(r=>r.id===e.role)||ROLES[1];
-            return(<tr key={e.id} className="rh" style={{opacity:e.isSuspended?.6:1}}>
-              <td>
-                <div style={{display:"flex",alignItems:"center",gap:7}}>
-                  <div style={{width:30,height:30,borderRadius:"50%",background:e.isSuspended?"#f3f4f6":GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:e.isSuspended?MUTED:GD,fontSize:10}}>{e.avatar}</div>
-                  <div><div style={{fontWeight:600,fontSize:12}}>{e.name}</div><div style={{fontSize:10,color:MUTED}}>{e.email||e.mobile||"—"}</div></div>
-                </div>
-              </td>
-              <td style={{fontFamily:"monospace",fontSize:11,color:GD,fontWeight:600}}>{e.username||"—"}</td>
-              <td><span style={{background:role.color+"25",color:role.color,padding:"2px 7px",borderRadius:5,fontSize:10,fontWeight:700}}>{role.label}</span></td>
-              <td><span style={{background:GL,color:GD,padding:"1px 6px",borderRadius:4,fontSize:10,fontWeight:600}}>{e.dept}</span></td>
-              <td style={{fontWeight:700,color:policy.reimbursementMode?"#7c3aed":INK,fontSize:12}}>{policy.reimbursementMode?fmt(e.reimbursable||0):fmt(e.balance||0)}</td>
-              <td style={{fontSize:12,color:MUTED}}>{ec.length}</td>
-              <td>{e.isSuspended
-                ?<span style={{background:"#fee2e2",color:"#dc2626",padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700}}>⊘ Suspended</span>
-                :<span style={{background:"#dcfce7",color:"#16a34a",padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700}}>● Active</span>}
-              </td>
-              <td>
-                <div style={{display:"flex",gap:4}}>
-                  <button onClick={()=>openEdit(e)} title="Edit" style={{background:"none",border:"1px solid "+BDR,color:MUTED,borderRadius:5,padding:"3px 7px",fontSize:11,cursor:"pointer"}}>✏</button>
-                  <button onClick={()=>{setResetEmp(e);setNewPwVal("");}} title="Reset Password" style={{background:"none",border:"1px solid #93c5fd",color:"#2563eb",borderRadius:5,padding:"3px 7px",fontSize:11,cursor:"pointer"}}>🔑</button>
-                  <button onClick={()=>toggleSuspend(e)} title={e.isSuspended?"Activate":"Suspend"} style={{background:"none",border:"1px solid "+(e.isSuspended?"#16a34a50":"#f59e0b50"),color:e.isSuspended?"#16a34a":"#f59e0b",borderRadius:5,padding:"3px 7px",fontSize:11,cursor:"pointer"}}>{e.isSuspended?"▶":"⏸"}</button>
-                  <button onClick={()=>setDelEmp(e)} title="Delete" style={{background:"none",border:"1px solid #fca5a5",color:"#ef4444",borderRadius:5,padding:"3px 7px",fontSize:12,cursor:"pointer"}}>✕</button>
-                </div>
-              </td>
-            </tr>);
-          })}</tbody>
-        </table>
-      </Card>
-    </div>
-  );
-}
-
-// ─── EDIT REQUESTS TAB ────────────────────────────────────────────────────────
-function EditRequestsTab({editRequests,claims,getUser,isManager,approveEditRequest,rejectEditRequest,hasEditWindow,userId,reload}){
-  const pending=editRequests.filter(r=>r.status==="Pending");
-  const resolved=editRequests.filter(r=>r.status!=="Pending");
-
-  const getClaimInfo=req=>{
-    const claimId=req.claim_id||req.claimId;
-    return claims.find(c=>c.id===claimId);
-  };
-
-  return(
-    <div>
-      <div style={{marginBottom:16}}>
-        <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Edit Requests</h1>
-        <p style={{color:MUTED,fontSize:12,marginTop:3}}>Employees can request to edit approved expenses. Manager approves a 24-hour edit window. All overrides are audit-trailed.</p>
-      </div>
-
-      {pending.length>0&&<>
-        <div style={{fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>Pending ({pending.length})</div>
-        {pending.map(req=>{
-          const claim=getClaimInfo(req);
-          const emp=getUser(req.requested_by||req.requestedBy);
-          return(
-            <Card key={req.id} style={{padding:16,marginBottom:8,borderLeft:`3px solid #f59e0b`}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
-                <div>
-                  <div style={{fontWeight:700,color:INK,fontSize:13}}>{req.claim_id||req.claimId}</div>
-                  <div style={{color:MUTED,fontSize:11,marginTop:1}}>by {req.requester_name||req.requesterName} · {req.created_at?new Date(req.created_at).toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"}):""}</div>
-                  {claim&&<div style={{fontSize:11,color:"var(--ink)",marginTop:4}}>Claim: {claim.desc} — {fmt(claim.amount)}</div>}
-                  <div style={{background:"#fef3c7",borderRadius:6,padding:"6px 10px",marginTop:6,fontSize:12,color:"#92400e"}}><strong>Reason:</strong> {req.reason}</div>
-                </div>
-                {isManager&&<div style={{display:"flex",gap:7,flexShrink:0}}>
-                  <Btn onClick={()=>approveEditRequest(req)} style={{padding:"7px 12px",fontSize:11}}>✓ Approve (24h)</Btn>
-                  <Btn v="danger" onClick={()=>rejectEditRequest(req)} style={{padding:"7px 10px",fontSize:11}}>✗ Reject</Btn>
-                </div>}
-              </div>
-            </Card>
-          );
-        })}
-      </>}
-
-      {pending.length===0&&<div style={{background:GL,border:`1px solid ${GM}`,borderRadius:10,padding:24,textAlign:"center",marginBottom:16}}>
-        <div style={{fontSize:24,marginBottom:6}}>✅</div>
-        <div style={{fontWeight:600,color:INK,fontSize:13}}>No pending edit requests</div>
-        <div style={{color:MUTED,fontSize:11,marginTop:3}}>All edit requests have been reviewed.</div>
-      </div>}
-
-      {resolved.length>0&&<>
-        <div style={{fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",letterSpacing:1,marginBottom:8,marginTop:16}}>History ({resolved.length})</div>
-        <Card>
-          <table style={{width:"100%"}}>
-            <thead><tr><th>Claim</th><th>Requested By</th><th>Reason</th><th>Status</th><th>Reviewed By</th><th>Date</th></tr></thead>
-            <tbody>{resolved.map(req=>(
-              <tr key={req.id} className="rh">
-                <td style={{fontFamily:"monospace",fontSize:11,fontWeight:600,color:GD}}>{req.claim_id||req.claimId}</td>
-                <td style={{fontSize:12}}>{req.requester_name||req.requesterName}</td>
-                <td style={{fontSize:11,color:MUTED,maxWidth:180}}>{req.reason}</td>
-                <td><Badge s={req.status==="Approved"?"Approved":"Rejected"} sm/></td>
-                <td style={{fontSize:11,color:MUTED}}>{req.reviewer_name||req.reviewerName||"—"}</td>
-                <td style={{fontSize:10,color:MUTED}}>{req.created_at?new Date(req.created_at).toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"}):""}</td>
-              </tr>
-            ))}</tbody>
+            </tbody>
           </table>
         </Card>
+
+        {/* Edit modal */}
+        {editEmp&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:"var(--card,#fff)",borderRadius:14,padding:24,width:"min(540px,98vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 12px 40px rgba(0,0,0,.2)"}}>
+            <h3 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK,marginBottom:14}}>Edit — {editEmp.name}</h3>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+              {[["Full Name","text",editForm.name,v=>setEF({...editForm,name:v}),""],["Mobile","text",editForm.mobile,v=>setEF({...editForm,mobile:v}),"optional"],["Wallet ₹","number",editForm.balance,v=>setEF({...editForm,balance:v}),""],[" New Password","password",editForm.password,v=>setEF({...editForm,password:v}),"leave blank to keep"]].map(([l,t,v,fn,ph])=>(
+                <div key={l}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>{l}</label><input type={t} value={v} onChange={e=>fn(e.target.value)} placeholder={ph} style={inpS}/></div>
+              ))}
+              <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Department</label>
+                <select value={editForm.dept} onChange={e=>setEF({...editForm,dept:e.target.value})} style={sS}>{depts.map(d=><option key={d}>{d}</option>)}</select></div>
+              <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Role</label>
+                <select value={editForm.role} onChange={e=>setEF({...editForm,role:e.target.value})} style={sS}>{creatableRoles.map(r=><option key={r.id} value={r.id}>{r.label}</option>)}</select></div>
+              {/* Grade */}
+              <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Grade</label>
+                <select value={editForm.grade||""} onChange={e=>{const h=gradeForLevel(e.target.value);setEF({...editForm,grade:e.target.value,gradeLabel:h?.label||editForm.gradeLabel});}} style={sS}>
+                  {gradeOptions.map(g=><option key={g.value} value={g.value}>{g.label}</option>)}
+                </select></div>
+              <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Grade Label</label><input value={editForm.gradeLabel||""} onChange={e=>setEF({...editForm,gradeLabel:e.target.value})} style={inpS} placeholder="e.g. Sr Engineer"/></div>
+              {/* Group */}
+              <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Group</label>
+                <select value={editForm.groupId||""} onChange={e=>setEF({...editForm,groupId:e.target.value})} style={sS}>
+                  <option value="">No group</option>
+                  {groups.map(g=><option key={g.id} value={g.id}>{g.name} {g.dept?`(${g.dept})`:""}</option>)}
+                </select></div>
+              <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Reporting To</label>
+                <select value={editForm.reportingTo||""} onChange={e=>setEF({...editForm,reportingTo:e.target.value})} style={sS}>
+                  <option value="">Department default</option>
+                  {managersAndAbove.filter(u=>u.id!==editEmp.id).map(u=><option key={u.id} value={u.id}>{u.name} {u.gradeLabel?`(${u.gradeLabel})`:`(${u.role})`}</option>)}
+                </select></div>
+            </div>
+            <div style={{display:"flex",gap:8}}><Btn onClick={saveEdit} disabled={busy}>{busy?"Saving…":"Save Changes"}</Btn><Btn v="outline" onClick={()=>setEditEmp(null)}>Cancel</Btn></div>
+          </div>
+        </div>}
       </>}
 
-      <div style={{marginTop:16,padding:"12px 14px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:9,fontSize:11,color:"#92400e"}}>
-        ⚠ <strong>Audit note:</strong> All approved edit requests are recorded with timestamps and included in the monthly finance digest. Override history cannot be deleted.
-      </div>
+      {/* ── GROUPS TAB ── */}
+      {tab==="groups"&&<>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <p style={{fontSize:12,color:MUTED}}>Groups allow multiple teams within the same department, each with their own group manager. Employees in a group report to their group manager, not the department manager.</p>
+          <Btn onClick={()=>setShowNewGroup(p=>!p)}>{showNewGroup?"✕ Cancel":"+ New Group"}</Btn>
+        </div>
+
+        {showNewGroup&&<Card style={{padding:18,marginBottom:14}}>
+          <div style={{fontFamily:FD,fontSize:14,fontWeight:700,color:INK,marginBottom:10}}>Create Group</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}}>
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Group Name *</label><input value={groupForm.name} onChange={e=>setGroupForm(f=>({...f,name:e.target.value}))} style={inpS} placeholder="e.g. Extrusion Team A"/></div>
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Department</label>
+              <select value={groupForm.dept} onChange={e=>setGroupForm(f=>({...f,dept:e.target.value,managerId:""}))} style={sS}>
+                <option value="">All departments</option>
+                {depts.map(d=><option key={d}>{d}</option>)}
+              </select></div>
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Group Manager</label>
+              <select value={groupForm.managerId} onChange={e=>setGroupForm(f=>({...f,managerId:e.target.value}))} style={sS}>
+                <option value="">No specific manager</option>
+                {managersAndAbove.filter(u=>!groupForm.dept||u.dept===groupForm.dept).map(u=><option key={u.id} value={u.id}>{u.name} {u.gradeLabel?`(L${u.grade} ${u.gradeLabel})`:`(${u.role})`}</option>)}
+              </select></div>
+          </div>
+          <div style={{display:"flex",gap:8}}><Btn onClick={addGroup}>Create Group →</Btn><Btn v="outline" onClick={()=>setShowNewGroup(false)}>Cancel</Btn></div>
+        </Card>}
+
+        {groups.length===0&&<Card style={{padding:32,textAlign:"center"}}>
+          <div style={{fontSize:32,marginBottom:8}}>👥</div>
+          <div style={{fontFamily:FD,fontSize:15,fontWeight:700,color:INK,marginBottom:4}}>No groups yet</div>
+          <div style={{fontSize:12,color:MUTED}}>Create groups to organise employees into teams within departments. Each group can have its own manager.</div>
+        </Card>}
+
+        <div style={{display:"grid",gap:10}}>
+          {groups.map(g=>{
+            const groupManager=users.find(u=>u.id===g.managerId);
+            const groupMembers=users.filter(u=>u.groupId===g.id);
+            return(
+              <Card key={g.id} style={{padding:16}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                  <div>
+                    <div style={{fontWeight:700,color:INK,fontSize:14}}>👥 {g.name}</div>
+                    <div style={{fontSize:11,color:MUTED,marginTop:2}}>
+                      {g.dept&&<span>{g.dept} · </span>}
+                      {groupMembers.length} member{groupMembers.length!==1?"s":""}
+                      {groupManager&&<span> · Manager: <strong>{groupManager.name}</strong> {groupManager.gradeLabel&&`(${groupManager.gradeLabel})`}</span>}
+                    </div>
+                  </div>
+                  {sbDeleteGroup&&isAdmin&&<button onClick={()=>{if(window.confirm(`Delete group "${g.name}"? Members will become ungrouped.`))sbDeleteGroup(g.id);}} style={{background:"none",border:"none",cursor:"pointer",color:"#dc2626",fontSize:12}}>Delete</button>}
+                </div>
+                {groupMembers.length>0&&<div style={{marginTop:10,display:"flex",flexWrap:"wrap",gap:6}}>
+                  {groupMembers.map(m=>(
+                    <div key={m.id} style={{display:"flex",alignItems:"center",gap:5,padding:"3px 10px",background:GL,borderRadius:12,fontSize:11}}>
+                      <div style={{width:18,height:18,borderRadius:"50%",background:G,display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,fontWeight:700,color:"#fff"}}>{m.avatar}</div>
+                      <span style={{color:INK,fontWeight:500}}>{m.name}</span>
+                      {m.grade>0&&<span style={{color:MUTED,fontSize:9}}>L{m.grade}</span>}
+                    </div>
+                  ))}
+                </div>}
+              </Card>
+            );
+          })}
+        </div>
+      </>}
     </div>
   );
 }
-
-// ─── POLICY TAB ───────────────────────────────────────────────────────────────
 function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sbEnabled}){
   const[policy,setPolicy]=useState(()=>({...initPol}));
+  // Sync local state when parent reloads from DB (e.g. after save)
+  useEffect(()=>{setPolicy({...initPol});},[JSON.stringify(initPol)]);
   const emps=users.filter(u=>u.role==="employee").length;
   const tier=TIERED.find(t=>emps>=t.min&&emps<=t.max)||TIERED[0];
   const [vendor,setVendor]=useState("");
