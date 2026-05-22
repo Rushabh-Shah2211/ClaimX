@@ -302,45 +302,65 @@ function resolveApprover(submitterId, allUsers, policy, amount=0){
   return allUsers.filter(u=>u.role==="admin"&&!u.isSuspended).map(u=>u.id);
 }
 
-// ─── REPORTING CHAIN VISIBILITY ─────────────────────────────────────────────
-// Returns the full set of user IDs that `viewerId` can see
-// Rule: you see yourself + everyone who reports to you (directly or transitively)
-// If grade system is off: falls back to dept-based visibility
-function getVisibleUserIds(viewerId, allUsers, policy){
+// ─── GROUP-BASED VISIBILITY ENGINE ──────────────────────────────────────────
+// A person sees:
+//   L1 (grade=1): only themselves
+//   L2+ (any grade): their own data + data of all members in groups they manage
+//   Higher grade: sees groups managed by lower grades too (transitively)
+//   Admin: sees everything
+//
+// "Managing a group" means: user is the manager_id of that group
+// A user can manage multiple groups. A user can be a member of multiple groups.
+function getVisibleUserIds(viewerId, allUsers, policy, allGroups){
   const viewer=allUsers.find(u=>u.id===viewerId);
   if(!viewer) return new Set([viewerId]);
 
-  // Admin sees everyone
-  if(viewer.role==="admin") return new Set(allUsers.map(u=>u.id));
+  // Admin always sees all
+  if(viewer.role==="admin") return new Set(allUsers.filter(u=>!u.isSuspended).map(u=>u.id));
 
+  // Always see yourself
   const result=new Set([viewerId]);
 
-  if(policy?.gradeBased&&(policy?.approvalHierarchy?.length>0)){
-    // Grade-based: build reporting tree
-    // Direct reports: users whose reportingTo===viewerId
-    // Transitive reports: their reports too (BFS)
-    const queue=[viewerId];
-    while(queue.length>0){
-      const current=queue.shift();
-      const directReports=allUsers.filter(u=>u.reportingTo===current&&!u.isSuspended);
-      for(const r of directReports){
-        if(!result.has(r.id)){
-          result.add(r.id);
-          queue.push(r.id);
+  const viewerGrade=viewer.grade||0;
+  const groups=allGroups||[];
+
+  if(viewerGrade===0&&viewer.role!=="manager"){
+    // No grade, no manager role — see only yourself (L1 equivalent)
+    return result;
+  }
+
+  // Collect groups this viewer manages (directly)
+  const myManagedGroups=groups.filter(g=>g.managerId===viewerId);
+
+  // Add all members of groups I directly manage
+  for(const g of myManagedGroups){
+    allUsers.filter(u=>u.groupId===g.id&&!u.isSuspended).forEach(u=>result.add(u.id));
+  }
+
+  // For higher grades: also see groups managed by people in my visible set
+  // (transitive — I can see what my subordinate managers can see)
+  if(viewerGrade>=3||viewer.role==="manager"){
+    // BFS: find sub-managers within my visible set and add their groups too
+    let wave=[...result];
+    let iterations=0;
+    while(iterations<10){
+      const newlyAdded=[];
+      for(const uid of wave){
+        const subManagedGroups=groups.filter(g=>g.managerId===uid&&uid!==viewerId);
+        for(const g of subManagedGroups){
+          allUsers.filter(u=>u.groupId===g.id&&!u.isSuspended).forEach(u=>{
+            if(!result.has(u.id)){result.add(u.id);newlyAdded.push(u.id);}
+          });
         }
       }
+      if(newlyAdded.length===0) break;
+      wave=newlyAdded;
+      iterations++;
     }
-    // Also: viewer sees all users at lower grades in their dept (for managers who aren't in reporting chain)
-    const viewerGrade=viewer.grade||0;
-    if(viewerGrade>0){
-      allUsers.filter(u=>
-        (u.grade||0)<viewerGrade&&
-        u.dept===viewer.dept&&
-        !u.isSuspended
-      ).forEach(u=>result.add(u.id));
-    }
-  } else {
-    // Legacy: dept-based — see everyone in same dept
+  }
+
+  // If grade system off — fall back to department
+  if(viewerGrade===0&&viewer.role==="manager"){
     allUsers.filter(u=>u.dept===viewer.dept&&!u.isSuspended).forEach(u=>result.add(u.id));
   }
 
@@ -2210,37 +2230,49 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const companyDepts=co?.policy?.departments||DEFAULT_DEPTS;
   const companyCategories=[...(co?.policy?.categories||DEFAULT_CATS),"Other"];
 
-  if(loadingData||!co)return(
-    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f5faf3",fontFamily:FB}}>
-      <div style={{textAlign:"center",maxWidth:400,padding:24}}>
-        {sbError?(
-          <>
-            <div style={{fontSize:44,marginBottom:16}}>⚠️</div>
-            <div style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:8}}>Account not fully set up</div>
-            <p style={{color:MUTED,fontSize:14,lineHeight:1.6,marginBottom:8}}>{sbError}</p>
-            <p style={{color:MUTED,fontSize:13,lineHeight:1.6,marginBottom:20}}>
-              If you just verified your email, please ask your Super Admin to confirm your account is active in the system.
-            </p>
-            <div style={{display:"flex",gap:10,justifyContent:"center"}}>
-              <Btn onClick={loadFromSB}>🔄 Try Again</Btn>
-              <Btn v="outline" onClick={onLogout}>← Sign Out</Btn>
-            </div>
-          </>
-        ):(
-          <>
-            <div style={{width:40,height:40,border:`3px solid ${GM}`,borderTopColor:G,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 14px"}}/>
-            <div style={{color:MUTED,fontSize:13}}>Loading your workspace…</div>
-            <button onClick={()=>{
-              // Nuclear clear — guaranteed to work
-              try{localStorage.removeItem(SESSION_KEY);}catch{}
-              try{localStorage.removeItem(STORAGE_KEY);}catch{}
-              window.location.replace("/");
-            }} style={{marginTop:16,background:"none",border:"none",color:MUTED,fontSize:12,cursor:"pointer",fontFamily:FB}}>← Sign out</button>
-          </>
-        )}
+  if(loadingData||!co){
+    const quotes=["Every expense tells a story. XpensR tells it right.","Good accounting is good governance.","Work smarter — let XpensR handle the paperwork.","The details are not the details. They make the design.","Time is money. Save both with XpensR.","Clarity in spending is clarity in thinking."];
+    const q=quotes[Math.floor(Date.now()/8000)%quotes.length];
+    return(
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:`linear-gradient(145deg,${DARK} 0%,#0a1f06 60%,#162e0d 100%)`,fontFamily:FB,position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",width:500,height:500,borderRadius:"50%",background:"rgba(126,217,87,0.04)",top:-100,right:-100,pointerEvents:"none"}}/>
+        <div style={{position:"absolute",width:300,height:300,borderRadius:"50%",background:"rgba(126,217,87,0.03)",bottom:-80,left:-80,pointerEvents:"none"}}/>
+        <div style={{textAlign:"center",maxWidth:380,padding:"0 24px",position:"relative",zIndex:1}}>
+          <div style={{marginBottom:28}}>
+            <div style={{fontFamily:FD,fontSize:40,fontWeight:800,color:"#7ED957",letterSpacing:-1,lineHeight:1}}>XpensR</div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,.3)",letterSpacing:3,textTransform:"uppercase",marginTop:4}}>by RB</div>
+          </div>
+          {sbError?(
+            <>
+              <div style={{fontSize:40,marginBottom:12}}>⚠️</div>
+              <div style={{fontFamily:FD,fontSize:18,fontWeight:700,color:"#fff",marginBottom:8}}>Account not set up</div>
+              <p style={{color:"rgba(255,255,255,.5)",fontSize:13,lineHeight:1.6,marginBottom:20}}>{sbError}</p>
+              <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+                <Btn onClick={loadFromSB}>🔄 Try Again</Btn>
+                <Btn v="outline" onClick={onLogout}>← Sign Out</Btn>
+              </div>
+            </>
+          ):(
+            <>
+              <div style={{position:"relative",width:60,height:60,margin:"0 auto 20px"}}>
+                <div style={{position:"absolute",inset:0,borderRadius:"50%",border:"3px solid rgba(126,217,87,0.15)"}}/>
+                <div style={{position:"absolute",inset:0,borderRadius:"50%",border:"3px solid transparent",borderTopColor:"#7ED957",animation:"spin .9s linear infinite"}}/>
+                <div style={{position:"absolute",inset:9,borderRadius:"50%",border:"2px solid transparent",borderTopColor:"rgba(126,217,87,0.4)",animation:"spin 1.5s linear infinite reverse"}}/>
+              </div>
+              <div style={{color:"rgba(255,255,255,.4)",fontSize:12,letterSpacing:.5,marginBottom:28}}>Loading your workspace…</div>
+              <div style={{borderTop:"1px solid rgba(255,255,255,.07)",paddingTop:20,marginBottom:16}}>
+                <p style={{color:"rgba(255,255,255,.25)",fontSize:11,lineHeight:1.7,fontStyle:"italic",margin:0}}>&ldquo;{q}&rdquo;</p>
+              </div>
+              <button onClick={()=>{try{localStorage.removeItem(SESSION_KEY);}catch{}window.location.replace("/");}}
+                style={{background:"none",border:"1px solid rgba(255,255,255,.1)",borderRadius:16,color:"rgba(255,255,255,.25)",padding:"5px 16px",fontFamily:FB,fontSize:11,cursor:"pointer"}}>
+                ← Sign out
+              </button>
+            </>
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
 
   const getUser=id=>co.users.find(u=>u.id===id);
   const activeMeta=SB_ENABLED&&co.meta?co.meta:meta;
@@ -2257,9 +2289,9 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const myUser=co.users.find(u=>u.id===user.id);
   const myNotifs=(co.notifications||[]).filter(n=>n.userId===user.id&&!n.read);
 
-  // ── Reporting chain visibility ────────────────────────────────────────────
+  // ── Group-based visibility ────────────────────────────────────────────────
   // The set of user IDs this person can see data for
-  const visibleUserIds=getVisibleUserIds(user.id,co.users,co.policy);
+  const visibleUserIds=getVisibleUserIds(user.id,co.users,co.policy,co.empGroups||[]);
 
   // Filter all data to only what this user can see
   const visibleClaims=isAdmin?co.claims:co.claims.filter(c=>visibleUserIds.has(c.empId)||c.empId===user.id);
@@ -3884,40 +3916,64 @@ function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,subm
 // ─── TRIP LEGS MODAL ──────────────────────────────────────────────────────────
 function TripLegsModal({trip,policy,onClose,onSave}){
   const MODES=["Air","Train","Bus","Car","Taxi","Own Vehicle","Other"];
-  const PURPOSES=policy?.tripPurposes||["Sales Call","Purchase","Inspection","Seminar","Customer Support","Other"];
-  const initLeg=()=>({id:uid(),legNum:Date.now(),fromCity:"",toCity:"",departAt:"",arriveAt:"",mode:"",cityTier:"D",hotelLimit:0,diemRate:0,days:1});
-  const[legs,setLegs]=useState(trip.legs?.length>0?trip.legs.map(l=>({...l})):[initLeg()]);
+  const initLeg=()=>({id:uid(),legNum:Date.now(),fromCity:"",toCity:"",_toCityOther:false,_fromCityOther:false,departAt:"",arriveAt:"",mode:"",cityTier:"D",hotelLimit:0,diemRate:0,days:1});
+  const[legs,setLegs]=useState(trip.legs?.length>0?trip.legs.map(l=>({...l,_toCityOther:false,_fromCityOther:false})):[initLeg()]);
   const[busy,setBusy]=useState(false);
 
-  const getLegEntitlement=(city)=>{
-    if(!city||!policy?.cityClassification) return {tier:"D",hotelLimit:0,diemRate:0};
-    const tier=getCityTier(city,policy);
-    return{tier,...getEntitlement(0,tier,policy)}; // grade 0 = not grade-specific here
+  const cityTiers=policy?.cityTiers||[];
+  const tierCities={A:cityTiers.filter(c=>c.tier==="A"),B:cityTiers.filter(c=>c.tier==="B"),C:cityTiers.filter(c=>c.tier==="C")};
+  const hasCities=cityTiers.length>0;
+
+  const getCityTierLocal=(city)=>{
+    if(!city) return "D";
+    const found=cityTiers.find(ct=>ct.city.toLowerCase()===city.toLowerCase());
+    return found?.tier||"D";
   };
 
   const updateLeg=(idx,patch)=>{
     setLegs(prev=>{
       const updated=[...prev];
       const leg={...updated[idx],...patch};
-      // Auto-compute days from dates
       if(leg.departAt&&leg.arriveAt){
-        const d1=new Date(leg.departAt),d2=new Date(leg.arriveAt);
-        const diff=Math.ceil((d2-d1)/(1000*60*60*24));
+        const diff=Math.ceil((new Date(leg.arriveAt)-new Date(leg.departAt))/(1000*60*60*24));
         leg.days=Math.max(1,diff||1);
       }
-      // Auto-lookup city tier
-      if(patch.toCity!==undefined&&policy?.cityClassification){
-        const tier=getCityTier(leg.toCity,policy);
-        leg.cityTier=tier;
-      }
+      if(patch.toCity!==undefined) leg.cityTier=getCityTierLocal(leg.toCity);
       updated[idx]=leg;
       return updated;
     });
   };
 
+  // City selector component (inline)
+  const CitySelect=({value,onChange,label,showOther,onToggleOther})=>(
+    <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>{label}</label>
+      {hasCities&&!showOther?(
+        <select value={cityTiers.some(ct=>ct.city===value)?value:"__other__"}
+          onChange={e=>{
+            if(e.target.value==="__other__"){onToggleOther(true);onChange("");}
+            else{onToggleOther(false);onChange(e.target.value);}
+          }}
+          style={{width:"100%",padding:"7px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,fontFamily:FB,background:"var(--input-bg,#fafff8)",appearance:"none"}}>
+          <option value="">Select city…</option>
+          {tierCities.A.length>0&&<optgroup label="● Tier A — Metro">{tierCities.A.map(c=><option key={c.city}>{c.city}</option>)}</optgroup>}
+          {tierCities.B.length>0&&<optgroup label="● Tier B — Major">{tierCities.B.map(c=><option key={c.city}>{c.city}</option>)}</optgroup>}
+          {tierCities.C.length>0&&<optgroup label="● Tier C — Tier-2">{tierCities.C.map(c=><option key={c.city}>{c.city}</option>)}</optgroup>}
+          <option value="__other__">Other city (Tier D)…</option>
+        </select>
+      ):(
+        <div style={{display:"flex",gap:4}}>
+          <input value={value||""} onChange={e=>onChange(e.target.value)} placeholder="Enter city name (Tier D)"
+            style={{flex:1,padding:"7px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,fontFamily:FB,background:"var(--input-bg,#fafff8)"}}/>
+          {hasCities&&<button onClick={()=>{onToggleOther(false);onChange("");}} title="Back to list"
+            style={{padding:"4px 8px",border:`1px solid ${BDR}`,borderRadius:6,background:"none",cursor:"pointer",fontSize:11,color:MUTED}}>↩</button>}
+        </div>
+      )}
+    </div>
+  );
+
   const save=async()=>{
-    const valid=legs.every(l=>l.fromCity&&l.toCity&&l.departAt&&l.arriveAt);
-    if(!valid){alert("All legs need from/to cities and travel dates.");return;}
+    const valid=legs.every(l=>l.toCity&&l.departAt&&l.arriveAt);
+    if(!valid){alert("All legs need at least a destination city and travel dates.");return;}
     setBusy(true);
     try{ await onSave(trip.id,legs); onClose(); }
     catch(e){alert("Failed: "+e.message);}
@@ -3933,51 +3989,61 @@ function TripLegsModal({trip,policy,onClose,onSave}){
           <div>
             <h2 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>📍 Trip Itinerary — {trip.name}</h2>
             <p style={{fontSize:11,color:MUTED,marginTop:2}}>Define each leg of travel. Claims will be validated against these city-date windows.</p>
+            {!hasCities&&<p style={{fontSize:10,color:"#f59e0b",marginTop:2}}>⚠ Add cities to Policy → City Classification to enable tier-based dropdowns.</p>}
           </div>
           <button onClick={onClose} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:MUTED}}>✕</button>
         </div>
 
         {legs.map((leg,idx)=>(
-          <div key={leg.id||idx} style={{border:`1.5px solid ${BDR}`,borderRadius:10,padding:14,marginBottom:10,position:"relative"}}>
+          <div key={leg.id||idx} style={{border:`1.5px solid ${BDR}`,borderRadius:10,padding:14,marginBottom:10}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-              <span style={{fontFamily:FB,fontSize:12,fontWeight:700,color:INK}}>Leg {idx+1}{leg.toCity?` — ${leg.toCity}`:""} {leg.cityTier&&leg.cityTier!=="D"?<span style={{background:leg.cityTier==="A"?"#fee2e2":leg.cityTier==="B"?"#fef3c7":leg.cityTier==="C"?"#dbeafe":"#f3f4f6",color:leg.cityTier==="A"?"#991b1b":leg.cityTier==="B"?"#92400e":leg.cityTier==="C"?"#1e40af":"#374151",padding:"1px 7px",borderRadius:10,fontSize:10,marginLeft:6}}>Tier {leg.cityTier}</span>:""}</span>
+              <span style={{fontFamily:FB,fontSize:12,fontWeight:700,color:INK}}>
+                Leg {idx+1}{leg.toCity?` → ${leg.toCity}`:""}
+                {leg.cityTier&&leg.cityTier!=="D"&&(
+                  <span style={{background:leg.cityTier==="A"?"#fee2e2":leg.cityTier==="B"?"#fef3c7":"#dbeafe",color:leg.cityTier==="A"?"#991b1b":leg.cityTier==="B"?"#92400e":"#1e40af",padding:"1px 7px",borderRadius:10,fontSize:10,marginLeft:6}}>Tier {leg.cityTier}</span>
+                )}
+              </span>
               {legs.length>1&&<button onClick={()=>setLegs(prev=>prev.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",cursor:"pointer",color:"#dc2626",fontSize:14}}>✕ Remove</button>}
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,marginBottom:8}}>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>FROM CITY</label><input value={leg.fromCity||""} onChange={e=>updateLeg(idx,{fromCity:e.target.value})} placeholder="Rajkot" style={inpS}/></div>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>TO CITY</label><input value={leg.toCity||""} onChange={e=>updateLeg(idx,{toCity:e.target.value})} placeholder="Mumbai" style={inpS}/></div>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>DEPARTURE</label><input type="datetime-local" value={leg.departAt||""} onChange={e=>updateLeg(idx,{departAt:e.target.value})} style={inpS}/></div>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>ARRIVAL</label><input type="datetime-local" value={leg.arriveAt||""} onChange={e=>updateLeg(idx,{arriveAt:e.target.value})} style={inpS}/></div>
+              <CitySelect value={leg.fromCity||""} label="FROM CITY" showOther={leg._fromCityOther}
+                onChange={v=>updateLeg(idx,{fromCity:v})}
+                onToggleOther={v=>updateLeg(idx,{_fromCityOther:v})}/>
+              <CitySelect value={leg.toCity||""} label="TO CITY *" showOther={leg._toCityOther}
+                onChange={v=>updateLeg(idx,{toCity:v})}
+                onToggleOther={v=>updateLeg(idx,{_toCityOther:v})}/>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>DEPARTURE</label><input type="datetime-local" value={leg.departAt||""} onChange={e=>updateLeg(idx,{departAt:e.target.value})} style={inpS}/></div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>ARRIVAL</label><input type="datetime-local" value={leg.arriveAt||""} onChange={e=>updateLeg(idx,{arriveAt:e.target.value})} style={inpS}/></div>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8}}>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>MODE</label>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>MODE</label>
                 <select value={leg.mode||""} onChange={e=>updateLeg(idx,{mode:e.target.value})} style={inpS}>
                   <option value="">Select…</option>{MODES.map(m=><option key={m}>{m}</option>)}
                 </select>
               </div>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>DAYS (auto)</label><input value={leg.days||1} readOnly style={{...inpS,background:"var(--bg,#f9fafb)",color:MUTED}}/></div>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>HOTEL LIMIT ₹</label><input type="number" value={leg.hotelLimit||""} onChange={e=>updateLeg(idx,{hotelLimit:parseFloat(e.target.value)||0})} placeholder="Auto from grade" style={inpS}/></div>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>DIEM RATE ₹/day</label><input type="number" value={leg.diemRate||""} onChange={e=>updateLeg(idx,{diemRate:parseFloat(e.target.value)||0})} placeholder="Auto from grade" style={inpS}/></div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>DAYS (auto)</label>
+                <input value={leg.days||1} readOnly style={{...inpS,background:"var(--bg,#f9fafb)",color:MUTED}}/></div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>HOTEL LIMIT ₹</label>
+                <input type="number" value={leg.hotelLimit||""} onChange={e=>updateLeg(idx,{hotelLimit:parseFloat(e.target.value)||0})} placeholder="From grade entitlements" style={inpS}/></div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>DIEM ₹/day</label>
+                <input type="number" value={leg.diemRate||""} onChange={e=>updateLeg(idx,{diemRate:parseFloat(e.target.value)||0})} placeholder="From grade entitlements" style={inpS}/></div>
             </div>
-            {leg.toCity&&policy?.cityClassification&&(()=>{
-              const tier=getCityTier(leg.toCity,policy);
-              return(<div style={{marginTop:8,fontSize:10,color:MUTED}}>
-                Auto-tier: <strong>{tier}</strong>{tier==="D"?" (residual — not in A/B/C list)":""}
-              </div>);
-            })()}
+            {leg.toCity&&<div style={{fontSize:10,color:MUTED,marginTop:6}}>
+              Tier {leg.cityTier} city{leg.days>0?` · ${leg.days} day${leg.days!==1?"s":""}`:""}{leg.diemRate>0?` · Diem: ₹${(leg.days*leg.diemRate).toLocaleString("en-IN")}`:""}
+            </div>}
           </div>
         ))}
 
-        <button onClick={()=>setLegs(prev=>[...prev,{...initLeg(),legNum:prev.length+1}])} style={{background:"none",border:`1.5px dashed ${BDR}`,borderRadius:8,padding:"8px 16px",cursor:"pointer",fontSize:12,color:MUTED,width:"100%",marginBottom:14}}>
+        <button onClick={()=>setLegs(prev=>[...prev,{...initLeg(),legNum:prev.length+1}])}
+          style={{background:"none",border:`1.5px dashed ${BDR}`,borderRadius:8,padding:"8px 16px",cursor:"pointer",fontSize:12,color:MUTED,width:"100%",marginBottom:14}}>
           + Add Leg
         </button>
 
-        {/* Diem summary */}
         {legs.some(l=>l.diemRate>0&&l.days>0)&&(
           <div style={{background:"#f0fde9",border:`1px solid #bbf7d0`,borderRadius:8,padding:10,marginBottom:12,fontSize:11}}>
-            <strong>Auto-diem estimate:</strong>{" "}
-            {legs.filter(l=>l.diemRate>0).map((l,i)=>`${l.toCity||"Leg"+(i+1)}: ${l.days}d × ₹${l.diemRate} = ₹${(l.days*l.diemRate).toLocaleString("en-IN")}`).join(" + ")}{" "}
-            = <strong>₹{legs.reduce((s,l)=>s+(l.days||0)*(l.diemRate||0),0).toLocaleString("en-IN")} total</strong>
+            <strong>Total diem estimate:</strong>{" "}
+            {legs.filter(l=>l.diemRate>0).map((l,i)=>`${l.toCity||"Leg"+(i+1)}: ${l.days}d × ₹${l.diemRate} = ₹${(l.days*l.diemRate).toLocaleString("en-IN")}`).join(" + ")}
+            {" = "}<strong>₹{legs.reduce((s,l)=>s+(l.days||0)*(l.diemRate||0),0).toLocaleString("en-IN")}</strong>
           </div>
         )}
 
@@ -4649,7 +4715,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
     const found=(policy?.cityTiers||[]).find(ct=>ct.city.toLowerCase()===city.toLowerCase());
     return found?.tier||"D";
   };
-  const addLeg=()=>setNewLegs(prev=>[...prev,{id:uid(),fromCity:"",toCity:"",departAt:"",arriveAt:"",mode:"",cityTier:"D",hotelLimit:0,diemRate:0,days:1}]);
+  const addLeg=()=>setNewLegs(prev=>[...prev,{id:uid(),fromCity:"",toCity:"",_toCityOther:false,_fromCityOther:false,departAt:"",arriveAt:"",mode:"",cityTier:"D",hotelLimit:0,diemRate:0,days:1}]);
   const updateNewLeg=(idx,patch)=>setNewLegs(prev=>{
     const updated=[...prev];
     const leg={...updated[idx],...patch};
@@ -4661,6 +4727,43 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
     updated[idx]=leg;
     return updated;
   });
+
+  // Inline CitySelect for new trip form
+  const NewLegCitySelect=({leg,idx,field,label})=>{
+    const value=leg[field]||"";
+    const otherKey=`_${field}Other`;
+    const showOther=leg[otherKey]||false;
+    const hasCities=(policy?.cityTiers||[]).length>0;
+    const cityTiers=policy?.cityTiers||[];
+    const tA=cityTiers.filter(c=>c.tier==="A"),tB=cityTiers.filter(c=>c.tier==="B"),tC=cityTiers.filter(c=>c.tier==="C");
+    const inList=cityTiers.some(ct=>ct.city===value);
+    return(
+      <div><label style={{fontSize:9,color:MUTED,display:"block",marginBottom:2,textTransform:"uppercase"}}>{label}</label>
+        {hasCities&&!showOther?(
+          <select value={inList?value:(value?"__other__":"")}
+            onChange={e=>{
+              if(e.target.value==="__other__"){updateNewLeg(idx,{[field]:"",["_"+field+"Other"]:true});}
+              else updateNewLeg(idx,{[field]:e.target.value,["_"+field+"Other"]:false});
+            }}
+            style={{...inpS,fontSize:11,padding:"6px 9px",appearance:"none"}}>
+            <option value="">Select city…</option>
+            {tA.length>0&&<optgroup label="● Tier A — Metro">{tA.map(c=><option key={c.city}>{c.city}</option>)}</optgroup>}
+            {tB.length>0&&<optgroup label="● Tier B — Major">{tB.map(c=><option key={c.city}>{c.city}</option>)}</optgroup>}
+            {tC.length>0&&<optgroup label="● Tier C — Tier-2">{tC.map(c=><option key={c.city}>{c.city}</option>)}</optgroup>}
+            <option value="__other__">Other city (Tier D)…</option>
+          </select>
+        ):(
+          <div style={{display:"flex",gap:4}}>
+            <input value={value} onChange={e=>updateNewLeg(idx,{[field]:e.target.value})}
+              placeholder="Enter city name (Tier D)"
+              style={{...inpS,fontSize:11,padding:"6px 9px",flex:1}}/>
+            {hasCities&&<button onClick={()=>updateNewLeg(idx,{[field]:"",["_"+field+"Other"]:false})}
+              style={{padding:"4px 8px",border:`1px solid ${BDR}`,borderRadius:6,background:"none",cursor:"pointer",fontSize:11,color:MUTED}} title="Back to list">↩</button>}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const canSetBudget=isManager||isAdmin;
 
@@ -4785,21 +4888,8 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                 <button onClick={()=>setNewLegs(p=>p.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",cursor:"pointer",color:"#dc2626",fontSize:13}}>✕</button>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:7}}>
-                <div><label style={{fontSize:9,color:MUTED,display:"block",marginBottom:2,textTransform:"uppercase"}}>From City</label>
-                  <input value={leg.fromCity||""} onChange={e=>updateNewLeg(idx,{fromCity:e.target.value})} placeholder="Rajkot" style={{...inpS,fontSize:11,padding:"6px 9px"}}/></div>
-                <div><label style={{fontSize:9,color:MUTED,display:"block",marginBottom:2,textTransform:"uppercase"}}>To City</label>
-                  <select value={leg.toCity||""} onChange={e=>{const v=e.target.value;updateNewLeg(idx,{toCity:v==="__other__"?"":v});}} style={{...inpS,fontSize:11,padding:"6px 9px",appearance:"none"}}>
-                    <option value="">Select city…</option>
-                    {(policy?.cityTiers||[]).length>0&&<>
-                      <optgroup label="Tier A (Metro)">{(policy.cityTiers||[]).filter(ct=>ct.tier==="A").map(ct=><option key={ct.city} value={ct.city}>{ct.city}</option>)}</optgroup>
-                      <optgroup label="Tier B (Major)">{(policy.cityTiers||[]).filter(ct=>ct.tier==="B").map(ct=><option key={ct.city} value={ct.city}>{ct.city}</option>)}</optgroup>
-                      <optgroup label="Tier C (Tier-2)">{(policy.cityTiers||[]).filter(ct=>ct.tier==="C").map(ct=><option key={ct.city} value={ct.city}>{ct.city}</option>)}</optgroup>
-                    </>}
-                    <option value="__other__">Other (Tier D)</option>
-                  </select>
-                  {(leg.toCity===""&&leg._showOther)||leg.toCity&&!(policy?.cityTiers||[]).some(ct=>ct.city===leg.toCity)?
-                    <input value={leg.toCity||""} onChange={e=>updateNewLeg(idx,{toCity:e.target.value})} placeholder="Enter city name (Tier D)" style={{...inpS,fontSize:11,padding:"6px 9px",marginTop:4}}/> : null}
-                </div>
+                <NewLegCitySelect leg={leg} idx={idx} field="fromCity" label="FROM CITY"/>
+                <NewLegCitySelect leg={leg} idx={idx} field="toCity" label="TO CITY *"/>
                 <div><label style={{fontSize:9,color:MUTED,display:"block",marginBottom:2,textTransform:"uppercase"}}>Departure</label>
                   <input type="datetime-local" value={leg.departAt||""} onChange={e=>updateNewLeg(idx,{departAt:e.target.value})} style={{...inpS,fontSize:11,padding:"6px 9px"}}/></div>
                 <div><label style={{fontSize:9,color:MUTED,display:"block",marginBottom:2,textTransform:"uppercase"}}>Arrival</label>
