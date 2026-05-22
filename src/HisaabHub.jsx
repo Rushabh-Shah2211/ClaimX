@@ -169,7 +169,11 @@ const setRLSContext=async(userId)=>{
 
 
 // Mappers: snake_case DB → camelCase app
-const mapUser=r=>r?({id:r.id,cid:r.company_id,companyId:r.company_id,name:r.name,email:r.email||"",username:r.username||"",mobile:r.mobile||"",role:r.role,avatar:r.avatar,dept:r.dept,balance:parseFloat(r.balance)||0,reimbursable:parseFloat(r.reimbursable)||0,delegateTo:r.delegate_to||null,isSuspended:r.is_suspended||false,authType:r.auth_type||"custom"}):null;
+const mapUser=r=>r?({id:r.id,cid:r.company_id,companyId:r.company_id,name:r.name,email:r.email||"",username:r.username||"",mobile:r.mobile||"",role:r.role,avatar:r.avatar,dept:r.dept,balance:parseFloat(r.balance)||0,reimbursable:parseFloat(r.reimbursable)||0,delegateTo:r.delegate_to||null,isSuspended:r.is_suspended||false,authType:r.auth_type||"custom",
+  // Phase 1: Grade system
+  grade:parseInt(r.grade)||0,                // 0 = no grade (legacy), 1-10
+  gradeLabel:r.grade_label||"",              // "Sr Engineer", "VP" etc.
+}):null;
 const mapTrip=r=>r?({
   id:r.id, companyId:r.company_id, name:r.name, type:r.type,
   startDate:r.start_date, endDate:r.end_date, status:r.status,
@@ -186,12 +190,191 @@ const mapTrip=r=>r?({
   settledBy:r.settled_by||null,
   employeeBudgets:r.employee_budgets||{},
   settledEmps:r.employee_settled||[],
+  // Phase 1: Itinerary
+  tripType:r.trip_type||"domestic",            // domestic / overseas
+  purpose:r.purpose||"",                       // Sales/Purchase/Inspection etc.
+  customerName:r.customer_name||"",
+  accompanying:r.accompanying||[],
+  advanceAmount:parseFloat(r.advance_amount)||0,
+  legs:(r.trip_legs||[]).map(l=>({
+    id:l.id, legNum:l.leg_num, fromCity:l.from_city, toCity:l.to_city,
+    departAt:l.depart_at, arriveAt:l.arrive_at, mode:l.mode||"",
+    cityTier:l.city_tier||"D",
+    hotelLimit:parseFloat(l.hotel_limit)||0,
+    diemRate:parseFloat(l.diem_rate)||0,
+    days:l.days||0,
+  })),
 }):null;
-const mapClaim=r=>r?({id:r.id,companyId:r.company_id,tripId:r.trip_id,empId:r.emp_id,date:r.date,category:r.category,desc:r.description,vendor:r.vendor,amount:parseFloat(r.amount)||0,origAmount:parseFloat(r.orig_amount)||0,origCur:r.orig_currency,status:r.status,autoApproved:r.auto_approved,remarks:r.remarks,flagged:r.flagged,anomaly:r.anomaly,anomalyReasons:r.anomaly_reasons||[],weekendFlag:r.weekend_flag,notes:r.notes,receipts:(r.receipts||[]).map(rc=>({id:rc.id,name:rc.file_name,storagePath:rc.storage_path,type:rc.mime_type,url:null})),comments:(r.claim_comments||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at)).map(c=>({id:c.id,userId:c.user_id,name:c.user_name,text:c.text,time:new Date(c.created_at).toLocaleString()}))}):null;
-const mapPolicy=r=>r?({autoApproveLimit:parseFloat(r.auto_approve_limit)||5000,reimbursementMode:r.reimbursement_mode||false,receiptMandatoryAbove:parseFloat(r.receipt_mandatory_above)||0,weekendRequiresApproval:r.weekend_requires_approval||false,multiLevelApproval:r.multi_level_approval||false,approvalLevels:r.approval_levels||[],vendorWhitelist:r.vendor_whitelist||[],vendorBlacklist:r.vendor_blacklist||[],departmentBudgets:r.department_budgets||{},categoryPct:r.category_pct||{},scheduledReports:r.scheduled_reports||[],primaryColor:r.primary_color||"#7ED957",departments:r.departments||DEFAULT_DEPTS,categories:r.categories||DEFAULT_CATS,dualApproveAbove:parseFloat(r.dual_approve_above)||0}):null;
+const mapClaim=r=>r?({id:r.id,companyId:r.company_id,tripId:r.trip_id,empId:r.emp_id,date:r.date,category:r.category,desc:r.description,vendor:r.vendor,amount:parseFloat(r.amount)||0,origAmount:parseFloat(r.orig_amount)||0,origCur:r.orig_currency,status:r.status,autoApproved:r.auto_approved,remarks:r.remarks,flagged:r.flagged,anomaly:r.anomaly,anomalyReasons:r.anomaly_reasons||[],weekendFlag:r.weekend_flag,notes:r.notes,
+  // Phase 1: Itinerary linkage
+  legId:r.leg_id||null,                        // FK to trip_legs
+  city:r.city||"",                             // City where expense occurred
+  cityTier:r.city_tier||"D",                   // A/B/C/D
+  transportClass:r.transport_class||"",        // Economy/2AC/3AC/Sleeper etc.
+  overLimitReason:r.over_limit_reason||"",     // Reason when exceeds tier limit
+  receipts:(r.receipts||[]).map(rc=>({id:rc.id,name:rc.file_name,storagePath:rc.storage_path,type:rc.mime_type,url:null})),comments:(r.claim_comments||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at)).map(c=>({id:c.id,userId:c.user_id,name:c.user_name,text:c.text,time:new Date(c.created_at).toLocaleString()}))}):null;
+const mapPolicy=r=>r?({autoApproveLimit:parseFloat(r.auto_approve_limit)||5000,reimbursementMode:r.reimbursement_mode||false,receiptMandatoryAbove:parseFloat(r.receipt_mandatory_above)||0,weekendRequiresApproval:r.weekend_requires_approval||false,multiLevelApproval:r.multi_level_approval||false,approvalLevels:r.approval_levels||[],vendorWhitelist:r.vendor_whitelist||[],vendorBlacklist:r.vendor_blacklist||[],departmentBudgets:r.department_budgets||{},categoryPct:r.category_pct||{},scheduledReports:r.scheduled_reports||[],primaryColor:r.primary_color||"#7ED957",departments:r.departments||DEFAULT_DEPTS,categories:r.categories||DEFAULT_CATS,dualApproveAbove:parseFloat(r.dual_approve_above)||0,
+  // Phase 1: Grade & city policy
+  gradeBased:r.grade_based||false,             // Enable grade entitlement engine
+  cityClassification:r.city_classification||false, // Enable A/B/C/D tier enforcement
+  escalationHrs:parseFloat(r.escalation_hrs)||48,  // Hours before auto-escalate
+  // 10-level approval config: [{level:1,label:"Trainee",ceiling:0},{level:5,label:"Manager",ceiling:25000},...]
+  approvalHierarchy:r.approval_hierarchy||[],
+  // Grade entitlements: [{grade:7,tier:"A",hotelLimit:2200,diemRate:750,transportClass:"2AC"}, ...]
+  gradeEntitlements:r.grade_entitlements||[],
+  // City tiers: [{city:"Mumbai",tier:"A"},{city:"Pune",tier:"B"},...]
+  cityTiers:r.city_tiers||[],
+  tripPurposes:r.trip_purposes||["Sales Call","Purchase","Inspection","Seminar","Customer Support","Other"],
+}):null;
 const mapNotif=r=>r?({id:r.id,userId:r.user_id,text:r.text,type:r.type,read:r.read,time:new Date(r.created_at).toLocaleString()}):null;
 const mapAudit=r=>r?({id:r.id,action:r.action,claimId:r.claim_id,by:r.by_user_id,byName:r.by_name,at:new Date(r.created_at).toLocaleString(),remarks:r.remarks}):null;
 const mapTopup=r=>r?({id:r.id,empId:r.emp_id,amount:parseFloat(r.amount),reason:r.reason,date:r.date,status:r.status,tripId:r.trip_id||null,companyId:r.company_id}):null;
+
+// ─── PHASE 1: GRADE-BASED APPROVAL ENGINE ────────────────────────────────────
+// Resolves who must approve a claim submitted by `submitterId`
+// Returns array of user IDs in order — first is the immediate approver
+function resolveApprover(submitterId, allUsers, policy, amount=0){
+  const submitter = allUsers.find(u=>u.id===submitterId);
+  if(!submitter) return [];
+
+  // If grade system is off — fall back to legacy manager/admin
+  if(!policy?.gradeBased || !(policy?.approvalHierarchy?.length>0)){
+    const mgr = allUsers.find(u=>u.role==="manager"&&u.dept===submitter.dept&&!u.isSuspended&&u.id!==submitterId);
+    const admin = allUsers.filter(u=>u.role==="admin"&&!u.isSuspended);
+    return [...(mgr?[mgr.id]:[]), ...admin.map(a=>a.id)];
+  }
+
+  const hier = [...(policy.approvalHierarchy||[])].sort((a,b)=>a.level-b.level);
+  const submitterGrade = submitter.grade||0;
+
+  // Find minimum grade needed to approve this amount
+  const minGradeNeeded = (()=>{
+    // Find the lowest grade whose ceiling >= amount (0 ceiling = unlimited)
+    for(const h of hier){
+      if(h.level > submitterGrade && (h.ceiling===0||h.ceiling>=amount)) return h.level;
+    }
+    // If no level has sufficient ceiling, escalate to top
+    return hier[hier.length-1]?.level||99;
+  })();
+
+  // The approver must be: grade > submitterGrade AND grade >= minGradeNeeded
+  // (Can never be same grade as submitter — self-approval block)
+  const requiredGrade = Math.max(submitterGrade+1, minGradeNeeded);
+
+  // Find active users at requiredGrade in same dept (or any dept if dept match fails)
+  const candidates = allUsers.filter(u=>
+    u.grade===requiredGrade &&
+    !u.isSuspended &&
+    u.id!==submitterId
+  );
+
+  // Prefer same dept
+  const sameDept = candidates.filter(u=>u.dept===submitter.dept);
+  const approvers = sameDept.length>0 ? sameDept : candidates;
+
+  if(approvers.length > 0) return approvers.map(u=>u.id);
+
+  // Skip to next available grade above
+  for(const h of hier.filter(h=>h.level > requiredGrade)){
+    const nextCandidates = allUsers.filter(u=>u.grade===h.level&&!u.isSuspended&&u.id!==submitterId);
+    if(nextCandidates.length>0) return nextCandidates.map(u=>u.id);
+  }
+
+  // Final fallback: all admins
+  return allUsers.filter(u=>u.role==="admin"&&!u.isSuspended).map(u=>u.id);
+}
+
+// Can `approverId` approve a claim submitted by `submitterId` of `amount`?
+function canApproveFor(approverId, submitterId, allUsers, policy, amount=0){
+  if(approverId===submitterId) return false; // Self-approval always blocked
+  const approver = allUsers.find(u=>u.id===approverId);
+  const submitter = allUsers.find(u=>u.id===submitterId);
+  if(!approver||!submitter) return false;
+
+  // If grade system off: use role hierarchy
+  if(!policy?.gradeBased){
+    if(approver.role==="admin") return true;
+    if(approver.role==="manager"&&submitter.role==="employee") return true;
+    return false;
+  }
+
+  const aGrade = approver.grade||0;
+  const sGrade = submitter.grade||0;
+
+  // Must be strictly higher grade
+  if(aGrade<=sGrade) return false;
+
+  // Check ceiling (0 = unlimited)
+  const hier = (policy.approvalHierarchy||[]).find(h=>h.level===aGrade);
+  if(hier&&hier.ceiling>0&&amount>hier.ceiling) return false;
+
+  return true;
+}
+
+// Get city tier from policy config
+function getCityTier(city, policy){
+  if(!policy?.cityClassification||!city) return "D";
+  const found = (policy.cityTiers||[]).find(ct=>ct.city.toLowerCase()===city.toLowerCase());
+  return found?.tier||"D";
+}
+
+// Get entitlement for a given grade + city tier
+function getEntitlement(grade, tier, policy){
+  if(!grade||!policy?.gradeBased) return {hotelLimit:0,diemRate:0,transportClass:""};
+  const ent = (policy.gradeEntitlements||[]).find(e=>e.grade===grade&&e.tier===tier);
+  if(ent) return {hotelLimit:parseFloat(ent.hotelLimit)||0,diemRate:parseFloat(ent.diemRate)||0,transportClass:ent.transportClass||""};
+  // Fallback: find same grade with D tier
+  const fallback = (policy.gradeEntitlements||[]).find(e=>e.grade===grade&&e.tier==="D");
+  if(fallback) return {hotelLimit:parseFloat(fallback.hotelLimit)||0,diemRate:parseFloat(fallback.diemRate)||0,transportClass:fallback.transportClass||""};
+  return {hotelLimit:0,diemRate:0,transportClass:""};
+}
+
+// Compute diem entitlement for a trip + employee
+function computeDiem(trip, empId, policy){
+  if(!trip?.legs?.length) return {total:0,legs:[]};
+  const emp = null; // caller passes grade
+  const legs = (trip.legs||[]).map(leg=>{
+    const days = leg.days||Math.max(1,Math.ceil(
+      (new Date(leg.arriveAt)-new Date(leg.departAt))/(1000*60*60*24)
+    )||1);
+    const rate = leg.diemRate||0;
+    return {legId:leg.id,city:leg.toCity,tier:leg.cityTier,days,rate,entitlement:days*rate};
+  });
+  return {total:legs.reduce((s,l)=>s+l.entitlement,0),legs};
+}
+
+// Validate a claim against its trip leg
+function validateClaimAgainstLeg(claim, trip, policy){
+  const warnings=[], errors=[];
+  if(!trip||!trip.legs?.length) return {warnings,errors};
+
+  // Find the leg for this claim's city+date
+  const leg = trip.legs.find(l=>{
+    const inCity = !claim.city||l.toCity?.toLowerCase()===claim.city?.toLowerCase();
+    const depart = l.departAt?.slice(0,10);
+    const arrive = l.arriveAt?.slice(0,10);
+    const inDate = !depart||!arrive||(claim.date>=depart&&claim.date<=arrive);
+    return inCity&&inDate;
+  });
+
+  if(claim.city&&!leg){
+    errors.push(`No itinerary leg covers ${claim.city} on ${claim.date}. Check trip schedule.`);
+    return {warnings,errors};
+  }
+
+  if(leg&&policy?.gradeBased&&policy?.cityClassification){
+    // Hotel limit check
+    if(claim.category==="Accommodation"||claim.category==="Hotel"){
+      const limit = leg.hotelLimit||0;
+      if(limit>0&&claim.amount>limit){
+        warnings.push(`Hotel claim ₹${claim.amount.toLocaleString("en-IN")} exceeds Tier ${leg.cityTier} limit of ₹${limit.toLocaleString("en-IN")}. Will be capped unless ARET is approved.`);
+      }
+    }
+  }
+
+  return {warnings,errors};
+}
+
 
 // ─── SB: load full company data ───────────────────────────────────────────────
 async function sbLoadCompany(cid){
@@ -199,7 +382,7 @@ async function sbLoadCompany(cid){
   const safe=async(q,fallback=[])=>{try{const{data,error}=await q;if(error){console.warn("sbLoadCompany query error:",error.message);return fallback;}return data||fallback;}catch(e){console.warn("sbLoadCompany exception:",e.message);return fallback;}};
   const safeSingle=async(q,fallback=null)=>{try{const{data,error}=await q;if(error){console.warn("sbLoadCompany single error:",error.message);return fallback;}return data||fallback;}catch(e){return fallback;}};
 
-  const [meta,users,trips,claims,topups,audit,notifs,policy]=await Promise.all([
+  const [meta,users,trips,claims,topups,audit,notifs,policy,tripLegs,diemComps]=await Promise.all([
     safeSingle(supabase.from("companies").select("*").eq("id",cid).single()),
     safe(supabase.from("users").select("*").eq("company_id",cid)),
     safe(supabase.from("trips").select("*,trip_assignments(user_id)").eq("company_id",cid).order("created_at",{ascending:false})),
@@ -208,7 +391,15 @@ async function sbLoadCompany(cid){
     safe(supabase.from("audit_log").select("*").eq("company_id",cid).order("created_at",{ascending:false}).limit(500)),
     safe(supabase.from("notifications").select("*").eq("company_id",cid).order("created_at",{ascending:false}).limit(300)),
     safeSingle(supabase.from("policy").select("*").eq("company_id",cid).single()),
+    safe(supabase.from("trip_legs").select("*").eq("company_id",cid).order("leg_num",{ascending:true})),
+    safe(supabase.from("diem_computations").select("*").eq("company_id",cid)),
   ]);
+
+  // Attach legs to trips
+  const tripsWithLegs=(trips||[]).map(t=>({
+    ...t,
+    trip_legs:(tripLegs||[]).filter(l=>l.trip_id===t.id),
+  }));
 
   // Fetch signed URLs for all receipts in parallel so images show immediately
   const mappedClaims = await Promise.all((claims||[]).map(async claim => {
@@ -228,12 +419,13 @@ async function sbLoadCompany(cid){
   return{
     meta:meta?{id:meta.id,name:meta.name,industry:meta.industry,plan:meta.plan,maxUsers:meta.max_users,status:meta.status,createdOn:meta.created_on}:null,
     users:(users||[]).map(mapUser),
-    trips:(trips||[]).map(mapTrip),
+    trips:tripsWithLegs.map(mapTrip),
     claims:mappedClaims,
     topups:(topups||[]).map(mapTopup),
     auditLog:(audit||[]).map(mapAudit),
     notifications:(notifs||[]).map(mapNotif),
     policy:mapPolicy(policy)||mkPolicy(),
+    diemComps:(diemComps||[]),
   };
 }
 
@@ -1982,7 +2174,9 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const hasPerm=p=>myRole.perms.includes(p);
   const isAdmin=user.role==="admin";
   const isManager=["admin","manager"].includes(user.role);
-  const canApprove=["admin","manager"].includes(user.role);
+  const canApprove=["admin","manager"].includes(user.role)||
+    (co.policy?.gradeBased&&(user.grade||0)>0&&
+      (co.policy?.approvalHierarchy||[]).some(h=>h.level===(user.grade||0)));
   const isFinance=user.role==="finance";
   const isEmployee=user.role==="employee";
   const needsDualApproval=(amount)=>co.policy.dualApproveAbove>0&&amount>=co.policy.dualApproveAbove;
@@ -2014,11 +2208,26 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   // Claims to show in ApprovalsTab (includes claims delegated to this manager)
   const approvableClaimsForMe=(()=>{
-    if(isAdmin)return pendingClaims;
-    if(!isManager)return [];
+    if(!canApprove) return [];
+
     return pendingClaims.filter(c=>{
+      // Never show your own claims
+      if(c.empId===user.id) return false;
+
+      // Grade-based engine
+      if(co.policy?.gradeBased&&(co.policy?.approvalHierarchy?.length>0)){
+        // This claim is for me if I am one of the resolved approvers
+        const approvers=resolveApprover(c.empId,co.users,co.policy,c.amount);
+        if(approvers.includes(user.id)) return true;
+        // Also show if claim has been partially approved up to my level - 1 and needs my grade
+        if(c.status?.startsWith("Level ")&&canApproveFor(user.id,c.empId,co.users,co.policy,c.amount)) return true;
+        return false;
+      }
+
+      // Legacy: admin sees all, manager sees own dept + delegations
+      if(isAdmin) return true;
       const emp=getUser(c.empId);
-      if(!emp)return false;
+      if(!emp) return false;
       const inMyDept=emp.dept===myUser?.dept;
       const delegatedToMe=co.users.some(u=>
         u.role==="manager"&&u.delegateTo===user.id&&
@@ -2432,43 +2641,68 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const claim=co.claims.find(c=>c.id===claimId);
     if(!claim)return;
 
-    // Dual approval logic:
-    // - Manager approves first → status becomes "Manager Approved"
-    // - Admin then approves → becomes "Approved"
-    // - Admin can approve directly (bypassing manager step)
-    // - Admin can reject at any stage
-    const isDualNeeded=needsDualApproval(claim.amount);
-    // Multi-level approval: check approvalLevels for this amount
     const policy=co.policy;
-    const useMultiLevel=policy.multiLevelApproval&&(policy.approvalLevels||[]).length>0;
     let finalStatus=decision;
+
     if(decision==="Approved"){
-      if(useMultiLevel){
-        // Find the required approval role for this amount
-        const sorted=[...(policy.approvalLevels||[])].sort((a,b)=>parseFloat(a.upTo)-parseFloat(b.upTo));
-        const requiredLevel=sorted.find(l=>claim.amount<=parseFloat(l.upTo));
-        const highestLevel=sorted[sorted.length-1];
-        const myLevel=sorted.findIndex(l=>l.role===user.role);
-        const maxLevel=sorted.length-1;
-        if(requiredLevel){
-          const requiredLevelIdx=sorted.indexOf(requiredLevel);
-          // If my level is below the required level, only partially approve
-          if(myLevel<requiredLevelIdx||(user.role==="manager"&&requiredLevel.role==="admin")){
+      // ── Grade-based engine ────────────────────────────────────────────────────
+      if(policy.gradeBased&&(policy.approvalHierarchy||[]).length>0){
+        const approverGrade=user.grade||0;
+        const submitter=co.users.find(u=>u.id===claim.empId);
+        const submitterGrade=submitter?.grade||0;
+
+        // Block same-grade approval
+        if(approverGrade===submitterGrade&&approverGrade>0){
+          toast("Cannot approve — same grade as submitter. Escalate to higher authority.","error");
+          return;
+        }
+        // Block self-approval
+        if(user.id===claim.empId){
+          toast("Cannot approve your own claim.","error");
+          return;
+        }
+
+        // Check if this approver's ceiling covers the amount
+        const hier=(policy.approvalHierarchy||[]).find(h=>h.level===approverGrade);
+        const ceiling=hier?.ceiling||0;
+        if(ceiling>0&&claim.amount>ceiling){
+          // Approver ceiling insufficient — mark as partial and escalate
+          finalStatus=`Level ${approverGrade} Approved`;
+          // Notify next level up
+          const nextApprovers=resolveApprover(claim.empId,co.users,policy,claim.amount).filter(id=>{
+            const u=co.users.find(x=>x.id===id);
+            return u&&(u.grade||0)>approverGrade;
+          });
+          for(const id of nextApprovers){
+            await sbPushNotif(id,`Claim ${claimId} (${fmt(claim.amount)}) needs your approval — L${approverGrade} approved, awaiting L${approverGrade+1}+`,"warn");
+          }
+        }
+        // else: full approval — finalStatus stays "Approved"
+      } else {
+        // ── Legacy dual-level engine (no grade system) ─────────────────────────
+        const isDualNeeded=needsDualApproval(claim.amount);
+        const useMultiLevel=policy.multiLevelApproval&&(policy.approvalLevels||[]).length>0;
+
+        if(useMultiLevel){
+          const sorted=[...(policy.approvalLevels||[])].sort((a,b)=>parseFloat(a.upTo)-parseFloat(b.upTo));
+          const requiredLevel=sorted.find(l=>claim.amount<=parseFloat(l.upTo));
+          const myLevel=sorted.findIndex(l=>l.role===user.role);
+          if(requiredLevel){
+            const requiredLevelIdx=sorted.indexOf(requiredLevel);
+            if(myLevel<requiredLevelIdx||(user.role==="manager"&&requiredLevel.role==="admin")){
+              finalStatus="Manager Approved";
+            }
+          } else if(user.role==="manager"){
             finalStatus="Manager Approved";
           }
-          // Admin always gives final approval
-        }
-        // Additional check: if amount > all upTo thresholds, needs highest approver
-        if(!requiredLevel&&user.role==="manager"){
-          finalStatus="Manager Approved";
-        }
-      } else if(isDualNeeded){
-        // Simple dual approval fallback
-        if(user.role==="manager"&&claim.status==="Pending"){
-          finalStatus="Manager Approved";
+        } else if(isDualNeeded){
+          if(user.role==="manager"&&claim.status==="Pending"){
+            finalStatus="Manager Approved";
+          }
         }
       }
     }
+
     const isFullyApproved=finalStatus==="Approved";
 
     if(SB_ENABLED){
@@ -2477,41 +2711,36 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         if(!co.policy.reimbursementMode)await supabase.from("users").update({balance:Math.max(0,(co.users.find(u=>u.id===claim.empId)?.balance||0)-claim.amount)}).eq("id",claim.empId);
         else await supabase.from("users").update({reimbursable:(co.users.find(u=>u.id===claim.empId)?.reimbursable||0)+claim.amount}).eq("id",claim.empId);
         await supabase.from("trips").update({spent:(co.trips.find(t=>t.id===claim.tripId)?.spent||0)+claim.amount}).eq("id",claim.tripId);
-        // Notify finance dept on full approval
         const finTeam=co.users.filter(u=>u.role==="finance");
         for(const f of finTeam)await sbPushNotif(f.id,`Claim ${claimId} approved — ${fmt(claim.amount)} — ready for accounting`,"info");
       }
       await sbAddAudit(finalStatus,claimId,remarks);
-      await sbPushNotif(claim.empId,`Your claim ${claimId} — ${finalStatus.toLowerCase()}${remarks?": "+remarks:""}`,isFullyApproved?"success":finalStatus==="Manager Approved"?"info":"error");
-      // Notify admin if manager-approved and dual needed
+      await sbPushNotif(claim.empId,`Your claim ${claimId} — ${finalStatus.toLowerCase()}${remarks?": "+remarks:""}`,isFullyApproved?"success":finalStatus.includes("Approved")?"info":"error");
+
+      // Notify next approvers if partial
+      if(finalStatus.includes("Approved")&&!isFullyApproved){
+        const nextApprovers=resolveApprover(claim.empId,co.users,policy,claim.amount);
+        for(const id of nextApprovers.filter(id=>id!==user.id)){
+          await sbPushNotif(id,`Claim ${claimId} (${fmt(claim.amount)}) from ${co.users.find(u=>u.id===claim.empId)?.name} awaits your approval`,"warn");
+        }
+      }
       if(finalStatus==="Manager Approved"){
         const admins=co.users.filter(u=>u.role==="admin");
         for(const a of admins)await sbPushNotif(a.id,`Claim ${claimId} (${fmt(claim.amount)}) awaits your final approval`,"warn");
       }
-      // Notify admin of all decisions
       if(isAdmin===false){
         const admins=co.users.filter(u=>u.role==="admin");
         for(const a of admins)await sbPushNotif(a.id,`${user.name} ${finalStatus.toLowerCase()} claim ${claimId} — ${fmt(claim.amount)}`,"info");
       }
       const emp=co.users.find(u=>u.id===claim.empId);
-      // Send email notification
       if(emp?.email&&co.policy?.notifyEmailOnApprove!==false){
-        emailAlert(
-          emp.email,
-          `Expense ${finalStatus} — ${fmt(claim.amount)} | XpensR`,
-          `Your expense claim ${claimId} for ${fmt(claim.amount)} has been ${finalStatus.toLowerCase()}.${remarks?" Remarks: "+remarks:""}`,
-          claimEmailHtml(isFullyApproved?"Approved":"Rejected",claim,remarks,activeMeta?.name)
-        );
+        emailAlert(emp.email,`Expense ${finalStatus} — ${fmt(claim.amount)} | XpensR`,`Your expense claim ${claimId} for ${fmt(claim.amount)} has been ${finalStatus.toLowerCase()}.${remarks?" Remarks: "+remarks:""}`,claimEmailHtml(isFullyApproved?"Approved":"Rejected",claim,remarks,activeMeta?.name));
       }
-      // Send WhatsApp notification if employee has WA number
       const empPhone=emp?.whatsappNumber||emp?.mobile;
       if(empPhone&&co.policy?.notifyWaOnApprove!==false){
-        whatsappAlert(empPhone,
-          isFullyApproved?"xpensr_claim_approved":"xpensr_claim_rejected",
-          [emp?.name||"",claimId,fmt(claim.amount),remarks||""]
-        );
+        whatsappAlert(empPhone,isFullyApproved?"xpensr_claim_approved":"xpensr_claim_rejected",[emp?.name||"",claimId,fmt(claim.amount),remarks||""]);
       }
-      sendPush(isFullyApproved?"✓ Claim Approved":finalStatus==="Manager Approved"?"⏳ Awaiting Admin":"✗ Rejected",`${fmt(claim.amount)} — ${claim.desc}`);
+      sendPush(isFullyApproved?"✓ Claim Approved":finalStatus.includes("Approved")?"⏳ Awaiting next approval":"✗ Rejected",`${fmt(claim.amount)} — ${claim.desc}`);
       await loadFromSB();
     } else {
       setClaims(p=>p.map(c=>c.id===claimId?{...c,status:finalStatus,remarks:remarks||finalStatus}:c));
@@ -2522,31 +2751,9 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       }
       setAudit(p=>[{id:"AL-"+uid(),action:finalStatus,claimId,by:user.id,byName:user.name,at:new Date().toLocaleString(),remarks},...(p||[])]);
     }
-    toast(isFullyApproved?"✓ Fully Approved":finalStatus==="Manager Approved"?"✓ Manager approved — awaiting admin":finalStatus==="Rejected"?"Rejected":"Done",isFullyApproved?"success":finalStatus==="Manager Approved"?"warn":"error");
-    // Handle expense splitting — create claims for each split colleague
-    if(form.splitWith&&form.splitWith.length>0){
-      const splitCount=form.splitWith.length+1;
-      const splitAmount=Math.round(amount/splitCount);
-      for(const colleagueId of form.splitWith){
-        const splitClaimId="EXP-"+uid();
-        const splitData={...claimData,id:splitClaimId,empId:colleagueId,amount:splitAmount,
-          desc:form.desc+" (split from "+claimId+")",autoApproved:false,status:"Pending",splitFrom:claimId};
-        if(SB_ENABLED){
-          await supabase.from("claims").insert({
-            id:splitClaimId,company_id:cid,trip_id:tripId,emp_id:colleagueId,
-            date:claimDate,category:form.category,description:splitData.desc,
-            vendor:form.vendor||"",amount:splitAmount,status:"Pending",
-            orig_currency:"INR",auto_approved:false,
-          });
-        } else {
-          setClaims(p=>[splitData,...p]);
-        }
-        // Notify the colleague
-        await sbPushNotif(colleagueId,`${user.name} split a ${fmt(amount)} expense with you — your share: ${fmt(splitAmount)}`,"info");
-      }
-    }
-    setMdl(null);
+    toast(isFullyApproved?"✓ Fully Approved":finalStatus.includes("Approved")?"✓ Approved — escalating to next level":finalStatus==="Rejected"?"Rejected":"Done",isFullyApproved?"success":finalStatus.includes("Approved")?"warn":"error");
   };
+  // (expense splitting handled in handleSubmit)
 
   const handleTopup=async(req,decision)=>{
     const emp=co.users.find(u=>u.id===req.empId);
@@ -2653,6 +2860,15 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         notify_wa_on_reject:newPolicy.notifyWaOnReject,
         categories:newPolicy.categories,
         departments:newPolicy.departments,
+        // Phase 1: Grade & city policy
+        grade_based:newPolicy.gradeBased||false,
+        city_classification:newPolicy.cityClassification||false,
+        escalation_hrs:newPolicy.escalationHrs||48,
+        approval_hierarchy:newPolicy.approvalHierarchy||[],
+        grade_entitlements:newPolicy.gradeEntitlements||[],
+        city_tiers:newPolicy.cityTiers||[],
+        trip_purposes:newPolicy.tripPurposes||[],
+        primary_color:newPolicy.primaryColor||"#7ED957",
       });
       await loadFromSB();
     }
@@ -2731,6 +2947,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     if(patch.role!==undefined)        dbPatch.role=patch.role;
     if(patch.dept!==undefined)        dbPatch.dept=patch.dept;
     if(patch.balance!==undefined)     dbPatch.balance=patch.balance;
+    if(patch.grade!==undefined)        dbPatch.grade=patch.grade;
+    if(patch.gradeLabel!==undefined)   dbPatch.grade_label=patch.gradeLabel;
     if(patch.isSuspended!==undefined) dbPatch.is_suspended=patch.isSuspended;
     if(patch.delegateTo!==undefined)  dbPatch.delegate_to=patch.delegateTo;
     if(patch.delegateUntil!==undefined) dbPatch.delegate_until=patch.delegateUntil??null; // null clears it
@@ -3117,6 +3335,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           closeTrip={closeTrip} toast={toast} uid={user.id} userRole={user.role}
           sbPushNotif={sbPushNotif} companyUsers={co.users}
           sbCreateTrip={sbCreateTrip}
+          policy={co.policy}
           sbUpdateTrip={async(tripId,patch)=>{
             if(SB_ENABLED){
               const dbPatch={};
@@ -3130,8 +3349,35 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               if(patch.tripMode!==undefined)dbPatch.trip_mode=patch.tripMode;
               if(patch.currency!==undefined)dbPatch.currency=patch.currency;
               if(patch.projectCode!==undefined)dbPatch.project_code=patch.projectCode;
+              if(patch.tripType!==undefined)dbPatch.trip_type=patch.tripType;
+              if(patch.purpose!==undefined)dbPatch.purpose=patch.purpose;
+              if(patch.customerName!==undefined)dbPatch.customer_name=patch.customerName;
+              if(patch.accompanying!==undefined)dbPatch.accompanying=patch.accompanying;
               const{error}=await supabase.from("trips").update(dbPatch).eq("id",tripId);
               if(error)throw new Error(error.message);
+              // Handle trip legs — delete all existing and re-insert
+              if(patch.legs!==undefined){
+                await supabase.from("trip_legs").delete().eq("trip_id",tripId);
+                if(patch.legs.length>0){
+                  await supabase.from("trip_legs").insert(
+                    patch.legs.map((l,idx)=>({
+                      id:l.id||uid(),
+                      company_id:cid,
+                      trip_id:tripId,
+                      leg_num:idx+1,
+                      from_city:l.fromCity||"",
+                      to_city:l.toCity||"",
+                      depart_at:l.departAt||null,
+                      arrive_at:l.arriveAt||null,
+                      mode:l.mode||"",
+                      city_tier:l.cityTier||"D",
+                      hotel_limit:l.hotelLimit||0,
+                      diem_rate:l.diemRate||0,
+                      days:l.days||1,
+                    }))
+                  );
+                }
+              }
               // Handle assignedTo changes via trip_assignments table
               if(patch.assignedTo!==undefined){
                 await supabase.from("trip_assignments").delete().eq("trip_id",tripId);
@@ -3439,6 +3685,115 @@ function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,subm
 }
 
 // ─── TRIP EDIT MODAL ──────────────────────────────────────────────────────────
+// ─── TRIP LEGS MODAL ──────────────────────────────────────────────────────────
+function TripLegsModal({trip,policy,onClose,onSave}){
+  const MODES=["Air","Train","Bus","Car","Taxi","Own Vehicle","Other"];
+  const PURPOSES=policy?.tripPurposes||["Sales Call","Purchase","Inspection","Seminar","Customer Support","Other"];
+  const initLeg=()=>({id:uid(),legNum:Date.now(),fromCity:"",toCity:"",departAt:"",arriveAt:"",mode:"",cityTier:"D",hotelLimit:0,diemRate:0,days:1});
+  const[legs,setLegs]=useState(trip.legs?.length>0?trip.legs.map(l=>({...l})):[initLeg()]);
+  const[busy,setBusy]=useState(false);
+
+  const getLegEntitlement=(city)=>{
+    if(!city||!policy?.cityClassification) return {tier:"D",hotelLimit:0,diemRate:0};
+    const tier=getCityTier(city,policy);
+    return{tier,...getEntitlement(0,tier,policy)}; // grade 0 = not grade-specific here
+  };
+
+  const updateLeg=(idx,patch)=>{
+    setLegs(prev=>{
+      const updated=[...prev];
+      const leg={...updated[idx],...patch};
+      // Auto-compute days from dates
+      if(leg.departAt&&leg.arriveAt){
+        const d1=new Date(leg.departAt),d2=new Date(leg.arriveAt);
+        const diff=Math.ceil((d2-d1)/(1000*60*60*24));
+        leg.days=Math.max(1,diff||1);
+      }
+      // Auto-lookup city tier
+      if(patch.toCity!==undefined&&policy?.cityClassification){
+        const tier=getCityTier(leg.toCity,policy);
+        leg.cityTier=tier;
+      }
+      updated[idx]=leg;
+      return updated;
+    });
+  };
+
+  const save=async()=>{
+    const valid=legs.every(l=>l.fromCity&&l.toCity&&l.departAt&&l.arriveAt);
+    if(!valid){alert("All legs need from/to cities and travel dates.");return;}
+    setBusy(true);
+    try{ await onSave(trip.id,legs); onClose(); }
+    catch(e){alert("Failed: "+e.message);}
+    finally{setBusy(false);}
+  };
+
+  const inpS={padding:"7px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,fontFamily:FB,background:"var(--input-bg,#fafff8)",width:"100%"};
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{background:"var(--card,#fff)",borderRadius:16,padding:24,width:"min(760px,98vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 16px 48px rgba(0,0,0,.2)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div>
+            <h2 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>📍 Trip Itinerary — {trip.name}</h2>
+            <p style={{fontSize:11,color:MUTED,marginTop:2}}>Define each leg of travel. Claims will be validated against these city-date windows.</p>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:MUTED}}>✕</button>
+        </div>
+
+        {legs.map((leg,idx)=>(
+          <div key={leg.id||idx} style={{border:`1.5px solid ${BDR}`,borderRadius:10,padding:14,marginBottom:10,position:"relative"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <span style={{fontFamily:FB,fontSize:12,fontWeight:700,color:INK}}>Leg {idx+1}{leg.toCity?` — ${leg.toCity}`:""} {leg.cityTier&&leg.cityTier!=="D"?<span style={{background:leg.cityTier==="A"?"#fee2e2":leg.cityTier==="B"?"#fef3c7":leg.cityTier==="C"?"#dbeafe":"#f3f4f6",color:leg.cityTier==="A"?"#991b1b":leg.cityTier==="B"?"#92400e":leg.cityTier==="C"?"#1e40af":"#374151",padding:"1px 7px",borderRadius:10,fontSize:10,marginLeft:6}}>Tier {leg.cityTier}</span>:""}</span>
+              {legs.length>1&&<button onClick={()=>setLegs(prev=>prev.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",cursor:"pointer",color:"#dc2626",fontSize:14}}>✕ Remove</button>}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,marginBottom:8}}>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>FROM CITY</label><input value={leg.fromCity||""} onChange={e=>updateLeg(idx,{fromCity:e.target.value})} placeholder="Rajkot" style={inpS}/></div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>TO CITY</label><input value={leg.toCity||""} onChange={e=>updateLeg(idx,{toCity:e.target.value})} placeholder="Mumbai" style={inpS}/></div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>DEPARTURE</label><input type="datetime-local" value={leg.departAt||""} onChange={e=>updateLeg(idx,{departAt:e.target.value})} style={inpS}/></div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>ARRIVAL</label><input type="datetime-local" value={leg.arriveAt||""} onChange={e=>updateLeg(idx,{arriveAt:e.target.value})} style={inpS}/></div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8}}>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>MODE</label>
+                <select value={leg.mode||""} onChange={e=>updateLeg(idx,{mode:e.target.value})} style={inpS}>
+                  <option value="">Select…</option>{MODES.map(m=><option key={m}>{m}</option>)}
+                </select>
+              </div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>DAYS (auto)</label><input value={leg.days||1} readOnly style={{...inpS,background:"var(--bg,#f9fafb)",color:MUTED}}/></div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>HOTEL LIMIT ₹</label><input type="number" value={leg.hotelLimit||""} onChange={e=>updateLeg(idx,{hotelLimit:parseFloat(e.target.value)||0})} placeholder="Auto from grade" style={inpS}/></div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3}}>DIEM RATE ₹/day</label><input type="number" value={leg.diemRate||""} onChange={e=>updateLeg(idx,{diemRate:parseFloat(e.target.value)||0})} placeholder="Auto from grade" style={inpS}/></div>
+            </div>
+            {leg.toCity&&policy?.cityClassification&&(()=>{
+              const tier=getCityTier(leg.toCity,policy);
+              return(<div style={{marginTop:8,fontSize:10,color:MUTED}}>
+                Auto-tier: <strong>{tier}</strong>{tier==="D"?" (residual — not in A/B/C list)":""}
+              </div>);
+            })()}
+          </div>
+        ))}
+
+        <button onClick={()=>setLegs(prev=>[...prev,{...initLeg(),legNum:prev.length+1}])} style={{background:"none",border:`1.5px dashed ${BDR}`,borderRadius:8,padding:"8px 16px",cursor:"pointer",fontSize:12,color:MUTED,width:"100%",marginBottom:14}}>
+          + Add Leg
+        </button>
+
+        {/* Diem summary */}
+        {legs.some(l=>l.diemRate>0&&l.days>0)&&(
+          <div style={{background:"#f0fde9",border:`1px solid #bbf7d0`,borderRadius:8,padding:10,marginBottom:12,fontSize:11}}>
+            <strong>Auto-diem estimate:</strong>{" "}
+            {legs.filter(l=>l.diemRate>0).map((l,i)=>`${l.toCity||"Leg"+(i+1)}: ${l.days}d × ₹${l.diemRate} = ₹${(l.days*l.diemRate).toLocaleString("en-IN")}`).join(" + ")}{" "}
+            = <strong>₹{legs.reduce((s,l)=>s+(l.days||0)*(l.diemRate||0),0).toLocaleString("en-IN")} total</strong>
+          </div>
+        )}
+
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <Btn v="outline" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={save} disabled={busy}>{busy?"Saving…":"Save Itinerary"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin}){
   const[form,setForm]=useState({
     name:trip.name,startDate:trip.startDate,endDate:trip.endDate,
@@ -4074,13 +4429,14 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
 }
 
 // ─── TRIPS TAB ────────────────────────────────────────────────────────────────
-function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTrip,toast,uid:userId,userRole,sbCreateTrip,sbPushNotif,companyUsers,sbUpdateTrip}){
+function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTrip,toast,uid:userId,userRole,sbCreateTrip,sbPushNotif,companyUsers,sbUpdateTrip,policy}){
   const [showNew,setShowNew]=useState(false);
-  const [form,setForm]=useState({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[],projectCode:"",tripMode:"balance",currency:"INR",categoryLimits:{}});
+  const [form,setForm]=useState({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[],projectCode:"",tripMode:"balance",currency:"INR",categoryLimits:{},tripType:"domestic",purpose:""});
   const [showCatLimits,setShowCatLimits]=useState(false);
   const [expandedId,setExpId]=useState(null);
-  const [editTrip,setEditTrip]=useState(null);   // trip being edited
-  const [budgetTrip,setBudgetTrip]=useState(null); // trip for budget management
+  const [editTrip,setEditTrip]=useState(null);
+  const [budgetTrip,setBudgetTrip]=useState(null);
+  const [legsTrip,setLegsTrip]=useState(null);   // trip for itinerary management
   const isEmployee=!isManager&&!isAdmin;
   const emps=users?.filter(u=>u.role==="employee")||[];
   const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",width:"100%"};
@@ -4204,6 +4560,19 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
           setEditTrip(null);toast("✓ Trip updated");
         }}
       />}
+      {/* Itinerary / legs modal */}
+      {legsTrip&&<TripLegsModal trip={legsTrip} policy={policy}
+        onClose={()=>setLegsTrip(null)}
+        onSave={async(tripId,legs)=>{
+          if(sbUpdateTrip){
+            // Save each leg to trip_legs table
+            await sbUpdateTrip(tripId,{legs});
+          } else {
+            setTrips(p=>p.map(t=>t.id===tripId?{...t,legs}:t));
+          }
+          setLegsTrip(null);toast("✓ Itinerary saved");
+        }}
+      />}
       {/* Per-employee budget modal */}
       {budgetTrip&&<TripBudgetModal trip={budgetTrip} users={users} claims={claims} getUser={getUser}
         onClose={()=>setBudgetTrip(null)}
@@ -4241,6 +4610,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                   <div style={{display:"flex",gap:5}}>
                     <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"");const pu=doc.output("bloburl");window.open(pu,"_blank");}catch(e){toast("PDF failed","error");}}} style={{fontSize:10,padding:"5px 8px"}}>PDF</Btn>
                     <Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Edit</Btn>
+                    <Btn v="outline" onClick={()=>setLegsTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>📍 Itinerary</Btn>
                     <Btn v="outline" onClick={()=>setBudgetTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Budget</Btn>
                     {t.status==="active"&&<Btn v="warning" onClick={()=>closeTrip(t.id)} style={{fontSize:10,padding:"5px 10px"}}>Close</Btn>}
                   </div>
@@ -4742,11 +5112,11 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
     finally{setBusy(false);}
   };
 
-  const openEdit=e=>{setEditEmp(e);setEF({name:e.name,dept:e.dept,role:e.role,balance:String(e.balance||0),mobile:e.mobile||"",password:""});};
+  const openEdit=e=>{setEditEmp(e);setEF({name:e.name,dept:e.dept,role:e.role,balance:String(e.balance||0),mobile:e.mobile||"",password:"",grade:String(e.grade||0),gradeLabel:e.gradeLabel||""});};
   const saveEdit=async()=>{
     setBusy(true);
     try{
-      const patch={name:editForm.name,dept:editForm.dept,role:editForm.role,balance:parseFloat(editForm.balance)||0,mobile:editForm.mobile||undefined};
+      const patch={name:editForm.name,dept:editForm.dept,role:editForm.role,balance:parseFloat(editForm.balance)||0,mobile:editForm.mobile||undefined,grade:parseInt(editForm.grade)||0,gradeLabel:editForm.gradeLabel||""};
       if(editForm.password)patch.password=editForm.password;
       if(sbEnabled&&updateUserInSB){await updateUserInSB(editEmp.id,patch);}
       else{setUsers(p=>p.map(u=>u.id===editEmp.id?{...u,...patch,avatar:inits(editForm.name)}:u));}
@@ -4852,7 +5222,9 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:14}}>
               {[["Full Name","text",editForm.name,v=>setEF({...editForm,name:v}),""],
                 ["Mobile","text",editForm.mobile,v=>setEF({...editForm,mobile:v}),"optional"],
-                ["Wallet ₹","number",editForm.balance,v=>setEF({...editForm,balance:v}),""]
+                ["Wallet ₹","number",editForm.balance,v=>setEF({...editForm,balance:v}),""],
+                ["Grade (1–10, 0=none)","number",editForm.grade,v=>setEF({...editForm,grade:v}),"e.g. 5"],
+                ["Grade Label","text",editForm.gradeLabel,v=>setEF({...editForm,gradeLabel:v}),"e.g. Sr Engineer"],
               ].map(([l,t,v,fn,ph])=>(
                 <div key={l}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>{l}</label>
                   <input type={t} value={v} onChange={e=>fn(e.target.value)} placeholder={ph} style={inpS}/></div>
@@ -5103,6 +5475,113 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
         {/* Subscription */}
         <Card style={{padding:18}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Subscription</div>
+
+        {/* ── PHASE 1: Grade-Based Approval Hierarchy ── */}
+        </Card><Card style={{padding:18}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Grade-Based Approval Hierarchy</div>
+          <Toggle on={policy.gradeBased} onClick={()=>setPolicy({...policy,gradeBased:!policy.gradeBased})} label="Enable Grade System" sub="10-level grade engine — all expenses route up through grades"/>
+          {policy.gradeBased&&<>
+            <div style={{fontSize:10,color:MUTED,marginTop:10,marginBottom:8}}>Define up to 10 grade levels. Label + ceiling (₹). Ceiling 0 = unlimited. Same grade never approves same grade. Employees always route upward.</div>
+            {(policy.approvalHierarchy||[]).sort((a,b)=>a.level-b.level).map((h,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+                <div style={{width:26,height:26,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:GD,flexShrink:0}}>L{h.level}</div>
+                <input value={h.label||""} onChange={e=>{const a=[...(policy.approvalHierarchy||[])];a[i]={...a[i],label:e.target.value};setPolicy({...policy,approvalHierarchy:a});}} placeholder="e.g. Manager / VP / GM" style={{flex:2,padding:"5px 8px",border:`1.5px solid ${BDR}`,borderRadius:6,fontSize:11,fontFamily:FB}}/>
+                <input type="number" value={h.ceiling||""} onChange={e=>{const a=[...(policy.approvalHierarchy||[])];a[i]={...a[i],ceiling:parseFloat(e.target.value)||0};setPolicy({...policy,approvalHierarchy:a});}} placeholder="₹ Ceiling (0=unlimited)" style={{flex:2,padding:"5px 8px",border:`1.5px solid ${BDR}`,borderRadius:6,fontSize:11}}/>
+                <button onClick={()=>setPolicy({...policy,approvalHierarchy:(policy.approvalHierarchy||[]).filter((_,j)=>j!==i)})} style={{background:"none",border:"none",cursor:"pointer",color:"#dc2626",fontSize:14,flexShrink:0}}>✕</button>
+              </div>
+            ))}
+            {(policy.approvalHierarchy||[]).length<10&&<button onClick={()=>{
+              const next=(policy.approvalHierarchy||[]).length+1;
+              setPolicy({...policy,approvalHierarchy:[...(policy.approvalHierarchy||[]),{level:next,label:"",ceiling:0}]});
+            }} style={{background:"none",border:`1.5px dashed ${BDR}`,borderRadius:7,padding:"5px 12px",cursor:"pointer",fontSize:11,color:MUTED,width:"100%",marginTop:4}}>
+              + Add Level ({(policy.approvalHierarchy||[]).length}/10)
+            </button>}
+            <div style={{marginTop:10}}>
+              <label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:4}}>ESCALATION TIMER</label>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <input type="number" value={policy.escalationHrs||48} onChange={e=>setPolicy({...policy,escalationHrs:parseFloat(e.target.value)||48})} style={{padding:"5px 8px",border:`1.5px solid ${BDR}`,borderRadius:6,fontSize:12,width:70}}/>
+                <span style={{fontSize:10,color:MUTED}}>hours before reminder, then auto-escalates to next grade</span>
+              </div>
+            </div>
+          </>}
+        </Card>
+        {/* ── PHASE 1: City Classification Toggle ── */}
+        <Card style={{padding:18}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>City Classification</div>
+          <Toggle on={policy.cityClassification} onClick={()=>setPolicy({...policy,cityClassification:!policy.cityClassification})} label="Enable Tier A/B/C/D Cities" sub="Hotel limits and diem vary by city tier"/>
+          {policy.cityClassification&&<>
+            <div style={{fontSize:10,color:MUTED,margin:"8px 0"}}>Cities not listed in A/B/C automatically become Tier D (residual). Press Enter or click + to add.</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+              {[["A","Metro","#fee2e2","#991b1b"],["B","Major","#fef3c7","#92400e"],["C","Tier-2","#dbeafe","#1e40af"]].map(([tier,name,bg,fg])=>{
+                const tierCities=(policy.cityTiers||[]).filter(ct=>ct.tier===tier).map(ct=>ct.city);
+                return(<div key={tier}>
+                  <div style={{fontSize:11,fontWeight:700,color:fg,marginBottom:5}}>Tier {tier} — {name} <span style={{fontSize:9,fontWeight:400,color:MUTED}}>({tierCities.length})</span></div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:3,marginBottom:5,minHeight:24}}>
+                    {tierCities.map(city=>(
+                      <span key={city} style={{background:bg,color:fg,padding:"2px 7px",borderRadius:12,fontSize:10,display:"inline-flex",alignItems:"center",gap:3}}>
+                        {city}
+                        <button onClick={()=>setPolicy({...policy,cityTiers:(policy.cityTiers||[]).filter(ct=>!(ct.city===city&&ct.tier===tier))})} style={{background:"none",border:"none",cursor:"pointer",color:"inherit",fontSize:11,padding:0,lineHeight:1}}>×</button>
+                      </span>
+                    ))}
+                  </div>
+                  <div style={{display:"flex",gap:5}}>
+                    <input id={`cityinp-${tier}`} placeholder="Add city…" onKeyDown={e=>{if(e.key==="Enter"&&e.target.value.trim()){const c=e.target.value.trim();if(!(policy.cityTiers||[]).some(ct=>ct.city===c)){setPolicy({...policy,cityTiers:[...(policy.cityTiers||[]),{city:c,tier}]});}e.target.value="";}}} style={{flex:1,padding:"4px 7px",border:`1.5px solid ${BDR}`,borderRadius:6,fontSize:11,fontFamily:FB}}/>
+                    <button onClick={()=>{const inp=document.getElementById(`cityinp-${tier}`);if(inp?.value?.trim()){const c=inp.value.trim();if(!(policy.cityTiers||[]).some(ct=>ct.city===c)){setPolicy({...policy,cityTiers:[...(policy.cityTiers||[]),{city:c,tier}]});}inp.value="";}}} style={{padding:"4px 9px",background:G,color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:11}}>+</button>
+                  </div>
+                </div>);
+              })}
+            </div>
+          </>}
+        </Card>
+        {/* ── PHASE 1: Grade Entitlements Table ── */}
+        {policy.gradeBased&&(policy.approvalHierarchy||[]).length>0&&<Card style={{padding:18,gridColumn:"1/-1"}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Grade Entitlements — Hotel Limit &amp; Diem Rate per Grade per Tier</div>
+          <div style={{fontSize:10,color:MUTED,marginBottom:10}}>Hotel limit = max per night. Diem = allowance per outstation day. City Classification must be on for tier columns to matter.</div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+              <thead>
+                <tr style={{background:GL}}>
+                  <th style={{padding:"6px 8px",textAlign:"left",color:GD}}>Grade</th>
+                  <th style={{padding:"6px 8px",textAlign:"left",color:GD}}>Label</th>
+                  {(policy.cityClassification?[["A","#fee2e2","#991b1b"],["B","#fef3c7","#92400e"],["C","#dbeafe","#1e40af"],["D","#f3f4f6","#374151"]]:[["D","#f3f4f6","#374151"]]).map(([t,bg,fg])=><>
+                    <th key={`h${t}`} style={{padding:"6px 6px",background:bg,color:fg,textAlign:"right"}}>Hotel {t} ₹</th>
+                    <th key={`d${t}`} style={{padding:"6px 6px",background:bg,color:fg,textAlign:"right"}}>Diem {t} ₹</th>
+                  </>)}
+                  <th style={{padding:"6px 8px",textAlign:"left",color:GD}}>Transport</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(policy.approvalHierarchy||[]).sort((a,b)=>a.level-b.level).map(h=>{
+                  const getE=(tier)=>(policy.gradeEntitlements||[]).find(e=>e.grade===h.level&&e.tier===tier)||{hotelLimit:"",diemRate:"",transportClass:""};
+                  const setE=(tier,field,val)=>{
+                    const arr=[...(policy.gradeEntitlements||[])];
+                    const idx=arr.findIndex(e=>e.grade===h.level&&e.tier===tier);
+                    if(idx>=0)arr[idx]={...arr[idx],[field]:val};
+                    else arr.push({grade:h.level,tier,hotelLimit:0,diemRate:0,transportClass:"",[field]:val});
+                    setPolicy({...policy,gradeEntitlements:arr});
+                  };
+                  const tiers=policy.cityClassification?["A","B","C","D"]:["D"];
+                  return(
+                    <tr key={h.level} style={{borderTop:`1px solid ${BDR}`}}>
+                      <td style={{padding:"5px 8px",fontWeight:700,color:INK}}>L{h.level}</td>
+                      <td style={{padding:"5px 8px",color:MUTED,fontSize:10}}>{h.label||"—"}</td>
+                      {tiers.map(tier=>{const e=getE(tier);return(<>
+                        <td key={`h${tier}`} style={{padding:"3px 4px"}}><input type="number" value={e.hotelLimit||""} onChange={ev=>setE(tier,"hotelLimit",parseFloat(ev.target.value)||0)} placeholder="—" style={{width:68,padding:"3px 5px",border:`1px solid ${BDR}`,borderRadius:5,fontSize:10,textAlign:"right"}}/></td>
+                        <td key={`d${tier}`} style={{padding:"3px 4px"}}><input type="number" value={e.diemRate||""} onChange={ev=>setE(tier,"diemRate",parseFloat(ev.target.value)||0)} placeholder="—" style={{width:68,padding:"3px 5px",border:`1px solid ${BDR}`,borderRadius:5,fontSize:10,textAlign:"right"}}/></td>
+                      </>);})}
+                      <td style={{padding:"3px 6px"}}><select value={getE("D").transportClass||""} onChange={e=>setE("D","transportClass",e.target.value)} style={{padding:"3px 6px",border:`1px solid ${BDR}`,borderRadius:5,fontSize:10}}>
+                        <option value="">Any</option>
+                        {["Economy Air","Business Air","2AC Train","3AC Train","Sleeper","Volvo Bus","Non-AC Bus","Own Vehicle"].map(m=><option key={m}>{m}</option>)}
+                      </select></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>}
+        {/* Subscription (continuation) */}
+        <Card style={{display:"none"}}>
           <div style={{background:GL,border:`1px solid ${GM}`,borderRadius:9,padding:"10px 12px",marginBottom:12}}>
             <div style={{fontSize:9,color:GD,fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>Current Bill</div>
             <div style={{fontFamily:FD,fontSize:22,fontWeight:700,color:INK,marginTop:3}}>{fmt(emps*tier.ppu)}<span style={{fontSize:11,fontWeight:400,color:MUTED}}>/month</span></div>
