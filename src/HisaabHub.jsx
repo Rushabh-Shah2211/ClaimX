@@ -2869,9 +2869,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   const savePolicyToSB=async(newPolicy)=>{
     if(SB_ENABLED){
-      // Build upsert row — only include fields that are non-null/non-default
-      // to avoid overwriting with nulls if new columns don't exist yet in DB
-      const upsertRow={
+      // Full upsert including all Phase 1 columns
+      const fullRow={
         company_id:cid,
         auto_approve_limit:newPolicy.autoApproveLimit,
         reimbursement_mode:newPolicy.reimbursementMode,
@@ -2892,7 +2891,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         categories:newPolicy.categories,
         departments:newPolicy.departments,
         primary_color:newPolicy.primaryColor||"#7ED957",
-        // Phase 1: Grade & city policy
+        // Phase 1
         grade_based:newPolicy.gradeBased||false,
         city_classification:newPolicy.cityClassification||false,
         escalation_hrs:newPolicy.escalationHrs||48,
@@ -2902,15 +2901,36 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         trip_purposes:newPolicy.tripPurposes||[],
       };
 
-      const{error}=await supabase.from("policy").upsert(upsertRow);
-      if(error){
-        console.error("Policy save error:",error.message);
+      let{error}=await supabase.from("policy").upsert(fullRow);
+
+      // If a column doesn't exist yet (migration not run), fall back to base columns only
+      if(error&&(error.message?.includes("column")||error.message?.includes("schema cache"))){
+        console.warn("Policy full upsert failed, trying base columns only:",error.message);
+        const baseRow={
+          company_id:cid,
+          auto_approve_limit:newPolicy.autoApproveLimit,
+          reimbursement_mode:newPolicy.reimbursementMode,
+          receipt_mandatory_above:newPolicy.receiptMandatoryAbove,
+          weekend_requires_approval:newPolicy.weekendRequiresApproval,
+          multi_level_approval:newPolicy.multiLevelApproval,
+          approval_levels:newPolicy.approvalLevels,
+          vendor_whitelist:newPolicy.vendorWhitelist,
+          vendor_blacklist:newPolicy.vendorBlacklist,
+          department_budgets:newPolicy.departmentBudgets,
+          category_pct:newPolicy.categoryPct,
+          scheduled_reports:newPolicy.scheduledReports,
+          dual_approve_above:newPolicy.dualApproveAbove||0,
+          categories:newPolicy.categories,
+          departments:newPolicy.departments,
+        };
+        const{error:e2}=await supabase.from("policy").upsert(baseRow);
+        if(e2)throw new Error("Policy save failed: "+e2.message+"\n\n⚠ Run xpensr_policy_columns.sql in Supabase to add missing columns.");
+        toast("⚠ Saved basic settings only. Run xpensr_policy_columns.sql in Supabase to enable Grade/City features.","warn");
+      } else if(error){
         throw new Error("Policy save failed: "+error.message);
       }
 
-      // Update local co state directly — DO NOT call loadFromSB()
-      // loadFromSB would re-fetch policy from DB and may reset new fields
-      // if the migration SQL hasn't been run yet (columns missing)
+      // Update local state directly — no loadFromSB needed
       setCoData(p=>({...p,policy:newPolicy}));
     }
   };
