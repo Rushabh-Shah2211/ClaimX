@@ -302,6 +302,51 @@ function resolveApprover(submitterId, allUsers, policy, amount=0){
   return allUsers.filter(u=>u.role==="admin"&&!u.isSuspended).map(u=>u.id);
 }
 
+// ─── REPORTING CHAIN VISIBILITY ─────────────────────────────────────────────
+// Returns the full set of user IDs that `viewerId` can see
+// Rule: you see yourself + everyone who reports to you (directly or transitively)
+// If grade system is off: falls back to dept-based visibility
+function getVisibleUserIds(viewerId, allUsers, policy){
+  const viewer=allUsers.find(u=>u.id===viewerId);
+  if(!viewer) return new Set([viewerId]);
+
+  // Admin sees everyone
+  if(viewer.role==="admin") return new Set(allUsers.map(u=>u.id));
+
+  const result=new Set([viewerId]);
+
+  if(policy?.gradeBased&&(policy?.approvalHierarchy?.length>0)){
+    // Grade-based: build reporting tree
+    // Direct reports: users whose reportingTo===viewerId
+    // Transitive reports: their reports too (BFS)
+    const queue=[viewerId];
+    while(queue.length>0){
+      const current=queue.shift();
+      const directReports=allUsers.filter(u=>u.reportingTo===current&&!u.isSuspended);
+      for(const r of directReports){
+        if(!result.has(r.id)){
+          result.add(r.id);
+          queue.push(r.id);
+        }
+      }
+    }
+    // Also: viewer sees all users at lower grades in their dept (for managers who aren't in reporting chain)
+    const viewerGrade=viewer.grade||0;
+    if(viewerGrade>0){
+      allUsers.filter(u=>
+        (u.grade||0)<viewerGrade&&
+        u.dept===viewer.dept&&
+        !u.isSuspended
+      ).forEach(u=>result.add(u.id));
+    }
+  } else {
+    // Legacy: dept-based — see everyone in same dept
+    allUsers.filter(u=>u.dept===viewer.dept&&!u.isSuspended).forEach(u=>result.add(u.id));
+  }
+
+  return result;
+}
+
 // Can `approverId` approve a claim submitted by `submitterId` of `amount`?
 function canApproveFor(approverId, submitterId, allUsers, policy, amount=0){
   if(approverId===submitterId) return false; // Self-approval always blocked
@@ -2211,14 +2256,26 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const needsDualApproval=(amount)=>co.policy.dualApproveAbove>0&&amount>=co.policy.dualApproveAbove;
   const myUser=co.users.find(u=>u.id===user.id);
   const myNotifs=(co.notifications||[]).filter(n=>n.userId===user.id&&!n.read);
-  // Admin + manager see pending; finance sees approved only
-  const pendingClaims=co.claims.filter(c=>
+
+  // ── Reporting chain visibility ────────────────────────────────────────────
+  // The set of user IDs this person can see data for
+  const visibleUserIds=getVisibleUserIds(user.id,co.users,co.policy);
+
+  // Filter all data to only what this user can see
+  const visibleClaims=isAdmin?co.claims:co.claims.filter(c=>visibleUserIds.has(c.empId)||c.empId===user.id);
+  const visibleTrips=isAdmin?co.trips:co.trips.filter(t=>{
+    if(t.createdBy===user.id)return true;
+    return (t.assignedTo||[]).some(id=>visibleUserIds.has(id));
+  });
+
+  // Pending claims visible to this approver (from their reporting chain only)
+  const pendingClaims=visibleClaims.filter(c=>
     c.status==="Pending" ||
-    (c.status==="Manager Approved"&&isAdmin) // admin sees manager-approved for final sign-off
+    (c.status?.startsWith("Level ")&&canApprove) ||
+    (c.status==="Manager Approved"&&isAdmin)
   );
 
-  // Claims this specific manager/admin should approve (respects delegation)
-  // Plain filter - no useMemo needed, and avoids hooks-after-early-return error
+  // Claims this specific manager/admin should approve
   const myPendingClaims=(()=>{
     if(isAdmin)return pendingClaims;
     if(!isManager)return [];
@@ -2235,25 +2292,22 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     });
   })();
 
-  // Claims to show in ApprovalsTab (includes claims delegated to this manager)
+  // Claims to show in ApprovalsTab — from reporting chain + grade engine
   const approvableClaimsForMe=(()=>{
     if(!canApprove) return [];
 
     return pendingClaims.filter(c=>{
-      // Never show your own claims
       if(c.empId===user.id) return false;
+      // Must be in my visible chain
+      if(!isAdmin&&!visibleUserIds.has(c.empId)) return false;
 
-      // Grade-based engine
       if(co.policy?.gradeBased&&(co.policy?.approvalHierarchy?.length>0)){
-        // This claim is for me if I am one of the resolved approvers
         const approvers=resolveApprover(c.empId,co.users,co.policy,c.amount);
         if(approvers.includes(user.id)) return true;
-        // Also show if claim has been partially approved up to my level - 1 and needs my grade
         if(c.status?.startsWith("Level ")&&canApproveFor(user.id,c.empId,co.users,co.policy,c.amount)) return true;
         return false;
       }
 
-      // Legacy: admin sees all, manager sees own dept + delegations
       if(isAdmin) return true;
       const emp=getUser(c.empId);
       if(!emp) return false;
@@ -2269,10 +2323,11 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const pendingTopups=co.topups.filter(t=>t.status==="Pending");
 
   // ── sbCreateTrip — defined once, used by both TripsTab and SubmitTab ─────────
-  const sbCreateTrip=async(trip,assigned)=>{
+  const sbCreateTrip=async(trip,assigned,legs=[])=>{
     if(SB_ENABLED){
       try{
-        const tripStatus=isManager||isAdmin?"active":"pending_approval";
+        // All trips go pending_approval except admin-created
+        const tripStatus=isAdmin?"active":"pending_approval";
         const insertRow={
           id:trip.id,company_id:cid,
           name:trip.name,type:trip.type||"trip",
@@ -2287,6 +2342,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           project_code:trip.projectCode||null,
           opening_balance:parseFloat(trip.budget)||0,
           category_limits:Object.keys(trip.categoryLimits||{}).length>0?trip.categoryLimits:null,
+          trip_type:trip.tripType||"domestic",
+          purpose:trip.purpose||null,
         });}catch(e){}
         const{error:tripErr}=await supabase.from("trips").insert(insertRow);
         if(tripErr){
@@ -2302,9 +2359,21 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             assigned.map(uid=>({trip_id:trip.id,user_id:uid}))
           ).then(()=>{}).catch(()=>{});
         }
-        if(!isManager&&!isAdmin){
-          const mgrs=co.users.filter(u=>["manager","admin"].includes(u.role));
-          for(const m of mgrs)await sbPushNotif(m.id,`New trip "${trip.name}" by ${user.name} awaits approval`,"info");
+        // Save itinerary legs
+        if(legs?.length>0){
+          await supabase.from("trip_legs").insert(
+            legs.map((l,idx)=>({
+              id:l.id||uid(),company_id:cid,trip_id:trip.id,
+              leg_num:idx+1,from_city:l.fromCity||"",to_city:l.toCity||"",
+              depart_at:l.departAt||null,arrive_at:l.arriveAt||null,
+              mode:l.mode||"",city_tier:l.cityTier||"D",
+              hotel_limit:l.hotelLimit||0,diem_rate:l.diemRate||0,days:l.days||1,
+            }))
+          ).then(()=>{}).catch(e=>console.warn("Legs insert:",e.message));
+        }
+        // Notify via grade-based approver routing
+        if(tripStatus==="pending_approval"){
+          await notifyApprovers(user.id,`New trip "${trip.name}" by ${user.name} awaits approval`,"info");
         }
         await loadFromSB();
         toast(tripStatus==="active"?"✓ Trip created":"✓ Trip submitted for approval");
@@ -2312,8 +2381,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         toast("Trip creation failed: "+err.message,"error");
       }
     }else{
-      setTrips(p=>[{...trip,status:isManager||isAdmin?"active":"pending_approval"},...p]);
-      toast(isManager||isAdmin?"✓ Trip created":"✓ Trip submitted for approval");
+      setTrips(p=>[{...trip,status:isAdmin?"active":"pending_approval",legs:legs||[]},...p]);
+      toast(isAdmin?"✓ Trip created":"✓ Trip submitted for approval");
     }
   };
 
@@ -2329,6 +2398,39 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     else setTrips(p=>p.map(t=>t.id===trip.id?{...t,status:"declined"}:t));
     await sbPushNotif(trip.createdBy,`Your trip "${trip.name}" was not approved`,"error");
     toast(`Trip "${trip.name}" rejected`,"warn");
+  };
+
+  // ── Delete trip (pending/declined only — or admin can delete any) ─────────
+  const deleteTrip=async(trip)=>{
+    const canDelete=isAdmin||(trip.status==="pending_approval"||trip.status==="declined");
+    if(!canDelete){toast("Only pending or declined trips can be deleted","error");return;}
+    if(!window.confirm(`Delete trip "${trip.name}"? All claims and legs for this trip will also be deleted.`))return;
+    if(SB_ENABLED){
+      await supabase.from("trip_legs").delete().eq("trip_id",trip.id);
+      await supabase.from("claims").delete().eq("trip_id",trip.id);
+      await supabase.from("trips").delete().eq("id",trip.id);
+      await loadFromSB();
+    } else {
+      setTrips(p=>p.filter(t=>t.id!==trip.id));
+      setClaims(p=>p.filter(c=>c.tripId!==trip.id));
+    }
+    toast(`✓ Trip "${trip.name}" deleted`);
+  };
+
+  // ── Delete claim (pending only — or admin can delete any) ─────────────────
+  const deleteClaim=async(claimId)=>{
+    const claim=co.claims.find(c=>c.id===claimId);
+    if(!claim)return;
+    const canDelete=isAdmin||(claim.status==="Pending"&&claim.empId===user.id);
+    if(!canDelete){toast("Only your pending claims can be deleted","error");return;}
+    if(!window.confirm(`Delete claim ${claimId} for ${fmt(claim.amount)}? This cannot be undone.`))return;
+    if(SB_ENABLED){
+      await supabase.from("claims").delete().eq("id",claimId);
+      await loadFromSB();
+    } else {
+      setClaims(p=>p.filter(c=>c.id!==claimId));
+    }
+    toast(`✓ Claim ${claimId} deleted`);
   };
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -3401,12 +3503,16 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           getUser={getUser} setMdl={setMdl} submitEditRequest={submitEditRequest}
           hasEditWindow={hasEditWindow} userId={user.id} onExportPDF={exportClaimsPDF}/>}
         {tab==="submit"&&hasPerm("submit")&&<SubmitTab user={user} co={co} submitClaim={submitClaim} camFile={camFile} clearCamFile={()=>setCamF(null)} onCam={()=>setSCam(true)} companyCategories={companyCategories} onCreateTrip={()=>setTab("trips")} sbCreateTrip={sbCreateTrip}/>}
-        {tab==="trips"&&<TripsTab trips={co.trips} setTrips={fn=>{if(!SB_ENABLED)setTrips(fn);}} claims={co.claims}
+        {tab==="trips"&&<TripsTab trips={isAdmin?co.trips:visibleTrips} setTrips={fn=>{if(!SB_ENABLED)setTrips(fn);}} claims={isAdmin?co.claims:visibleClaims}
           isManager={isManager} isAdmin={isAdmin} getUser={getUser} users={co.users}
-          closeTrip={closeTrip} toast={toast} uid={user.id} userRole={user.role}
+          closeTrip={closeTrip} toast={toast} uid={user.id} userRole={user.role} myUser={myUser}
           sbPushNotif={sbPushNotif} companyUsers={co.users}
           sbCreateTrip={sbCreateTrip}
           policy={co.policy}
+          approveTrip={approveTrip} rejectTrip={rejectTrip}
+          notifyApprovers={notifyApprovers}
+          deleteTrip={deleteTrip}
+          deleteClaim={deleteClaim}
           sbUpdateTrip={async(tripId,patch)=>{
             if(SB_ENABLED){
               const dbPatch={};
@@ -3467,9 +3573,9 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="approvals"&&canApprove&&<ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} onReload={loadFromSB} onReloadEditRequests={loadEditRequests}/>}
         {tab==="topup"&&<TopupTab user={user} topups={canApprove?co.topups.filter(t=>t.status==="Pending"||t.empId===user.id):co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} trips={co.trips} sbCreateTopup={async(req)=>{if(SB_ENABLED){const{error:te}=await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});if(te){toast("Top-up request failed: "+te.message,"error");return;}await loadFromSB();}else{setTopups(p=>[...p,req]);}}}/>}
         {tab==="analytics"&&<Analytics
-          claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept;}):co.claims.filter(c=>c.empId===user.id)}
-          trips={isAdmin?co.trips:isManager?co.trips.filter(t=>{const assigned=(t.assignedTo||[]);return assigned.some(id=>{const u=getUser(id);return u?.dept===myUser?.dept;})||t.createdBy===user.id;}):co.trips.filter(t=>(t.assignedTo||[]).includes(user.id)||t.createdBy===user.id)}
-          users={isAdmin?co.users:isManager?co.users.filter(u=>u.dept===myUser?.dept):co.users.filter(u=>u.id===user.id)}
+          claims={isAdmin?co.claims:visibleClaims.filter(c=>isManager||c.empId===user.id)}
+          trips={isAdmin?co.trips:visibleTrips}
+          users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))}
           isManager={isManager} isAdmin={isAdmin} getUser={getUser} policy={co.policy} printSummary={printSummary} user={user}/>}
         {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
         {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={isAdmin?(co.auditLog||[]):(co.auditLog||[]).filter(e=>{const u=getUser(e.userId||e.by);return u?.dept===myUser?.dept;})} claims={co.claims} getUser={getUser}/>}
@@ -3511,7 +3617,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       </div>
 
       {modal?.type==="editRequest"&&<EditRequestModal claim={modal.data} userId={user.id} userName={user.name} cid={cid} onClose={()=>setMdl(null)} onSubmit={submitEditRequest} sbEnabled={SB_ENABLED}/>}
-      {modal&&modal.type!=="editRequest"&&<ClaimModal modal={modal} setMdl={setMdl} handleDecision={handleDecision} getUser={getUser} trips={co.trips} claims={co.claims} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}} userId={user.id} userName={user.name} addCommentToSB={addCommentToSB} sbEnabled={SB_ENABLED} cid={cid} editRequests={editRequests} onEditRequest={submitEditRequest} onApproveEditRequest={approveEditRequest} onRejectEditRequest={rejectEditRequest} isAdmin={isAdmin} isManager={isManager} hasEditWindow={hasEditWindow}/>}
+      {modal&&modal.type!=="editRequest"&&<ClaimModal modal={modal} setMdl={setMdl} handleDecision={handleDecision} getUser={getUser} trips={co.trips} claims={co.claims} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}} userId={user.id} userName={user.name} addCommentToSB={addCommentToSB} sbEnabled={SB_ENABLED} cid={cid} editRequests={editRequests} onEditRequest={submitEditRequest} onApproveEditRequest={approveEditRequest} onRejectEditRequest={rejectEditRequest} isAdmin={isAdmin} isManager={isManager} hasEditWindow={hasEditWindow} deleteClaim={deleteClaim}/>}
 
       {/* MOBILE BOTTOM NAV */}
       {/* ── MOBILE BOTTOM NAV ─────────────────────────────────────────────── */}
@@ -4519,34 +4625,56 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
 }
 
 // ─── TRIPS TAB ────────────────────────────────────────────────────────────────
-function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTrip,toast,uid:userId,userRole,sbCreateTrip,sbPushNotif,companyUsers,sbUpdateTrip,policy}){
+function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTrip,toast,uid:userId,userRole,myUser,sbCreateTrip,sbPushNotif,companyUsers,sbUpdateTrip,policy,approveTrip,rejectTrip,notifyApprovers,deleteTrip,deleteClaim}){
   const [showNew,setShowNew]=useState(false);
   const [form,setForm]=useState({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[],projectCode:"",tripMode:"balance",currency:"INR",categoryLimits:{},tripType:"domestic",purpose:""});
+  const [newLegs,setNewLegs]=useState([]); // itinerary legs for new trip creation
   const [showCatLimits,setShowCatLimits]=useState(false);
   const [expandedId,setExpId]=useState(null);
   const [editTrip,setEditTrip]=useState(null);
   const [budgetTrip,setBudgetTrip]=useState(null);
-  const [legsTrip,setLegsTrip]=useState(null);   // trip for itinerary management
+  const [legsTrip,setLegsTrip]=useState(null);
   const isEmployee=!isManager&&!isAdmin;
   const emps=users?.filter(u=>u.role==="employee")||[];
   const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",width:"100%"};
   const toggle=id=>setForm(f=>({...f,assignedTo:f.assignedTo.includes(id)?f.assignedTo.filter(x=>x!==id):[...f.assignedTo,id]}));
 
-  // Can only set budget if manager/admin
+  // City helpers for itinerary
+  const allPolicyCities=[
+    ...((policy?.cityTiers||[]).map(ct=>({city:ct.city,tier:ct.tier}))),
+    {city:"Other",tier:"D"},
+  ];
+  const getCityTierLocal=(city)=>{
+    if(!city) return "D";
+    const found=(policy?.cityTiers||[]).find(ct=>ct.city.toLowerCase()===city.toLowerCase());
+    return found?.tier||"D";
+  };
+  const addLeg=()=>setNewLegs(prev=>[...prev,{id:uid(),fromCity:"",toCity:"",departAt:"",arriveAt:"",mode:"",cityTier:"D",hotelLimit:0,diemRate:0,days:1}]);
+  const updateNewLeg=(idx,patch)=>setNewLegs(prev=>{
+    const updated=[...prev];
+    const leg={...updated[idx],...patch};
+    if(leg.departAt&&leg.arriveAt){
+      const diff=Math.ceil((new Date(leg.arriveAt)-new Date(leg.departAt))/(1000*60*60*24));
+      leg.days=Math.max(1,diff||1);
+    }
+    if(patch.toCity!==undefined) leg.cityTier=getCityTierLocal(leg.toCity);
+    updated[idx]=leg;
+    return updated;
+  });
+
   const canSetBudget=isManager||isAdmin;
 
   const create=async()=>{
     if(!form.name?.trim()){toast("Please enter a trip name","error");return;}
     if(!form.endDate){toast("Please enter an end date","error");return;}
     if(!form.startDate){toast("Please enter a start date","error");return;}
-    // Manager/admin only included if they explicitly selected themselves
-    // Employees always include themselves
     const baseList=isManager||isAdmin
       ?(form.assignedTo.length>0?form.assignedTo:emps.map(e=>e.id))
       :[userId];
-    // Do NOT auto-add manager/admin to trip unless they explicitly added themselves
     const assigned=[...new Set(isEmployee?[...baseList,userId]:baseList)];
-    const status=isManager||isAdmin?"active":"pending_approval";
+    // All trips go for approval regardless of role (item 3)
+    // Admin trips auto-approve, manager trips go to next grade/admin
+    const status=isAdmin?"active":"pending_approval";
     const newTrip={
       id:"TRP-"+uid(),name:form.name.trim(),type:form.type,
       startDate:form.startDate,endDate:form.endDate,
@@ -4558,20 +4686,25 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
       openingBalance:parseFloat(form.budget)||0,
       topupsTotal:0,
       categoryLimits:form.categoryLimits||{},
+      legs:newLegs,
     };
     try{
       if(sbCreateTrip){
-        await sbCreateTrip(newTrip,assigned);
+        await sbCreateTrip(newTrip,assigned,newLegs);
       }else{
         setTrips(p=>[newTrip,...p]);
-        toast(status==="active"?"✓ Trip created":"✓ Trip submitted for manager approval");
       }
+      // Notify approvers for non-admin
+      if(status==="pending_approval"&&notifyApprovers){
+        await notifyApprovers(userId,`New trip "${newTrip.name}" by ${users.find(u=>u.id===userId)?.name||userId} awaits approval`,"info");
+      }
+      toast(status==="active"?"✓ Trip created":"✓ Trip submitted for approval");
       setShowNew(false);
       setForm({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[],projectCode:"",tripMode:"balance",currency:"INR",categoryLimits:{}});
+      setNewLegs([]);
       setShowCatLimits(false);
     }catch(err){
       toast("Failed to create trip: "+(err?.message||String(err)),"error");
-      console.error("Trip create error:",err);
     }
   };
 
@@ -4639,6 +4772,47 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
             );})}
           </div>
         </div>}
+        {/* ── Itinerary / Legs ── */}
+        <div style={{marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <div style={{fontSize:11,fontWeight:700,color:INK}}>📍 Travel Itinerary <span style={{color:MUTED,fontWeight:400}}>(optional — add city-by-city legs)</span></div>
+            <button onClick={addLeg} style={{background:"none",border:`1.5px dashed ${BDR}`,borderRadius:7,padding:"4px 12px",cursor:"pointer",fontSize:11,color:MUTED}}>+ Add Leg</button>
+          </div>
+          {newLegs.map((leg,idx)=>(
+            <div key={leg.id} style={{border:`1px solid ${BDR}`,borderRadius:9,padding:12,marginBottom:8,background:"var(--card,#fff)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                <span style={{fontSize:11,fontWeight:600,color:INK}}>Leg {idx+1}{leg.toCity?` → ${leg.toCity}`:""}{leg.cityTier&&leg.cityTier!=="D"?<span style={{marginLeft:6,fontSize:9,padding:"1px 6px",borderRadius:8,background:leg.cityTier==="A"?"#fee2e2":leg.cityTier==="B"?"#fef3c7":"#dbeafe",color:leg.cityTier==="A"?"#991b1b":leg.cityTier==="B"?"#92400e":"#1e40af"}}>Tier {leg.cityTier}</span>:""}</span>
+                <button onClick={()=>setNewLegs(p=>p.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",cursor:"pointer",color:"#dc2626",fontSize:13}}>✕</button>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:7}}>
+                <div><label style={{fontSize:9,color:MUTED,display:"block",marginBottom:2,textTransform:"uppercase"}}>From City</label>
+                  <input value={leg.fromCity||""} onChange={e=>updateNewLeg(idx,{fromCity:e.target.value})} placeholder="Rajkot" style={{...inpS,fontSize:11,padding:"6px 9px"}}/></div>
+                <div><label style={{fontSize:9,color:MUTED,display:"block",marginBottom:2,textTransform:"uppercase"}}>To City</label>
+                  <select value={leg.toCity||""} onChange={e=>{const v=e.target.value;updateNewLeg(idx,{toCity:v==="__other__"?"":v});}} style={{...inpS,fontSize:11,padding:"6px 9px",appearance:"none"}}>
+                    <option value="">Select city…</option>
+                    {(policy?.cityTiers||[]).length>0&&<>
+                      <optgroup label="Tier A (Metro)">{(policy.cityTiers||[]).filter(ct=>ct.tier==="A").map(ct=><option key={ct.city} value={ct.city}>{ct.city}</option>)}</optgroup>
+                      <optgroup label="Tier B (Major)">{(policy.cityTiers||[]).filter(ct=>ct.tier==="B").map(ct=><option key={ct.city} value={ct.city}>{ct.city}</option>)}</optgroup>
+                      <optgroup label="Tier C (Tier-2)">{(policy.cityTiers||[]).filter(ct=>ct.tier==="C").map(ct=><option key={ct.city} value={ct.city}>{ct.city}</option>)}</optgroup>
+                    </>}
+                    <option value="__other__">Other (Tier D)</option>
+                  </select>
+                  {(leg.toCity===""&&leg._showOther)||leg.toCity&&!(policy?.cityTiers||[]).some(ct=>ct.city===leg.toCity)?
+                    <input value={leg.toCity||""} onChange={e=>updateNewLeg(idx,{toCity:e.target.value})} placeholder="Enter city name (Tier D)" style={{...inpS,fontSize:11,padding:"6px 9px",marginTop:4}}/> : null}
+                </div>
+                <div><label style={{fontSize:9,color:MUTED,display:"block",marginBottom:2,textTransform:"uppercase"}}>Departure</label>
+                  <input type="datetime-local" value={leg.departAt||""} onChange={e=>updateNewLeg(idx,{departAt:e.target.value})} style={{...inpS,fontSize:11,padding:"6px 9px"}}/></div>
+                <div><label style={{fontSize:9,color:MUTED,display:"block",marginBottom:2,textTransform:"uppercase"}}>Arrival</label>
+                  <input type="datetime-local" value={leg.arriveAt||""} onChange={e=>updateNewLeg(idx,{arriveAt:e.target.value})} style={{...inpS,fontSize:11,padding:"6px 9px"}}/></div>
+              </div>
+              {leg.days>0&&leg.diemRate>0&&<div style={{fontSize:10,color:MUTED,marginTop:4}}>
+                📊 {leg.days} day{leg.days!==1?"s":""} in {leg.toCity||"city"} · Diem: ₹{(leg.days*leg.diemRate).toLocaleString("en-IN")}
+              </div>}
+            </div>
+          ))}
+          {newLegs.length===0&&<div style={{fontSize:10,color:MUTED,padding:"8px 0"}}>No itinerary added. You can add city legs now or later via the Itinerary button.</div>}
+        </div>
+
         <div style={{display:"flex",gap:8}}><Btn onClick={create}>Create →</Btn><Btn v="outline" onClick={()=>setShowNew(false)}>Cancel</Btn></div>
       </Card>}
       {/* Edit trip modal */}
@@ -4701,6 +4875,9 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                     <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"");const pu=doc.output("bloburl");window.open(pu,"_blank");}catch(e){toast("PDF failed","error");}}} style={{fontSize:10,padding:"5px 8px"}}>PDF</Btn>
                     <Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Edit</Btn>
                     <Btn v="outline" onClick={()=>setLegsTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>📍 Itinerary</Btn>
+                    {/* Delete: pending/declined for all, any status for admin */}
+                    {(isAdmin||(t.status==="pending_approval"||t.status==="declined")&&t.createdBy===userId)&&
+                      <Btn v="danger" onClick={()=>deleteTrip&&deleteTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🗑 Delete</Btn>}
                     <Btn v="outline" onClick={()=>setBudgetTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Budget</Btn>
                     {t.status==="active"&&<Btn v="warning" onClick={()=>closeTrip(t.id)} style={{fontSize:10,padding:"5px 10px"}}>Close</Btn>}
                   </div>
@@ -7141,7 +7318,7 @@ function EditClaimInline({claim,trips,cid,sbEnabled,onClose}){
   );
 }
 
-function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled,cid,editRequests,onEditRequest,onApproveEditRequest,onRejectEditRequest,isAdmin=false,isManager=false,hasEditWindow}){
+function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled,cid,editRequests,onEditRequest,onApproveEditRequest,onRejectEditRequest,isAdmin=false,isManager=false,hasEditWindow,deleteClaim}){
   const [remarks,setRemarks]=useState("");
   const [comment,setComment]=useState("");
   const [receiptsWithUrls,setRWU]=useState(null);
@@ -7267,6 +7444,10 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
               {/* Pending: direct edit */}
               {c.status==="Pending"&&c.empId===userId&&(
                 <Btn v="outline" onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Edit</Btn>
+              )}
+              {/* Delete pending claim */}
+              {(c.status==="Pending"&&c.empId===userId||isAdmin)&&deleteClaim&&(
+                <Btn v="danger" onClick={()=>{deleteClaim(c.id);setMdl(null);}} style={{padding:"6px 10px",fontSize:11}}>🗑 Delete</Btn>
               )}
               {/* Approved with open edit window: edit now */}
               {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&hasEditWindow&&hasEditWindow(c.id)&&(
