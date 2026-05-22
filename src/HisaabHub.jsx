@@ -219,16 +219,14 @@ const mapClaim=r=>r?({id:r.id,companyId:r.company_id,tripId:r.trip_id,empId:r.em
   receipts:(r.receipts||[]).map(rc=>({id:rc.id,name:rc.file_name,storagePath:rc.storage_path,type:rc.mime_type,url:null})),comments:(r.claim_comments||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at)).map(c=>({id:c.id,userId:c.user_id,name:c.user_name,text:c.text,time:new Date(c.created_at).toLocaleString()}))}):null;
 const mapPolicy=r=>r?({autoApproveLimit:parseFloat(r.auto_approve_limit)||5000,reimbursementMode:r.reimbursement_mode||false,receiptMandatoryAbove:parseFloat(r.receipt_mandatory_above)||0,weekendRequiresApproval:r.weekend_requires_approval||false,multiLevelApproval:r.multi_level_approval||false,approvalLevels:r.approval_levels||[],vendorWhitelist:r.vendor_whitelist||[],vendorBlacklist:r.vendor_blacklist||[],departmentBudgets:r.department_budgets||{},categoryPct:r.category_pct||{},scheduledReports:r.scheduled_reports||[],primaryColor:r.primary_color||"#7ED957",departments:r.departments||DEFAULT_DEPTS,categories:r.categories||DEFAULT_CATS,dualApproveAbove:parseFloat(r.dual_approve_above)||0,
   // Phase 1: Grade & city policy
-  gradeBased:r.grade_based||false,             // Enable grade entitlement engine
-  cityClassification:r.city_classification||false, // Enable A/B/C/D tier enforcement
-  escalationHrs:parseFloat(r.escalation_hrs)||48,  // Hours before auto-escalate
-  // 10-level approval config: [{level:1,label:"Trainee",ceiling:0},{level:5,label:"Manager",ceiling:25000},...]
-  approvalHierarchy:r.approval_hierarchy||[],
-  // Grade entitlements: [{grade:7,tier:"A",hotelLimit:2200,diemRate:750,transportClass:"2AC"}, ...]
-  gradeEntitlements:r.grade_entitlements||[],
-  // City tiers: [{city:"Mumbai",tier:"A"},{city:"Pune",tier:"B"},...]
-  cityTiers:r.city_tiers||[],
-  tripPurposes:r.trip_purposes||["Sales Call","Purchase","Inspection","Seminar","Customer Support","Other"],
+  // Use null-safe defaults — if column missing from DB, preserve [] not reset
+  gradeBased:r.grade_based===true,
+  cityClassification:r.city_classification===true,
+  escalationHrs:parseFloat(r.escalation_hrs)||48,
+  approvalHierarchy:Array.isArray(r.approval_hierarchy)?r.approval_hierarchy:[],
+  gradeEntitlements:Array.isArray(r.grade_entitlements)?r.grade_entitlements:[],
+  cityTiers:Array.isArray(r.city_tiers)?r.city_tiers:[],
+  tripPurposes:Array.isArray(r.trip_purposes)?r.trip_purposes:["Sales Call","Purchase","Inspection","Seminar","Customer Support","Other"],
 }):null;
 const mapNotif=r=>r?({id:r.id,userId:r.user_id,text:r.text,type:r.type,read:r.read,time:new Date(r.created_at).toLocaleString()}):null;
 const mapAudit=r=>r?({id:r.id,action:r.action,claimId:r.claim_id,by:r.by_user_id,byName:r.by_name,at:new Date(r.created_at).toLocaleString(),remarks:r.remarks}):null;
@@ -2871,7 +2869,9 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   const savePolicyToSB=async(newPolicy)=>{
     if(SB_ENABLED){
-      await supabase.from("policy").upsert({
+      // Build upsert row — only include fields that are non-null/non-default
+      // to avoid overwriting with nulls if new columns don't exist yet in DB
+      const upsertRow={
         company_id:cid,
         auto_approve_limit:newPolicy.autoApproveLimit,
         reimbursement_mode:newPolicy.reimbursementMode,
@@ -2891,6 +2891,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         notify_wa_on_reject:newPolicy.notifyWaOnReject,
         categories:newPolicy.categories,
         departments:newPolicy.departments,
+        primary_color:newPolicy.primaryColor||"#7ED957",
         // Phase 1: Grade & city policy
         grade_based:newPolicy.gradeBased||false,
         city_classification:newPolicy.cityClassification||false,
@@ -2899,9 +2900,18 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         grade_entitlements:newPolicy.gradeEntitlements||[],
         city_tiers:newPolicy.cityTiers||[],
         trip_purposes:newPolicy.tripPurposes||[],
-        primary_color:newPolicy.primaryColor||"#7ED957",
-      });
-      await loadFromSB();
+      };
+
+      const{error}=await supabase.from("policy").upsert(upsertRow);
+      if(error){
+        console.error("Policy save error:",error.message);
+        throw new Error("Policy save failed: "+error.message);
+      }
+
+      // Update local co state directly — DO NOT call loadFromSB()
+      // loadFromSB would re-fetch policy from DB and may reset new fields
+      // if the migration SQL hasn't been run yet (columns missing)
+      setCoData(p=>({...p,policy:newPolicy}));
     }
   };
 
@@ -5417,8 +5427,26 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
 }
 function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sbEnabled}){
   const[policy,setPolicy]=useState(()=>({...initPol}));
-  // Sync local state when parent reloads from DB (e.g. after save)
-  useEffect(()=>{setPolicy({...initPol});},[JSON.stringify(initPol)]);
+  const lastSavedRef=useRef(null);
+  // Only sync from parent when it changes AND we haven't just saved
+  // (prevents loadFromSB reset from wiping local unsaved edits)
+  useEffect(()=>{
+    const key=JSON.stringify({
+      autoApproveLimit:initPol.autoApproveLimit,
+      gradeBased:initPol.gradeBased,
+      approvalHierarchy:initPol.approvalHierarchy,
+      gradeEntitlements:initPol.gradeEntitlements,
+      cityTiers:initPol.cityTiers,
+      cityClassification:initPol.cityClassification,
+    });
+    if(lastSavedRef.current===null){
+      // First load — initialise from DB
+      lastSavedRef.current=key;
+      setPolicy({...initPol});
+    }
+    // After that, only update if the key fingerprint changed from outside
+    // (i.e. another user changed policy, or a page reload)
+  },[]);
   const emps=users.filter(u=>u.role==="employee").length;
   const tier=TIERED.find(t=>emps>=t.min&&emps<=t.max)||TIERED[0];
   const [vendor,setVendor]=useState("");
