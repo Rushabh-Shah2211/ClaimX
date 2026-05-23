@@ -170,13 +170,12 @@ const setRLSContext=async(userId)=>{
 
 // Mappers: snake_case DB → camelCase app
 const mapUser=r=>r?({id:r.id,cid:r.company_id,companyId:r.company_id,name:r.name,email:r.email||"",username:r.username||"",mobile:r.mobile||"",role:r.role,avatar:r.avatar,dept:r.dept,balance:parseFloat(r.balance)||0,reimbursable:parseFloat(r.reimbursable)||0,delegateTo:r.delegate_to||null,isSuspended:r.is_suspended||false,authType:r.auth_type||"custom",
-  // Phase 1: Grade system
   grade:parseInt(r.grade)||0,
   gradeLabel:r.grade_label||"",
-  // Phase 1b: Group system
-  groupId:r.group_id||null,       // UUID of the group (from employee_groups table)
-  groupName:r.group_name||"",     // Denormalized for display
-  reportingTo:r.reporting_to||null,// manager's user_id (within-group manager)
+  groupId:r.group_id||null,          // primary/legacy single group
+  groupIds:r.group_ids||[],          // multi-group: populated from user_group_memberships
+  groupName:r.group_name||"",
+  reportingTo:r.reporting_to||null,
 }):null;
 const mapTrip=r=>r?({
   id:r.id, companyId:r.company_id, name:r.name, type:r.type,
@@ -227,6 +226,8 @@ const mapPolicy=r=>r?({autoApproveLimit:parseFloat(r.auto_approve_limit)||5000,r
   gradeEntitlements:Array.isArray(r.grade_entitlements)?r.grade_entitlements:[],
   cityTiers:Array.isArray(r.city_tiers)?r.city_tiers:[],
   tripPurposes:Array.isArray(r.trip_purposes)?r.trip_purposes:["Sales Call","Purchase","Inspection","Seminar","Customer Support","Other"],
+  noticePeriodDomestic:parseInt(r.notice_period_domestic)||0,
+  noticePeriodOverseas:parseInt(r.notice_period_overseas)||15,
 }):null;
 const mapNotif=r=>r?({id:r.id,userId:r.user_id,text:r.text,type:r.type,read:r.read,time:new Date(r.created_at).toLocaleString()}):null;
 const mapAudit=r=>r?({id:r.id,action:r.action,claimId:r.claim_id,by:r.by_user_id,byName:r.by_name,at:new Date(r.created_at).toLocaleString(),remarks:r.remarks}):null;
@@ -333,8 +334,9 @@ function getVisibleUserIds(viewerId, allUsers, policy, allGroups){
   const myManagedGroups=groups.filter(g=>g.managerId===viewerId);
 
   // Add all members of groups I directly manage
+  // Using groupIds (multi-group array) OR legacy groupId field
   for(const g of myManagedGroups){
-    allUsers.filter(u=>u.groupId===g.id&&!u.isSuspended).forEach(u=>result.add(u.id));
+    allUsers.filter(u=>(u.groupIds||[]).includes(g.id)||(u.groupId===g.id)).filter(u=>!u.isSuspended).forEach(u=>result.add(u.id));
   }
 
   // For higher grades: also see groups managed by people in my visible set
@@ -348,7 +350,7 @@ function getVisibleUserIds(viewerId, allUsers, policy, allGroups){
       for(const uid of wave){
         const subManagedGroups=groups.filter(g=>g.managerId===uid&&uid!==viewerId);
         for(const g of subManagedGroups){
-          allUsers.filter(u=>u.groupId===g.id&&!u.isSuspended).forEach(u=>{
+          allUsers.filter(u=>((u.groupIds||[]).includes(g.id)||(u.groupId===g.id))&&!u.isSuspended).forEach(u=>{
             if(!result.has(u.id)){result.add(u.id);newlyAdded.push(u.id);}
           });
         }
@@ -465,7 +467,7 @@ async function sbLoadCompany(cid){
   const safe=async(q,fallback=[])=>{try{const{data,error}=await q;if(error){console.warn("sbLoadCompany query error:",error.message);return fallback;}return data||fallback;}catch(e){console.warn("sbLoadCompany exception:",e.message);return fallback;}};
   const safeSingle=async(q,fallback=null)=>{try{const{data,error}=await q;if(error){console.warn("sbLoadCompany single error:",error.message);return fallback;}return data||fallback;}catch(e){return fallback;}};
 
-  const [meta,users,trips,claims,topups,audit,notifs,policy,tripLegs,diemComps,empGroups]=await Promise.all([
+  const [meta,users,trips,claims,topups,audit,notifs,policy,tripLegs,diemComps,empGroups,groupMemberships]=await Promise.all([
     safeSingle(supabase.from("companies").select("*").eq("id",cid).single()),
     safe(supabase.from("users").select("*").eq("company_id",cid)),
     safe(supabase.from("trips").select("*,trip_assignments(user_id)").eq("company_id",cid).order("created_at",{ascending:false})),
@@ -477,10 +479,17 @@ async function sbLoadCompany(cid){
     safe(supabase.from("trip_legs").select("*").eq("company_id",cid).order("leg_num",{ascending:true})),
     safe(supabase.from("diem_computations").select("*").eq("company_id",cid)),
     safe(supabase.from("employee_groups").select("*").eq("company_id",cid)),
+    safe(supabase.from("user_group_memberships").select("*").eq("company_id",cid)),
   ]);
 
-  // Build group lookup for denormalized group_name
+  // Build group lookup
   const groupMap=Object.fromEntries((empGroups||[]).map(g=>[g.id,g.name]));
+  // Build per-user group memberships (multi-group)
+  const userGroupsMap={};
+  for(const m of (groupMemberships||[])){
+    if(!userGroupsMap[m.user_id]) userGroupsMap[m.user_id]=[];
+    userGroupsMap[m.user_id].push(m.group_id);
+  }
 
   // Attach legs to trips
   const tripsWithLegs=(trips||[]).map(t=>({
@@ -488,10 +497,12 @@ async function sbLoadCompany(cid){
     trip_legs:(tripLegs||[]).filter(l=>l.trip_id===t.id),
   }));
 
-  // Attach group_name to users (denormalized)
+  // Attach group_names and groupIds array to users
   const usersWithGroups=(users||[]).map(u=>({
     ...u,
     group_name:groupMap[u.group_id]||"",
+    // Multi-group: array of group IDs from memberships table (+ legacy single group_id)
+    group_ids:[...new Set([...(userGroupsMap[u.id]||[]),...(u.group_id?[u.group_id]:[])])],
   }));
 
   // Fetch signed URLs for all receipts in parallel so images show immediately
@@ -520,6 +531,7 @@ async function sbLoadCompany(cid){
     policy:mapPolicy(policy)||mkPolicy(),
     diemComps:(diemComps||[]),
     empGroups:(empGroups||[]).map(g=>({id:g.id,name:g.name,dept:g.dept,managerId:g.manager_id,description:g.description})),
+    groupMemberships:(groupMemberships||[]),
   };
 }
 
@@ -684,12 +696,12 @@ const generateSettlementPDF=async(trip,claims,getUser,companyName)=>{
   doc.setTextColor(20,20,20);
   doc.setFontSize(14);
   doc.setFont("helvetica","bold");
-  doc.text(trip.name||"Trip",M,y);
+  doc.text(trip.name||"Trip",ML,y);
   y+=6;
   doc.setFontSize(9);
   doc.setFont("helvetica","normal");
   doc.setTextColor(100,100,100);
-  doc.text(`${trip.startDate||""} → ${trip.endDate||""} · ${trip.type||"Trip"} · ${trip.currency||"INR"}${trip.projectCode?" · "+trip.projectCode:""}`,M,y);
+  doc.text(`${fmtDate(trip.startDate)||""} → ${fmtDate(trip.endDate)||""} · ${trip.tripMode==="reimbursement"?"Reimbursement":"Balance"} · ${trip.currency||"INR"}${trip.projectCode?" · "+trip.projectCode:""}`,ML,y);
   y+=10;
 
   // Summary box
@@ -1446,7 +1458,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
       </footer>
 
       {showLogin&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(6px)"}} onClick={e=>{if(e.target===e.currentTarget)setShowLogin(false);}}>
+        <div data-modal="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(6px)"}} onClick={e=>{if(e.target===e.currentTarget)setShowLogin(false);}}>
           <div onClick={e=>e.stopPropagation()} style={{background:`linear-gradient(145deg,${DARK} 0%,#0a1f06 100%)`,borderRadius:20,padding:"32px 32px 28px",width:"min(440px,96vw)",boxShadow:"0 32px 80px rgba(0,0,0,.5)",border:"1px solid rgba(255,255,255,.08)",position:"relative"}}>
             <button onClick={()=>setShowLogin(false)} style={{position:"absolute",top:14,right:16,background:"none",border:"none",color:"rgba(255,255,255,.7)",fontSize:20,cursor:"pointer",lineHeight:1}}>✕</button>
             {/* Logo */}
@@ -2170,7 +2182,15 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   // Keyboard shortcuts
   useEffect(()=>{
     const handler=(e)=>{
-      if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"||e.target.tagName==="SELECT")return;
+      // Block if focus is in any interactive element
+      const ae=document.activeElement;
+      if(ae&&(ae.tagName==="INPUT"||ae.tagName==="TEXTAREA"||ae.tagName==="SELECT"||ae.isContentEditable))return;
+      // Also block if the event target itself is interactive
+      if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"||e.target.tagName==="SELECT"||e.target.isContentEditable)return;
+      // Block if any fixed-position overlay is in the DOM (modals, panels)
+      if(document.querySelector('[data-modal="true"]'))return;
+      // Block if known modal state is open
+      if(modal||showFab||showMobMore||showChatbot)return;
       if(e.key==="?"||e.key==="/"){e.preventDefault();setSSC(p=>!p);return;}
       if(e.key==="Escape"){setMdl(null);setSSC(false);setSFR(false);return;}
       if(e.ctrlKey||e.metaKey||e.altKey)return;
@@ -2179,7 +2199,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     };
     window.addEventListener("keydown",handler);
     return()=>window.removeEventListener("keydown",handler);
-  },[]);
+  },[modal,showFab,showMobMore,showChatbot]);
 
   // Fund request handler
   const handleFundRequest=async(req)=>{
@@ -2706,6 +2726,33 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       return co.claims.filter(c=>c.tripId===tripId&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
     })();
     const tripBudgetExceeded=selectedTrip?.budget>0&&(tripSpentIncludingPending+amount)>selectedTrip.budget;
+    // Hard-block if trip total budget exceeded
+    // Transport class entitlement check (Phase 2)
+    if(form.category==="Travel"&&form.transportClass&&co.policy?.gradeBased){
+      const emp=co.users.find(u=>u.id===user.id);
+      const ent=getEntitlement(emp?.grade||0,"D",co.policy);
+      const classOrder=["Sleeper","Non-AC Bus","Volvo Bus","3AC Train","2AC Train","Economy Air","Business Air"];
+      const entIdx=classOrder.indexOf(ent.transportClass||"");
+      const claimIdx=classOrder.indexOf(form.transportClass||"");
+      if(entIdx>=0&&claimIdx>entIdx){
+        toast(`⚠ ${form.transportClass} exceeds your entitlement (${ent.transportClass}). Claim flagged.`,"warn");
+        // Don't block — flag it for manager review
+      }
+    }
+    if(tripBudgetExceeded){
+      toast(`⛔ Trip budget of ₹${(selectedTrip.budget).toLocaleString("en-IN")} would be exceeded. Current spent+pending: ₹${tripSpentIncludingPending.toLocaleString("en-IN")}. Request a top-up or reduce the claim amount.`,"error");
+      setBusy(false);
+      return;
+    }
+    // Hard-block if category limit exceeded (not just warn)
+    if(catEx&&selectedTrip?.categoryLimits?.[form.category]){
+      const limit=selectedTrip.categoryLimits[form.category];
+      const catSpentSoFar=co.claims.filter(c=>c.tripId===tripId&&c.category===form.category&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
+      const maxAllowed=(selectedTrip.budget*limit/100);
+      toast(`⛔ ${form.category} limit of ${limit}% (₹${Math.round(maxAllowed).toLocaleString("en-IN")}) exceeded. Already spent: ₹${catSpentSoFar.toLocaleString("en-IN")}.`,"error");
+      setBusy(false);
+      return;
+    }
     const auto=!catEx&&!weekend&&!noRcpt&&amount<=co.policy.autoApproveLimit&&!tripBudgetExceeded;
     const{isAnomaly,reasons}=detectAnomaly(form,amount);
     const claimId="EXP-"+uid();
@@ -2961,12 +3008,36 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     setMdl(null);
   };
 
+  // ── Hotel savings incentive (Phase 2) ───────────────────────────────────────
+  const computeHotelSavings=async(trip)=>{
+    if(!co.policy?.gradeBased) return;
+    const emp=co.users.filter(u=>(trip.assignedTo||[]).includes(u.id));
+    for(const e of emp){
+      if((e.grade||0)<4) continue; // Only grades 4+ eligible (TERC §18)
+      const hotelClaims=co.claims.filter(c=>c.tripId===trip.id&&c.empId===e.id&&c.status==="Approved"&&(c.category==="Accommodation"||c.category==="Hotel"));
+      for(const leg of (trip.legs||[])){
+        const legClaims=hotelClaims.filter(c=>c.city===leg.toCity||(!c.city&&leg.toCity));
+        const actualSpent=legClaims.reduce((s,c)=>s+c.amount,0);
+        const entitled=leg.hotelLimit*leg.days;
+        const saved=entitled-actualSpent;
+        if(saved>0){
+          const bonus=Math.round(saved*0.5); // 50% of saving
+          if(SB_ENABLED){
+            await supabase.from("users").update({balance:(e.balance||0)+bonus}).eq("id",e.id);
+            await sbPushNotif(e.id,`🏨 Hotel savings bonus: ₹${bonus.toLocaleString("en-IN")} credited (50% of ₹${saved.toLocaleString("en-IN")} saved in ${leg.toCity})`,"success");
+          }
+          toast(`Hotel savings bonus ₹${bonus.toLocaleString("en-IN")} credited to ${e.name}`);
+        }
+      }
+    }
+  };
+
   const closeTrip=async(tripId)=>{
     const trip=co.trips.find(t=>t.id===tripId);
     if(!trip)return;
     if(!isAdmin&&!isManager){toast("Only admin or manager can close trips","error");return;}
 
-    if(SB_ENABLED){await supabase.from("trips").update({status:"closed"}).eq("id",tripId);await loadFromSB();}
+    if(SB_ENABLED){await supabase.from("trips").update({status:"closed"}).eq("id",tripId);const t=co.trips.find(x=>x.id===tripId);if(t)await computeHotelSavings(t);await loadFromSB();}
     else setTrips(p=>p.map(t=>t.id===tripId?{...t,status:"closed"}:t));
 
     const tripClaims=co.claims.filter(c=>c.tripId===tripId&&c.status==="Approved");
@@ -3033,6 +3104,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         grade_entitlements:newPolicy.gradeEntitlements||[],
         city_tiers:newPolicy.cityTiers||[],
         trip_purposes:newPolicy.tripPurposes||[],
+        notice_period_domestic:newPolicy.noticePeriodDomestic||0,
+        notice_period_overseas:newPolicy.noticePeriodOverseas||15,
       };
 
       let{error}=await supabase.from("policy").upsert(fullRow);
@@ -3525,7 +3598,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {/* TABS */}
         {tab==="dashboard"&&!isManager&&!isFinance&&<EmpDash user={user} myUser={myUser} co={co} setTab={setTab}/>}
         {tab==="dashboard"&&isManager&&<>
-          <TravelCalendar trips={co.trips} users={co.users} isAdmin={isAdmin} myDept={myUser?.dept}/>
+          <TravelCalendar trips={isAdmin?co.trips:visibleTrips} users={co.users} isAdmin={isAdmin} myDept={myUser?.dept} visibleUserIds={visibleUserIds}/>
           <MgrDash co={co} meta={activeMeta} setTab={setTab} getUser={getUser} isAdmin={isAdmin} myUserId={user.id}/>
         </>}
         {tab==="dashboard"&&isFinance&&!isManager&&<EmpDash user={user} myUser={myUser} co={co} setTab={setTab}/>}
@@ -3610,9 +3683,9 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))}
           isManager={isManager} isAdmin={isAdmin} getUser={getUser} policy={co.policy} printSummary={printSummary} user={user}/>}
         {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
-        {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={isAdmin?(co.auditLog||[]):(co.auditLog||[]).filter(e=>{const u=getUser(e.userId||e.by);return u?.dept===myUser?.dept;})} claims={co.claims} getUser={getUser}/>}
+        {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={isAdmin?(co.auditLog||[]):(co.auditLog||[]).filter(e=>{const uid=e.userId||e.by;return uid===user.id||visibleUserIds.has(uid);})} claims={co.claims} getUser={getUser}/>}
         {tab==="my_history"&&!isManager&&!isAdmin&&<MyHistoryTab user={user} trips={co.trips} claims={co.claims} getUser={getUser} exportClaimsPDF={exportClaimsPDF}/>}
-        {tab==="ledger"&&canApprove&&<TripLedgerTab trips={co.trips} claims={co.claims} topups={co.topups} users={co.users} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} companyName={activeMeta?.name||""}/>}
+        {tab==="ledger"&&canApprove&&<TripLedgerTab trips={isAdmin?co.trips:visibleTrips} claims={isAdmin?co.claims:visibleClaims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} companyName={activeMeta?.name||""}/>}
         {tab==="balances"&&canApprove&&<BalancesTab trips={co.trips} claims={co.claims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept)} getUser={getUser} isAdmin={isAdmin} fmt={fmt}/>}
         {tab==="settlements"&&canApprove&&<SettlementsTab trips={co.trips} claims={co.claims} topups={co.topups} users={co.users} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} cid={cid} sbEnabled={SB_ENABLED}/>}
         {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}/>}
@@ -3677,7 +3750,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
       {/* ── MOBILE MORE SHEET ─────────────────────────────────────────────── */}
       {showMobMore&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:200,display:"flex",flexDirection:"column",justifyContent:"flex-end"}} onClick={()=>setShowMobMore(false)}>
+        <div data-modal="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:200,display:"flex",flexDirection:"column",justifyContent:"flex-end"}} onClick={()=>setShowMobMore(false)}>
           <div onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:"18px 18px 0 0",padding:"10px 0 30px",maxHeight:"80vh",overflow:"auto"}}>
             {/* Handle */}
             <div style={{width:36,height:4,background:"#e5e7eb",borderRadius:2,margin:"0 auto 14px"}}/>
@@ -3983,7 +4056,7 @@ function TripLegsModal({trip,policy,onClose,onSave}){
   const inpS={padding:"7px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,fontFamily:FB,background:"var(--input-bg,#fafff8)",width:"100%"};
 
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+    <div data-modal="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
       <div style={{background:"var(--card,#fff)",borderRadius:16,padding:24,width:"min(760px,98vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 16px 48px rgba(0,0,0,.2)"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
           <div>
@@ -4012,8 +4085,8 @@ function TripLegsModal({trip,policy,onClose,onSave}){
               <CitySelect value={leg.toCity||""} label="TO CITY *" showOther={leg._toCityOther}
                 onChange={v=>updateLeg(idx,{toCity:v})}
                 onToggleOther={v=>updateLeg(idx,{_toCityOther:v})}/>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>DEPARTURE</label><input type="datetime-local" value={leg.departAt||""} onChange={e=>updateLeg(idx,{departAt:e.target.value})} style={inpS}/></div>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>ARRIVAL</label><input type="datetime-local" value={leg.arriveAt||""} onChange={e=>updateLeg(idx,{arriveAt:e.target.value})} style={inpS}/></div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>DEPARTURE</label><input type="date" value={(leg.departAt||"").slice(0,10)} onChange={e=>updateLeg(idx,{departAt:e.target.value,arriveAt:leg.arriveAt||e.target.value})} style={inpS}/></div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>RETURN DATE</label><input type="date" value={(leg.arriveAt||"").slice(0,10)} onChange={e=>updateLeg(idx,{arriveAt:e.target.value})} style={inpS}/></div>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8}}>
               <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>MODE</label>
@@ -4076,7 +4149,7 @@ function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin}){
     finally{setBusy(false);}
   };
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div data-modal="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
       <div onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:26,width:"min(480px,96vw)",boxShadow:"0 24px 60px rgba(0,0,0,.2)"}}>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
           <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>Edit Trip</div>
@@ -4192,7 +4265,7 @@ function TripBudgetModal({trip,users,claims,getUser,onClose,onSave,sbCreateTopup
   };
 
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div data-modal="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
       <div onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:26,width:"min(640px,96vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 24px 60px rgba(0,0,0,.25)"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
           <div>
@@ -4303,7 +4376,7 @@ function InlineTripModal({user,co,sbCreateTrip,onClose}){
     finally{setBusy(false);}
   };
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div data-modal="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
       <div onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:26,width:"min(500px,96vw)",maxHeight:"92vh",overflow:"auto",boxShadow:"0 24px 60px rgba(0,0,0,.25)"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
           <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>Create New Trip</div>
@@ -4693,13 +4766,14 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
 // ─── TRIPS TAB ────────────────────────────────────────────────────────────────
 function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTrip,toast,uid:userId,userRole,myUser,sbCreateTrip,sbPushNotif,companyUsers,sbUpdateTrip,policy,approveTrip,rejectTrip,notifyApprovers,deleteTrip,deleteClaim}){
   const [showNew,setShowNew]=useState(false);
-  const [form,setForm]=useState({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[],projectCode:"",tripMode:"balance",currency:"INR",categoryLimits:{},tripType:"domestic",purpose:""});
+  const [form,setForm]=useState({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[],projectCode:"",tripMode:"balance",currency:"INR",categoryLimits:{},tripType:"domestic",purpose:"",customerName:"",accompanying:[]});
   const [newLegs,setNewLegs]=useState([]); // itinerary legs for new trip creation
   const [showCatLimits,setShowCatLimits]=useState(false);
   const [expandedId,setExpId]=useState(null);
   const [editTrip,setEditTrip]=useState(null);
   const [budgetTrip,setBudgetTrip]=useState(null);
   const [legsTrip,setLegsTrip]=useState(null);
+  const [aretTrip,setAretTrip]=useState(null); // ARET modal
   const isEmployee=!isManager&&!isAdmin;
   const emps=users?.filter(u=>u.role==="employee")||[];
   const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",width:"100%"};
@@ -4769,6 +4843,19 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
 
   const create=async()=>{
     if(!form.name?.trim()){toast("Please enter a trip name","error");return;}
+    // Notice period check
+    if(co.policy?.noticePeriodDomestic>0&&form.tripType!=="overseas"){
+      const daysUntil=(new Date(form.startDate)-new Date())/86400000;
+      if(daysUntil<co.policy.noticePeriodDomestic){
+        if(!window.confirm(`⚠ Policy requires ${co.policy.noticePeriodDomestic} days notice for domestic travel. Trip starts in ${Math.ceil(daysUntil)} days. Submit anyway?`))return;
+      }
+    }
+    if(co.policy?.noticePeriodOverseas>0&&form.tripType==="overseas"){
+      const daysUntil=(new Date(form.startDate)-new Date())/86400000;
+      if(daysUntil<co.policy.noticePeriodOverseas){
+        if(!window.confirm(`⚠ Policy requires ${co.policy.noticePeriodOverseas} days notice for overseas travel. Trip starts in ${Math.ceil(daysUntil)} days. Submit anyway?`))return;
+      }
+    }
     if(!form.endDate){toast("Please enter an end date","error");return;}
     if(!form.startDate){toast("Please enter a start date","error");return;}
     const baseList=isManager||isAdmin
@@ -4790,6 +4877,10 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
       topupsTotal:0,
       categoryLimits:form.categoryLimits||{},
       legs:newLegs,
+      purpose:form.purpose||"",
+      customerName:form.customerName||"",
+      accompanying:form.accompanying||[],
+      tripType:form.tripType||"domestic",
     };
     try{
       if(sbCreateTrip){
@@ -4828,7 +4919,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
           <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>End Date *</label><input type="date" value={form.endDate} min={form.startDate} onChange={e=>setForm({...form,endDate:e.target.value})} style={inpS}/></div>
           {canSetBudget&&<div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Budget ₹ *</label><input type="number" value={form.budget} onChange={e=>setForm({...form,budget:e.target.value})} style={inpS}/></div>}
         </div>
-        {/* Second row: project code, trip mode, currency */}
+        {/* Second row: project code, trip mode, currency, purpose, customer */}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}} className="mob-grid-1">
           <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Project / Cost Centre</label>
             <input value={form.projectCode} onChange={e=>setForm({...form,projectCode:e.target.value})} placeholder="e.g. PRJ-001 or Client Name" style={inpS}/></div>
@@ -4838,6 +4929,18 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
               <option value="reimbursement">Reimbursement (Employee pays)</option>
               <option value="client">Client Reimbursement (Billed to client)</option>
             </select></div>
+          <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Trip Type</label>
+            <select value={form.tripType||"domestic"} onChange={e=>setForm({...form,tripType:e.target.value})} style={{...inpS,appearance:"none"}}>
+              <option value="domestic">🏠 Domestic</option>
+              <option value="overseas">✈ Overseas</option>
+            </select></div>
+          <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Purpose of Visit</label>
+            <select value={form.purpose||""} onChange={e=>setForm({...form,purpose:e.target.value})} style={{...inpS,appearance:"none"}}>
+              <option value="">Select purpose…</option>
+              {(policy?.tripPurposes||["Sales Call","Purchase","Inspection","Seminar","Customer Support","Other"]).map(p=><option key={p}>{p}</option>)}
+            </select></div>
+          <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Customer / Supplier</label>
+            <input value={form.customerName||""} onChange={e=>setForm({...form,customerName:e.target.value})} placeholder="Name of customer / supplier visited" style={inpS}/></div>
           <div><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:3,textTransform:"uppercase"}}>Trip Currency</label>
             <select value={form.currency||"INR"} onChange={e=>setForm({...form,currency:e.target.value})} style={{...inpS,appearance:"none"}}>
               {CURRENCIES.map(c=><option key={c}>{c}</option>)}
@@ -4891,9 +4994,9 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                 <NewLegCitySelect leg={leg} idx={idx} field="fromCity" label="FROM CITY"/>
                 <NewLegCitySelect leg={leg} idx={idx} field="toCity" label="TO CITY *"/>
                 <div><label style={{fontSize:9,color:MUTED,display:"block",marginBottom:2,textTransform:"uppercase"}}>Departure</label>
-                  <input type="datetime-local" value={leg.departAt||""} onChange={e=>updateNewLeg(idx,{departAt:e.target.value})} style={{...inpS,fontSize:11,padding:"6px 9px"}}/></div>
-                <div><label style={{fontSize:9,color:MUTED,display:"block",marginBottom:2,textTransform:"uppercase"}}>Arrival</label>
-                  <input type="datetime-local" value={leg.arriveAt||""} onChange={e=>updateNewLeg(idx,{arriveAt:e.target.value})} style={{...inpS,fontSize:11,padding:"6px 9px"}}/></div>
+                  <input type="date" value={(leg.departAt||"").slice(0,10)} onChange={e=>updateNewLeg(idx,{departAt:e.target.value})} style={{...inpS,fontSize:11,padding:"6px 9px"}}/></div>
+                <div><label style={{fontSize:9,color:MUTED,display:"block",marginBottom:2,textTransform:"uppercase"}}>Return Date</label>
+                  <input type="date" value={(leg.arriveAt||"").slice(0,10)} onChange={e=>updateNewLeg(idx,{arriveAt:e.target.value})} style={{...inpS,fontSize:11,padding:"6px 9px"}}/></div>
               </div>
               {leg.days>0&&leg.diemRate>0&&<div style={{fontSize:10,color:MUTED,marginTop:4}}>
                 📊 {leg.days} day{leg.days!==1?"s":""} in {leg.toCity||"city"} · Diem: ₹{(leg.days*leg.diemRate).toLocaleString("en-IN")}
@@ -4915,7 +5018,15 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
         }}
       />}
       {/* Itinerary / legs modal */}
-      {legsTrip&&<TripLegsModal trip={legsTrip} policy={policy}
+      {/* ARET modal */}
+      {aretTrip&&<AretModal trip={aretTrip} user={users.find(u=>u.id===userId)||{name:""}} policy={policy}
+        onClose={()=>setAretTrip(null)}
+        onSubmit={async(data)=>{
+          toast("✓ ARET submitted for approval");
+          if(sbPushNotif) await sbPushNotif(null,`ARET submitted for trip "${aretTrip.name}" — excess expense pre-authorisation required`,"warn");
+          setAretTrip(null);
+        }}
+      />}
         onClose={()=>setLegsTrip(null)}
         onSave={async(tripId,legs)=>{
           if(sbUpdateTrip){
@@ -4962,7 +5073,10 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                 </>}
                 {(isAdmin||isManager)&&(t.status==="active"||t.status==="closed")&&(
                   <div style={{display:"flex",gap:5}}>
-                    <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"");const pu=doc.output("bloburl");window.open(pu,"_blank");}catch(e){toast("PDF failed","error");}}} style={{fontSize:10,padding:"5px 8px"}}>PDF</Btn>
+                    <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"");const pu=doc.output("bloburl");window.open(pu,"_blank");}catch(e){toast("PDF failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄 PDF</Btn>
+                    {(isManager||isAdmin)&&<Btn v="outline" onClick={()=>generateTAR(t,users.find(u=>u.id===t.createdBy)||{name:""},users,"")} style={{fontSize:10,padding:"5px 8px"}}>📋 TAR</Btn>}
+                    {(isManager||isAdmin)&&<Btn v="outline" onClick={()=>generateTERC(t,users.find(u=>u.id===t.createdBy)||{name:""},claims.filter(c=>c.tripId===t.id),policy,"")} style={{fontSize:10,padding:"5px 8px"}}>📑 TERC</Btn>}
+                    <Btn v="outline" onClick={()=>setAretTrip(t)} style={{fontSize:10,padding:"5px 8px",borderColor:"#f59e0b",color:"#92400e"}}>⚠ ARET</Btn>
                     <Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Edit</Btn>
                     <Btn v="outline" onClick={()=>setLegsTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>📍 Itinerary</Btn>
                     {/* Delete: pending/declined for all, any status for admin */}
@@ -5464,16 +5578,33 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
     finally{setBusy(false);}
   };
 
-  const openEdit=e=>{setEditEmp(e);setEF({name:e.name,dept:e.dept,role:e.role,balance:String(e.balance||0),mobile:e.mobile||"",password:"",grade:String(e.grade||""),gradeLabel:e.gradeLabel||"",groupId:e.groupId||"",reportingTo:e.reportingTo||""});};
+  const openEdit=e=>{setEditEmp(e);setEF({name:e.name,dept:e.dept,role:e.role,balance:String(e.balance||0),mobile:e.mobile||"",password:"",grade:String(e.grade||""),gradeLabel:e.gradeLabel||"",groupId:e.groupId||"",reportingTo:e.reportingTo||"",groupIds:e.groupIds||[]});};
+
   const saveEdit=async()=>{
     setBusy(true);
     try{
       const gradeNum=parseInt(editForm.grade)||0;
       const gradeLbl=gradeNum>0?(editForm.gradeLabel||(gradeForLevel(editForm.grade)?.label||"")):editForm.gradeLabel||"";
-      const patch={name:editForm.name,dept:editForm.dept,role:editForm.role,balance:parseFloat(editForm.balance)||0,mobile:editForm.mobile||undefined,grade:gradeNum,gradeLabel:gradeLbl,groupId:editForm.groupId||null,reportingTo:editForm.reportingTo||null};
+      const newGroupIds=editForm.groupIds||[];
+      const primaryGroup=newGroupIds[0]||null;
+      const patch={name:editForm.name,dept:editForm.dept,role:editForm.role,balance:parseFloat(editForm.balance)||0,mobile:editForm.mobile||undefined,grade:gradeNum,gradeLabel:gradeLbl,groupId:primaryGroup,reportingTo:editForm.reportingTo||null};
       if(editForm.password)patch.password=editForm.password;
-      if(sbEnabled&&updateUserInSB){await updateUserInSB(editEmp.id,patch);}
-      else{setUsers(p=>p.map(u=>u.id===editEmp.id?{...u,...patch,avatar:inits(editForm.name),groupName:(empGroups||[]).find(g=>g.id===editForm.groupId)?.name||""}:u));}
+      if(sbEnabled&&updateUserInSB){
+        await updateUserInSB(editEmp.id,patch);
+        // Save multi-group memberships
+        if(sbEnabled){
+          // Delete existing memberships for this user
+          await supabase?.from("user_group_memberships").delete().eq("user_id",editEmp.id);
+          // Insert new ones
+          if(newGroupIds.length>0){
+            await supabase?.from("user_group_memberships").insert(
+              newGroupIds.map(gid=>({user_id:editEmp.id,group_id:gid,company_id:companyMeta.id}))
+            );
+          }
+        }
+      } else {
+        setUsers(p=>p.map(u=>u.id===editEmp.id?{...u,...patch,avatar:inits(editForm.name),groupIds:newGroupIds,groupName:(empGroups||[]).find(g=>g.id===primaryGroup)?.name||""}:u));
+      }
       toast("✓ "+editForm.name+" updated");setEditEmp(null);
     }catch(e){toast(e.message,"error");}
     finally{setBusy(false);}
@@ -5613,7 +5744,7 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
         </Card>
 
         {/* Edit modal */}
-        {editEmp&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+        {editEmp&&<div data-modal="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
           <div style={{background:"var(--card,#fff)",borderRadius:14,padding:24,width:"min(540px,98vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 12px 40px rgba(0,0,0,.2)"}}>
             <h3 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK,marginBottom:14}}>Edit — {editEmp.name}</h3>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
@@ -5630,12 +5761,30 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
                   {gradeOptions.map(g=><option key={g.value} value={g.value}>{g.label}</option>)}
                 </select></div>
               <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Grade Label</label><input value={editForm.gradeLabel||""} onChange={e=>setEF({...editForm,gradeLabel:e.target.value})} style={inpS} placeholder="e.g. Sr Engineer"/></div>
-              {/* Group */}
-              <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Group</label>
-                <select value={editForm.groupId||""} onChange={e=>setEF({...editForm,groupId:e.target.value})} style={sS}>
-                  <option value="">No group</option>
-                  {groups.map(g=><option key={g.id} value={g.id}>{g.name} {g.dept?`(${g.dept})`:""}</option>)}
-                </select></div>
+              {/* Multi-group assignment */}
+              <div style={{gridColumn:"1/-1"}}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:5,textTransform:"uppercase"}}>Groups {editEmp.role==="employee"?"(employee can be in 1 group)":"(can be in multiple groups)"}</label>
+                <div style={{display:"flex",flexWrap:"wrap",gap:7,padding:"8px 10px",border:`1.5px solid ${BDR}`,borderRadius:8,background:"var(--input-bg,#fafff8)",minHeight:36}}>
+                  {groups.length===0&&<span style={{fontSize:11,color:MUTED}}>No groups created yet</span>}
+                  {groups.map(g=>{
+                    const inGroup=(editForm.groupIds||[]).includes(g.id);
+                    const isEmployee=editForm.role==="employee";
+                    return(
+                      <label key={g.id} style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",padding:"3px 9px",borderRadius:12,border:`1px solid ${inGroup?G:BDR}`,background:inGroup?GL:"transparent",fontSize:11,fontWeight:inGroup?600:400,color:inGroup?GD:INK}}>
+                        <input type={isEmployee?"radio":"checkbox"} checked={inGroup}
+                          onChange={e=>{
+                            if(isEmployee){
+                              // Employee: single group only
+                              setEF(f=>({...f,groupIds:e.target.checked?[g.id]:[],groupId:e.target.checked?g.id:""}));
+                            } else {
+                              // Manager/finance/admin: multiple groups
+                              setEF(f=>({...f,groupIds:e.target.checked?[...(f.groupIds||[]),g.id]:(f.groupIds||[]).filter(id=>id!==g.id)}));
+                            }
+                          }}
+                          style={{margin:0}}/>{g.name}{g.dept?` (${g.dept})`:""}</label>
+                    );
+                  })}
+                </div>
+              </div>
               <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Reporting To</label>
                 <select value={editForm.reportingTo||""} onChange={e=>setEF({...editForm,reportingTo:e.target.value})} style={sS}>
                   <option value="">Department default</option>
@@ -5878,7 +6027,32 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
             </div>
           </>}
         </Card>
-        {/* ── PHASE 1: Grade Entitlements Table ── */}
+        {/* ── Phase 2: Notice Period ── */}
+        <Card style={{padding:18}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Travel Notice Period</div>
+          <div style={{fontSize:10,color:MUTED,marginBottom:10}}>Minimum days advance notice required before travel starts. 0 = no restriction.</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Domestic Travel (days)</label>
+              <input type="number" min="0" value={policy.noticePeriodDomestic||0} onChange={e=>setPolicy({...policy,noticePeriodDomestic:parseInt(e.target.value)||0})} style={{padding:"6px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:13,width:80}}/></div>
+            <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Overseas Travel (days)</label>
+              <input type="number" min="0" value={policy.noticePeriodOverseas||15} onChange={e=>setPolicy({...policy,noticePeriodOverseas:parseInt(e.target.value)||15})} style={{padding:"6px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:13,width:80}}/></div>
+          </div>
+        </Card>
+        {/* ── Phase 2: Trip Purposes ── */}
+        <Card style={{padding:18}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Trip Purposes</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
+            {(policy.tripPurposes||[]).map((p,i)=>(
+              <span key={i} style={{background:GL,color:GD,padding:"3px 10px",borderRadius:12,fontSize:11,display:"inline-flex",alignItems:"center",gap:4}}>
+                {p}<button onClick={()=>setPolicy({...policy,tripPurposes:(policy.tripPurposes||[]).filter((_,j)=>j!==i)})} style={{background:"none",border:"none",cursor:"pointer",color:"inherit",fontSize:12,padding:0}}>×</button>
+              </span>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:6}}>
+            <input id="purpose-inp" placeholder="Add trip purpose…" onKeyDown={e=>{if(e.key==="Enter"&&e.target.value.trim()){setPolicy({...policy,tripPurposes:[...(policy.tripPurposes||[]),e.target.value.trim()]});e.target.value="";}}} style={{flex:1,padding:"6px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,fontFamily:FB}}/>
+            <button onClick={()=>{const inp=document.getElementById("purpose-inp");if(inp?.value.trim()){setPolicy({...policy,tripPurposes:[...(policy.tripPurposes||[]),inp.value.trim()]});inp.value="";}}} style={{padding:"6px 12px",background:G,color:"#fff",border:"none",borderRadius:7,cursor:"pointer",fontSize:11}}>+</button>
+          </div>
+        </Card>
         {policy.gradeBased&&(policy.approvalHierarchy||[]).length>0&&<Card style={{padding:18,gridColumn:"1/-1"}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Grade Entitlements — Hotel Limit &amp; Diem Rate per Grade per Tier</div>
           <div style={{fontSize:10,color:MUTED,marginBottom:10}}>Hotel limit = max per night. Diem = allowance per outstation day. City Classification must be on for tier columns to matter.</div>
@@ -6201,14 +6375,15 @@ function MyHistoryTab({user,trips,claims,getUser,exportClaimsPDF}){
 }
 
 
-function TravelCalendar({trips,users,isAdmin,myDept}){
+function TravelCalendar({trips,users,isAdmin,myDept,visibleUserIds}){
   const td=today();
   const travellers=trips
     .filter(t=>t.status==="active"&&t.startDate<=td&&t.endDate>=td)
     .flatMap(t=>(t.assignedTo||[]).map(uid=>{
       const u=users.find(x=>x.id===uid);
       if(!u)return null;
-      if(!isAdmin&&u.dept!==myDept)return null;
+      // Restrict to visible users (group-based)
+      if(!isAdmin&&visibleUserIds&&!visibleUserIds.has(uid))return null;
       return{user:u,trip:t};
     }).filter(Boolean));
   return(
@@ -6239,16 +6414,23 @@ function TravelCalendar({trips,users,isAdmin,myDept}){
 function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,companyName}){
   const[selectedTrip,setSelectedTrip]=useState(null);
   const[search,setSearch]=useState("");
+  const[showDiem,setShowDiem]=useState(false);
 
-  // Filter trips by dept for manager
-  const visibleTrips=trips.filter(t=>{
-    if(isAdmin)return true;
-    const assigned=(t.assignedTo||[]);
-    return assigned.some(id=>getUser(id)?.dept===myDept)||
-           getUser(t.createdBy)?.dept===myDept;
-  }).filter(t=>!search||t.name?.toLowerCase().includes(search.toLowerCase()));
-
+  const visibleTrips=trips.filter(t=>!search||t.name?.toLowerCase().includes(search.toLowerCase()));
   const trip=selectedTrip?trips.find(t=>t.id===selectedTrip):null;
+
+  // Compute diem entitlement for a user on a trip
+  const empDiem=(t,uid)=>{
+    const u=users.find(x=>x.id===uid);
+    const grade=u?.grade||0;
+    let total=0;
+    for(const leg of (t.legs||[])){
+      const rate=leg.diemRate||0;
+      const days=leg.days||1;
+      total+=rate*days;
+    }
+    return total;
+  };
 
   // Build ledger rows for a trip
   const buildLedger=(t)=>{
@@ -6338,6 +6520,18 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
 
   const ledgerRows=trip?buildLedger(trip):[];
 
+  // Compute diem summary for all assignees on a trip
+  const tripDiemSummary=(t)=>{
+    return (t.assignedTo||[]).map(uid=>{
+      const u=users.find(x=>x.id===uid);
+      const diem=empDiem(t,uid);
+      const claimed=claims.filter(c=>c.tripId===t.id&&c.empId===uid&&(c.category==="Meals"||c.category==="Food"||c.category==="Daily Allowance")&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
+      const approved=Math.min(claimed,diem); // capped at entitlement
+      const balance=diem-claimed;
+      return{user:u,uid,diem,claimed,approved,balance,legs:(t.legs||[])};
+    }).filter(r=>r.user);
+  };
+
   return(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
@@ -6360,6 +6554,7 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
         {trip&&<>
           <Btn v="outline" onClick={()=>exportLedgerCSV(trip,ledgerRows)} style={{fontSize:11,padding:"6px 12px"}}>⬇ CSV</Btn>
           <Btn v="outline" onClick={()=>exportLedgerPDF(trip,ledgerRows)} style={{fontSize:11,padding:"6px 12px"}}>📄 PDF</Btn>
+          <Btn v="outline" onClick={()=>setShowDiem(p=>!p)} style={{fontSize:11,padding:"6px 12px",borderColor:showDiem?"#7ED957":"",color:showDiem?"#3B6D11":""}}>🍽 {showDiem?"Hide":"Show"} Diem</Btn>
         </>}
       </div>
 
@@ -6373,7 +6568,9 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
         {/* Trip summary bar */}
         <Card style={{padding:14,marginBottom:12,borderLeft:`4px solid ${G}`}}>
           <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"center"}}>
-            <div><div style={{fontSize:11,fontWeight:700,color:INK}}>{trip.name}</div><div style={{fontSize:10,color:MUTED}}>{trip.startDate} → {trip.endDate}</div></div>
+            <div><div style={{fontSize:11,fontWeight:700,color:INK}}>{trip.name}</div><div style={{fontSize:10,color:MUTED}}>{fmtDate(trip.startDate)} → {fmtDate(trip.endDate)}</div></div>
+            {trip.purpose&&<div style={{fontSize:10,color:MUTED}}>Purpose: <strong style={{color:INK}}>{trip.purpose}</strong></div>}
+            {trip.customerName&&<div style={{fontSize:10,color:MUTED}}>Customer: <strong style={{color:INK}}>{trip.customerName}</strong></div>}
             <div style={{padding:"4px 10px",borderRadius:12,background:trip.tripMode==="reimbursement"?"#dbeafe":"#dcfce7",color:trip.tripMode==="reimbursement"?"#1d4ed8":"#16a34a",fontSize:10,fontWeight:700}}>
               {trip.tripMode==="reimbursement"?"💸 Reimbursement Mode":"💼 Balance Mode"}
             </div>
@@ -6383,7 +6580,56 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
           </div>
         </Card>
 
-        {/* Ledger table */}
+        {/* ── DIEM CALCULATION PANEL ── */}
+        {showDiem&&<Card style={{padding:16,marginBottom:12,borderLeft:"4px solid #f59e0b"}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>🍽 Per-Diem Allowance Calculation</div>
+          {(trip.legs||[]).length===0&&<div style={{fontSize:12,color:MUTED}}>No itinerary legs set for this trip. Add legs via the Itinerary button to compute diem.</div>}
+          {(trip.legs||[]).length>0&&<>
+            {/* Leg breakdown */}
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",marginBottom:6}}>Itinerary — Diem Rates per Leg</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                {trip.legs.map((leg,i)=>(
+                  <div key={i} style={{padding:"6px 12px",background:leg.cityTier==="A"?"#fee2e2":leg.cityTier==="B"?"#fef3c7":leg.cityTier==="C"?"#dbeafe":"#f3f4f6",borderRadius:8,fontSize:11}}>
+                    <strong>{leg.toCity||"City "+i}</strong>
+                    <span style={{color:MUTED,marginLeft:4}}>Tier {leg.cityTier}</span>
+                    <span style={{marginLeft:6}}>· {leg.days} day{leg.days!==1?"s":""}</span>
+                    <span style={{marginLeft:6,fontWeight:600}}>× ₹{leg.diemRate||0}/day = ₹{((leg.days||0)*(leg.diemRate||0)).toLocaleString("en-IN")}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Per-employee diem table */}
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead><tr style={{background:GL}}>
+                {["Employee","Grade","Total Entitlement","Meal Claims","Approved Diem","Balance / Flat Allowance"].map(h=>(
+                  <th key={h} style={{padding:"6px 10px",textAlign:"left",color:GD,fontSize:10,fontWeight:700,textTransform:"uppercase"}}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {tripDiemSummary(trip).map((r,i)=>{
+                  const flatAllowance=Math.max(0,r.diem-r.claimed);
+                  const total=r.claimed+flatAllowance;
+                  return(
+                    <tr key={i} style={{borderTop:`1px solid ${BDR}`}}>
+                      <td style={{padding:"8px 10px",fontWeight:600}}>{r.user?.name}</td>
+                      <td style={{padding:"8px 10px",color:MUTED}}>{r.user?.grade>0?`L${r.user.grade} ${r.user.gradeLabel||""}`:"-"}</td>
+                      <td style={{padding:"8px 10px",fontWeight:700,color:INK}}>{fmt(r.diem)}</td>
+                      <td style={{padding:"8px 10px",color:r.claimed>r.diem?"#dc2626":INK}}>{fmt(r.claimed)}{r.claimed>r.diem&&<span style={{fontSize:9,color:"#dc2626",marginLeft:4}}>↑ capped</span>}</td>
+                      <td style={{padding:"8px 10px",color:"#16a34a",fontWeight:600}}>{fmt(Math.min(r.claimed,r.diem))}</td>
+                      <td style={{padding:"8px 10px"}}>
+                        {flatAllowance>0&&<span style={{background:"#dcfce7",color:"#15803d",padding:"2px 8px",borderRadius:12,fontSize:10,fontWeight:600}}>+{fmt(flatAllowance)} flat allowance</span>}
+                        {flatAllowance===0&&<span style={{color:MUTED,fontSize:10}}>Fully claimed</span>}
+                        <div style={{fontSize:10,color:MUTED,marginTop:2}}>Total: {fmt(total)}</div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div style={{fontSize:10,color:MUTED,marginTop:8}}>* Diem entitlement = ∑(days in city × diem rate per leg). If employee claims less than entitlement, the balance is paid as a flat allowance. Claims exceeding entitlement are capped automatically.</div>
+          </>}
+        </Card>}
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:900}}>
             <thead>
@@ -7292,7 +7538,7 @@ function HelpManual({userRole,onClose,inline=false}){
 
   if(inline) return<div style={{maxWidth:700}}><h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:16}}>📖 Help & User Manual</h1>{inner}</div>;
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:900,backdropFilter:"blur(4px)"}} onClick={onClose}>
+    <div data-modal="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:900,backdropFilter:"blur(4px)"}} onClick={onClose}>
       <div onClick={e=>e.stopPropagation()}>{inner}</div>
     </div>
   );
@@ -7305,7 +7551,7 @@ function EditRequestModal({claim,userId,userName,cid,onClose,onSubmit,sbEnabled}
   const[reason,setReason]=useState("");
   const[busy,setBusy]=useState(false);
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div data-modal="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
       <div onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:26,width:"min(480px,96vw)",boxShadow:"0 24px 60px rgba(0,0,0,.2)"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
           <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>Request Edit Approval</div>
@@ -7406,6 +7652,194 @@ function EditClaimInline({claim,trips,cid,sbEnabled,onClose}){
       </div>
     </div>
   );
+}
+
+// ─── ARET MODAL — Authorisation Request for Excess Travel Expenses ────────────
+function AretModal({trip,user,policy,onClose,onSubmit}){
+  const categories=["Transportation","Local Conveyance","Lodging / Hotel","Diem Allowance","Communication Expenses","Others"];
+  const[rows,setRows]=useState(categories.map(cat=>({cat,eligible:"",expected:"",reason:""})));
+  const[busy,setBusy]=useState(false);
+  const totElig=rows.reduce((s,r)=>s+(parseFloat(r.eligible)||0),0);
+  const totExp=rows.reduce((s,r)=>s+(parseFloat(r.expected)||0),0);
+  const updateRow=(i,patch)=>setRows(prev=>{const a=[...prev];a[i]={...a[i],...patch};return a;});
+  const inpS={padding:"5px 8px",border:`1px solid ${BDR}`,borderRadius:6,fontSize:11,fontFamily:FB,width:"100%"};
+  const save=async()=>{
+    const filled=rows.filter(r=>r.expected||r.eligible);
+    if(!filled.length){alert("Fill at least one category.");return;}
+    setBusy(true);
+    try{await onSubmit({tripId:trip.id,empId:user.id,rows,totElig,totExp});onClose();}
+    catch(e){alert("Failed: "+e.message);}
+    finally{setBusy(false);}
+  };
+  return(
+    <div data-modal="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:400,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{background:"var(--card,#fff)",borderRadius:16,padding:24,width:"min(680px,98vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 16px 48px rgba(0,0,0,.2)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+          <div>
+            <h2 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>📋 ARET — Excess Expense Authorisation</h2>
+            <p style={{fontSize:11,color:MUTED,marginTop:2}}>Trip: <strong>{trip?.name}</strong> · Submit before travel begins when expenses will exceed entitlement</p>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:MUTED}}>✕</button>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:12,padding:"6px 8px",background:GL,borderRadius:8,fontSize:10,fontWeight:700,color:GD,textTransform:"uppercase"}}>
+          <div>Expense Category</div><div>Eligible Amount ₹</div><div>Expected Amount ₹</div>
+        </div>
+        {rows.map((r,i)=>(
+          <div key={r.cat} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8,alignItems:"start"}}>
+            <div style={{fontSize:12,fontWeight:500,color:INK,paddingTop:8}}>{r.cat}</div>
+            <input type="number" value={r.eligible} onChange={e=>updateRow(i,{eligible:e.target.value})} placeholder="0" style={inpS}/>
+            <div>
+              <input type="number" value={r.expected} onChange={e=>updateRow(i,{expected:e.target.value})} placeholder="0" style={inpS}/>
+              {parseFloat(r.expected)>parseFloat(r.eligible)&&r.eligible&&(
+                <input value={r.reason} onChange={e=>updateRow(i,{reason:e.target.value})} placeholder="Reason for excess…" style={{...inpS,marginTop:4}}/>
+              )}
+            </div>
+          </div>
+        ))}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,padding:"8px",background:totExp>totElig?"#fee2e2":"#f0fde9",borderRadius:8,marginBottom:14,fontWeight:700,fontSize:12}}>
+          <div>Total</div>
+          <div>{fmt(totElig)}</div>
+          <div style={{color:totExp>totElig?"#dc2626":"#16a34a"}}>{fmt(totExp)} {totExp>totElig&&`(+${fmt(totExp-totElig)} over)`}</div>
+        </div>
+        <div style={{fontSize:10,color:MUTED,marginBottom:12}}>This request will be routed through HOD → HOD's Superior → HR → Chairman for approval. Travel should only proceed after ARET is approved.</div>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <Btn v="outline" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={save} disabled={busy}>{busy?"Submitting…":"Submit ARET →"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── TAR PDF Generator ────────────────────────────────────────────────────────
+async function generateTAR(trip,user,users,companyName){
+  const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
+  const W=210,ML=18,MR=18,CW=W-ML-MR;
+  let y=14;
+  // Header
+  doc.setFillColor(15,28,9);doc.rect(0,0,W,22,"F");
+  doc.setFont("helvetica","bold");doc.setFontSize(11);doc.setTextColor(126,217,87);
+  doc.text("XpensR by RB",ML,14);
+  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(170,190,160);
+  doc.text(companyName||"",W-MR,14,{align:"right"});
+  y=30;
+  doc.setFont("helvetica","bold");doc.setFontSize(14);doc.setTextColor(20,20,20);
+  doc.text("TRAVEL AUTHORISATION REQUEST (TAR)",W/2,y,{align:"center"});y+=5;
+  doc.setFontSize(8);doc.setFont("helvetica","normal");doc.setTextColor(100,100,100);
+  doc.text("Submit to HOD 3 days before domestic travel, 15 days before overseas travel",W/2,y,{align:"center"});y+=10;
+  // Field helper
+  const field=(label,val,tw=CW)=>{
+    doc.setFont("helvetica","bold");doc.setFontSize(8);doc.setTextColor(80,80,80);
+    doc.text(label,ML,y);
+    doc.setFont("helvetica","normal");doc.setFontSize(9);doc.setTextColor(20,20,20);
+    doc.text(String(val||"—"),ML+48,y);
+    doc.setDrawColor(200,200,200);doc.line(ML+48,y+1,ML+tw,y+1);
+    y+=8;
+  };
+  field("Date Applied:",new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"}));
+  field("Name of Employee:",user.name||"");
+  field("Designation:",user.gradeLabel||user.role||"");
+  field("Employee Category (TAS):",user.grade>0?`Grade ${user.grade}`:"");
+  field("Type of Visit:",trip.tripType==="overseas"?"Overseas":"Domestic Overnight");
+  field("Purpose of Visit:",trip.purpose||"");
+  field("Customer / Supplier:",trip.customerName||"");
+  const accompanying=(trip.accompanying||[]).map(id=>users.find(u=>u.id===id)?.name||id).join(", ");
+  field("Accompanying Employee(s):",accompanying||"None");
+  y+=4;
+  // Itinerary table
+  doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(20,20,20);
+  doc.text("Travel Itinerary:",ML,y);y+=6;
+  const legCols=[{h:"Sr",w:8},{h:"From",w:28},{h:"To",w:28},{h:"Depart Date",w:28},{h:"Arrive Date",w:28},{h:"Mode",w:24},{h:"City Tier",w:18}];
+  doc.setFillColor(21,128,61);doc.rect(ML,y,CW,7,"F");
+  doc.setFont("helvetica","bold");doc.setFontSize(7);doc.setTextColor(255,255,255);
+  let tx=ML+1;legCols.forEach(c=>{doc.text(c.h,tx,y+4.5);tx+=c.w;});y+=8;
+  (trip.legs||[]).forEach((leg,i)=>{
+    doc.setFillColor(i%2?248:255,i%2?255:255,i%2?248:255);doc.rect(ML,y,CW,6,"F");
+    doc.setFont("helvetica","normal");doc.setFontSize(7);doc.setTextColor(30,30,30);
+    tx=ML+1;
+    [i+1,leg.fromCity||"",leg.toCity||"",fmtDate(leg.departAt?.slice(0,10))||"",fmtDate(leg.arriveAt?.slice(0,10))||"",leg.mode||"",leg.cityTier||"D"].forEach((v,ci)=>{doc.text(String(v),tx,y+4);tx+=legCols[ci].w;});
+    y+=6.5;
+  });
+  if(!trip.legs?.length){doc.setFontSize(8);doc.setTextColor(120,120,120);doc.text("No itinerary legs defined",ML,y);y+=8;}
+  y+=6;
+  // Signature
+  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(80,80,80);
+  doc.text("I undertake to travel as per travel guidelines applicable to my category.",ML,y);y+=10;
+  doc.setDrawColor(100,100,100);
+  doc.line(ML,y,ML+60,y);doc.line(W-MR-60,y,W-MR,y);
+  doc.setFontSize(7);doc.setTextColor(120,120,120);
+  doc.text("Signature of Employee",ML,y+4);doc.text("Date",W-MR,y+4,{align:"right"});
+  doc.output("dataurlnewwindow");
+}
+
+// ─── TERC PDF Generator ───────────────────────────────────────────────────────
+async function generateTERC(trip,user,tripClaims,policy,companyName){
+  const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
+  const W=210,ML=14,MR=14,CW=W-ML-MR;
+  let y=14;
+  doc.setFillColor(15,28,9);doc.rect(0,0,W,22,"F");
+  doc.setFont("helvetica","bold");doc.setFontSize(11);doc.setTextColor(126,217,87);
+  doc.text("XpensR by RB",ML,14);
+  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(170,190,160);
+  doc.text(companyName||"",W-MR,14,{align:"right"});
+  y=28;
+  doc.setFont("helvetica","bold");doc.setFontSize(13);doc.setTextColor(20,20,20);
+  doc.text("TRAVEL EXPENSES REIMBURSEMENT CLAIM (TERC)",W/2,y,{align:"center"});y+=10;
+  const field2=(label,val,x=ML,w=80)=>{
+    doc.setFont("helvetica","bold");doc.setFontSize(7.5);doc.setTextColor(80,80,80);
+    doc.text(label,x,y);
+    doc.setFont("helvetica","normal");doc.setFontSize(8.5);doc.setTextColor(20,20,20);
+    doc.text(String(val||"—"),x+w-10,y);
+    doc.setDrawColor(200,200,200);doc.line(x+w-10,y+1,x+w+30,y+1);
+  };
+  field2("1. Date of Submission:",fmtDate(today()));
+  field2("2. Name:",user.name||"",ML+95,60);y+=8;
+  field2("3. Designation:",user.gradeLabel||user.role||"");
+  field2("7. Place(s) of Visit:",(trip.legs||[]).map(l=>l.toCity).filter(Boolean).join(", ")||"",ML+95,60);y+=8;
+  const deptDate=(arr,key)=>arr.reduce((m,l)=>m||(l[key]?.slice(0,10)||""),(trip.legs?.[0]?.[key]?.slice(0,10)||""));
+  field2("8. Departure Date:",fmtDate(deptDate(trip.legs||[],"departAt")));
+  field2("9. Arrival Date:",fmtDate(deptDate([...(trip.legs||[])].reverse(),"arriveAt")),ML+95,60);y+=8;
+  const days=(trip.legs||[]).reduce((s,l)=>s+(l.days||0),0);
+  field2("10. Outstation Days:",String(days));y+=8;
+  y+=4;
+  // Transportation
+  doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(20,20,20);
+  doc.text("12. Transportation Expenses",ML,y);y+=6;
+  const transCols=[{h:"From",w:26},{h:"To",w:26},{h:"Mode",w:22},{h:"Airline/Train",w:30},{h:"Fare ₹",w:20},{h:"Attachment",w:22}];
+  doc.setFillColor(21,128,61);doc.rect(ML,y,CW,7,"F");
+  doc.setFont("helvetica","bold");doc.setFontSize(7);doc.setTextColor(255,255,255);
+  let tx=ML+1;transCols.forEach(c=>{doc.text(c.h,tx,y+4.5);tx+=c.w;});y+=8;
+  const travelClaims=tripClaims.filter(c=>c.category==="Travel"||c.category==="Transportation");
+  travelClaims.forEach((c,i)=>{
+    doc.setFillColor(i%2?248:255,255,i%2?248:255);doc.rect(ML,y,CW,6,"F");
+    doc.setFont("helvetica","normal");doc.setFontSize(7);doc.setTextColor(30,30,30);
+    tx=ML+1;
+    [c.city||"","",c.transportClass||c.desc?.slice(0,10)||"","",`₹${c.amount.toLocaleString("en-IN")}`,c.receipts?.length?"Yes":"No"].forEach((v,ci)=>{doc.text(String(v),tx,y+4);tx+=transCols[ci].w;});
+    y+=6.5;
+  });
+  const tTotal=travelClaims.reduce((s,c)=>s+c.amount,0);
+  doc.setFont("helvetica","bold");doc.setFontSize(8);
+  doc.text(`Total: ₹${tTotal.toLocaleString("en-IN")}`,W-MR,y,{align:"right"});y+=10;
+  // Summary
+  const allApproved=tripClaims.filter(c=>c.status==="Approved");
+  const totalClaimed=tripClaims.reduce((s,c)=>s+c.amount,0);
+  const totalApproved=allApproved.reduce((s,c)=>s+c.amount,0);
+  doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(20,20,20);
+  doc.text("17. Total Eligible Claim Amount:",ML,y);
+  doc.setFont("helvetica","normal");doc.text(`₹${totalApproved.toLocaleString("en-IN")}`,ML+80,y);y+=8;
+  doc.setFont("helvetica","bold");doc.text("Less: Advance from Company:",ML,y);
+  doc.setFont("helvetica","normal");doc.text(`₹${(trip.advanceAmount||0).toLocaleString("en-IN")}`,ML+80,y);y+=8;
+  const net=totalApproved-(trip.advanceAmount||0);
+  doc.setFont("helvetica","bold");doc.setFontSize(10);doc.setTextColor(net>=0?21:200,net>=0?128:30,net>=0?61:30);
+  doc.text(`Net ${net>=0?"Payable to Employee":"Recoverable from Employee"}: ₹${Math.abs(net).toLocaleString("en-IN")}`,ML,y);y+=12;
+  // Signatures
+  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(80,80,80);
+  doc.text("I certify that the above claim is accurate and compliant with TRAVEL RULES.",ML,y);y+=10;
+  doc.setDrawColor(100,100,100);
+  doc.line(ML,y,ML+60,y);doc.line(W/2+10,y,W/2+70,y);
+  doc.setFontSize(7);doc.setTextColor(120,120,120);
+  doc.text("Travelling Employee",ML,y+4);doc.text("Name & Signature of HOD",W/2+10,y+4);
+  doc.output("dataurlnewwindow");
 }
 
 function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled,cid,editRequests,onEditRequest,onApproveEditRequest,onRejectEditRequest,isAdmin=false,isManager=false,hasEditWindow,deleteClaim}){
