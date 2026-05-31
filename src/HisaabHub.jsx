@@ -242,7 +242,7 @@ const mapPolicy=r=>r?({autoApproveLimit:parseFloat(r.auto_approve_limit)||5000,r
 }):null;
 const mapNotif=r=>r?({id:r.id,userId:r.user_id,text:r.text,type:r.type,read:r.read,time:new Date(r.created_at).toLocaleString()}):null;
 const mapAudit=r=>r?({id:r.id,action:r.action,claimId:r.claim_id,by:r.by_user_id,byName:r.by_name,at:new Date(r.created_at).toLocaleString(),remarks:r.remarks}):null;
-// Display status — hides "Auto-Approved" from employees (admin sees real status)
+// Display status — hides "Auto-Approved" from all non-admin users (only company admin sees it)
 const displayStatus=(claim,isAdmin)=>{
   if(!claim)return"—";
   const s=claim.status||"";
@@ -914,22 +914,6 @@ function PrefsModal({onClose,savePolicy,policy}){
             ))}
           </div>
         </div>
-        {/* Brand Colour */}
-        {policy&&savePolicy&&<div style={{marginBottom:20}}>
-          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:8,textTransform:"uppercase"}}>Brand Colour</label>
-          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:6}}>
-            {brandColors.map(c=>(
-              <div key={c} onClick={async()=>{
-                const newPolicy={...policy,primaryColor:c};
-                await savePolicy(newPolicy);
-              }} style={{width:30,height:30,borderRadius:"50%",background:c,cursor:"pointer",
-                border:(policy?.primaryColor||"#7ED957")===c?"3px solid #fff":"3px solid transparent",
-                boxShadow:(policy?.primaryColor||"#7ED957")===c?`0 0 0 2.5px ${c}`:"none",
-                transition:"all .15s"}}/>
-            ))}
-          </div>
-          <div style={{fontSize:10,color:MUTED}}>Changes apply immediately across the whole app</div>
-        </div>}
         {/* Font Size */}
         <div style={{marginBottom:20}}>
           <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:6,textTransform:"uppercase"}}>Font Size — {prefs.fontSize||13}px</label>
@@ -1514,7 +1498,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
                   className="login-inp"
                   style={{width:"100%",padding:"13px 40px 13px 16px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}
                   autoComplete="current-password"/>
-                <button onClick={()=>setSPw(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"rgba(255,255,255,.7)",cursor:"pointer",fontSize:16,padding:0,lineHeight:1}}>{showPw?"🙈":"👁"}</button>
+                <button onClick={()=>setSP(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"rgba(255,255,255,.7)",cursor:"pointer",fontSize:16,padding:0,lineHeight:1}}>{showPw?"🙈":"👁"}</button>
               </div>
               {err&&<div style={{color:"#f87171",fontSize:12,textAlign:"center",padding:"7px 12px",background:"rgba(239,68,68,.1)",borderRadius:8}}>{err}</div>}
               <button onClick={()=>attempt(login,pass)} disabled={busy}
@@ -1996,7 +1980,7 @@ function Profile({user,users,setUsers,onLogout,updateUserInSB,toast}){
 
   const save=async()=>{
     if(updateUserInSB){
-      try{await updateUserInSB(user.id,{mobile:form.mobile||undefined});}catch(e){return;}
+      try{await updateUserInSB(user.id,{mobile:form.mobile||undefined,email:form.email||undefined});}catch(e){setSaved("err:"+e.message);return;}
     }
     // Update email if changed (Supabase auth email update for auth users)
     if(form.email&&form.email!==user.email&&SB_ENABLED&&user.authType!=="custom"){
@@ -2168,15 +2152,16 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     if(!SB_ENABLED&&cid)setCoData(DB[cid]);
   },[DB,cid]);
 
-  // ── Supabase realtime subscription ───────────────────────────────────────
+  // ── Background refresh: every 5 minutes only (no live subscription that disrupts input) ──
   useEffect(()=>{
     if(!SB_ENABLED||!cid)return;
-    const channel=supabase.channel(`co:${cid}`)
-      .on("postgres_changes",{event:"*",schema:"public",table:"claims",filter:`company_id=eq.${cid}`},()=>loadFromSB())
-      .on("postgres_changes",{event:"*",schema:"public",table:"notifications",filter:`company_id=eq.${cid}`},()=>loadFromSB())
-      .on("postgres_changes",{event:"*",schema:"public",table:"topups",filter:`company_id=eq.${cid}`},()=>loadFromSB())
-      .subscribe();
-    return()=>supabase.removeChannel(channel);
+    const interval=setInterval(()=>{
+      // Only reload if window is visible and user is not actively typing in a form
+      if(document.visibilityState==="visible"&&!document.activeElement?.matches("input,textarea,select")){
+        loadFromSB();
+      }
+    },5*60*1000); // 5 minutes
+    return()=>clearInterval(interval);
   },[cid,loadFromSB]);
 
   // ── Local scoped setters (localStorage mode only) ─────────────────────────
@@ -3161,13 +3146,28 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       if(decision==="Approved"&&emp){
         const bk=co.policy.reimbursementMode?"reimbursable":"balance";
         await supabase.from("users").update({[bk]:(emp[bk]||0)+req.amount}).eq("id",emp.id);
+        // Also credit the trip wallet — add to trip's topups total so budget increases
+        if(req.tripId){
+          const trip=co.trips.find(t=>t.id===req.tripId);
+          if(trip){
+            const newTopupsTotal=(trip.topupsTotal||0)+req.amount;
+            const newBudget=(trip.budget||0)+req.amount;
+            await supabase.from("trips").update({budget:newBudget,topups_total:newTopupsTotal}).eq("id",req.tripId);
+          }
+        }
       }
       await sbPushNotif(req.empId,`Top-up ${decision.toLowerCase()}${decision==="Approved"?": "+fmt(req.amount):""}`,decision==="Approved"?"success":"error");
       await sbAddAudit(decision==="Approved"?"Topup Approved":"Topup Rejected",req.id,`₹${req.amount} — ${emp?.name||req.empId}`);
       await loadFromSB();
     } else {
       setTopups(p=>p.map(t=>t.id===req.id?{...t,status:decision}:t));
-      if(decision==="Approved")setUsers(p=>p.map(u=>u.id===req.empId?{...u,balance:(u.balance||0)+req.amount}:u));
+      if(decision==="Approved"){
+        setUsers(p=>p.map(u=>u.id===req.empId?{...u,balance:(u.balance||0)+req.amount}:u));
+        // Credit trip wallet in localStorage mode
+        if(req.tripId){
+          setTrips(p=>p.map(t=>t.id===req.tripId?{...t,budget:(t.budget||0)+req.amount,topupsTotal:(t.topupsTotal||0)+req.amount}:t));
+        }
+      }
       sbPushNotif(req.empId,`Top-up ${decision.toLowerCase()}${decision==="Approved"?": "+fmt(req.amount):""}`,decision==="Approved"?"success":"error");
     }
     toast(decision==="Approved"?`✓ Top-up approved`:"Rejected",decision==="Approved"?"success":"error");
@@ -3423,6 +3423,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     if(patch.delegateTo!==undefined)  dbPatch.delegate_to=patch.delegateTo;
     if(patch.delegateUntil!==undefined) dbPatch.delegate_until=patch.delegateUntil??null; // null clears it
     if(patch.mobile!==undefined)      dbPatch.mobile=patch.mobile;
+    if(patch.email!==undefined)       dbPatch.email=patch.email;
     if(patch.notifyEmail!==undefined) dbPatch.notify_email=patch.notifyEmail;
 
     // Handle password change via RPC (needs bcrypt)
@@ -3634,7 +3635,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[]),
     ...(!isCFO&&!isHR?[{id:"topup",icon:"💰",label:"Top-up"}]:[]),
     {id:"analytics", icon:"📊", label:"Analytics"},
-    ...(canApprove?[{id:"ledger",icon:"📒",label:"Trip Ledger"},{id:"balances",icon:"⚖️",label:"Balances"},{id:"settlements",icon:"💳",label:"Settlements"}]:[]),
+    ...(canApprove?[{id:"ledger",icon:"📒",label:"Trip Ledger"},{id:"balances",icon:"⚖️",label:"Balances & Settlement"}]:[]),
     ...(canApprove||isFinance||isHR?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
     ...(isAdmin||isFinance?[{id:"finance_view",icon:"💼",label:"Finance"}]:[]),
     ...(isHR?[{id:"hr_view",icon:"👔",label:"HR Oversight"},{id:"policy",icon:"⚙️",label:"Policy (view)"}]:[]),
@@ -3746,12 +3747,33 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             <div style={{minWidth:0}}><div style={{fontWeight:700,color:INK,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{activeMeta.name}</div><div style={{fontSize:10,color:MUTED}}>{activeMeta.plan}{user.delegateTo?` · →${getUser(user.delegateTo)?.name?.split(" ")[0]}`:""}</div></div>
           </div>
           <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-            {hasPerm("export")&&<>
-              <Btn v="outline" onClick={exportCSV}   style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ CSV</Btn>
-              <Btn v="outline" onClick={exportTally} style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ Tally</Btn>
-              <Btn v="outline" onClick={exportGSTR}  style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ GSTR</Btn>
-              <Btn v="outline" onClick={exportZoho}  style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">⬇ Zoho</Btn>
-              {isManager&&<Btn v="outline" onClick={async()=>{
+            {hasPerm("export")&&(()=>{
+              const [showExportMenu,setShowExportMenu]=useState(false);
+              return(
+                <div style={{position:"relative"}} className="mob-hide">
+                  <Btn v="outline" onClick={()=>setShowExportMenu(p=>!p)} style={{fontSize:10,padding:"5px 10px"}}>⬇ Export ▾</Btn>
+                  {showExportMenu&&<>
+                    <div style={{position:"fixed",inset:0,zIndex:199}} onClick={()=>setShowExportMenu(false)}/>
+                    <div style={{position:"absolute",top:"100%",right:0,marginTop:4,background:"var(--card,#fff)",border:`1px solid ${BDR}`,borderRadius:10,boxShadow:"0 8px 24px #0002",zIndex:200,minWidth:160,overflow:"hidden"}}>
+                      {[
+                        {icon:"📊",label:"CSV",fn:exportCSV},
+                        {icon:"📗",label:"Excel (CSV)",fn:exportCSV},
+                        {icon:"📒",label:"Tally XML",fn:exportTally},
+                        {icon:"📘",label:"GSTR-2A",fn:exportGSTR},
+                        {icon:"🔵",label:"Zoho Books",fn:exportZoho},
+                      ].map(({icon,label,fn})=>(
+                        <button key={label} onClick={()=>{fn();setShowExportMenu(false);}} style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"10px 14px",background:"none",border:"none",borderBottom:`1px solid ${BDR}`,cursor:"pointer",fontFamily:FB,fontSize:12,color:INK,textAlign:"left",transition:"background .1s"}}
+                          onMouseEnter={e=>e.currentTarget.style.background="var(--hover-bg,#f0fde9)"}
+                          onMouseLeave={e=>e.currentTarget.style.background="none"}>
+                          <span style={{fontSize:14}}>{icon}</span>{label}
+                        </button>
+                      ))}
+                    </div>
+                  </>}
+                </div>
+              );
+            })()}
+            {isManager&&<Btn v="outline" onClick={async()=>{
                 // Monthly digest — email to all finance users
                 const financeUsers=co.users.filter(u=>u.role==="finance"||u.role==="admin");
                 const thisMonth=new Date().toLocaleString("default",{month:"long",year:"numeric"});
@@ -3773,7 +3795,6 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
                 }
                 toast("✓ Monthly digest sent to finance team");
               }} style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">📊 Digest</Btn>}
-            </>}
             {isEmployee&&<button onClick={()=>setSFR(true)} title="Request Funds" style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>💰</button>}
             <button onClick={()=>setSCam(true)} title="Camera" style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>📷</button>
             <button onClick={()=>{setTab("inbox");markRead();}} style={{position:"relative",background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>🔔{myNotifs.length>0&&<span style={{position:"absolute",top:-4,right:-4,width:16,height:16,background:"#ef4444",borderRadius:"50%",color:"#fff",fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{myNotifs.length}</span>}</button>
@@ -3792,7 +3813,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         </>}
         {tab==="dashboard"&&isFinance&&!isManager&&<EmpDash user={user} myUser={myUser} co={co} setTab={setTab}/>}
         {tab==="claims"&&<ClaimsTab
-          claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return e?.dept===myUser?.dept||c.empId===user.id;}):isFinance?co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved"):co.claims.filter(c=>c.empId===user.id)}
+          claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return c.empId===user.id||e?.dept===myUser?.dept;}):isFinance?co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved"):co.claims.filter(c=>c.empId===user.id)}
           trips={co.trips} isManager={isManager} isAdmin={isAdmin} isFinance={isFinance}
           getUser={getUser} setMdl={setMdl} submitEditRequest={submitEditRequest}
           hasEditWindow={hasEditWindow} userId={user.id} onExportPDF={exportClaimsPDF}/>}
@@ -3866,7 +3887,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           }}
         />}
         {tab==="approvals"&&canApprove&&<ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} onReload={loadFromSB} onReloadEditRequests={loadEditRequests}/>}
-        {tab==="topup"&&<TopupTab user={user} topups={canApprove?co.topups.filter(t=>t.status==="Pending"||t.empId===user.id):co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} trips={co.trips} sbCreateTopup={async(req)=>{if(SB_ENABLED){const{error:te}=await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});if(te){toast("Top-up request failed: "+te.message,"error");return;}await loadFromSB();}else{setTopups(p=>[...p,req]);}}}/>}
+        {tab==="topup"&&<TopupTab user={user} topups={canApprove?co.topups.filter(t=>t.status==="Pending"||t.empId===user.id):co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} trips={co.trips} isManager={isManager||isAdmin} managerUsers={isManager||isAdmin?co.users.filter(u=>visibleUserIds.has(u.id)&&u.id!==user.id):[]} sbCreateTopup={async(req)=>{if(SB_ENABLED){const{error:te}=await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:req.status||"Pending",trip_id:req.tripId});if(te){toast("Top-up request failed: "+te.message,"error");return;}if(req.status==="Approved"){await handleTopup({...req,id:req.id},false);}await loadFromSB();}else{setTopups(p=>[...p,req]);}}}/>}
         {tab==="analytics"&&<Analytics
           claims={isAdmin?co.claims:visibleClaims.filter(c=>isManager||c.empId===user.id)}
           trips={isAdmin?co.trips:visibleTrips}
@@ -3876,8 +3897,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={isAdmin?(co.auditLog||[]):(co.auditLog||[]).filter(e=>{const uid=e.userId||e.by;return uid===user.id||visibleUserIds.has(uid);})} claims={co.claims} getUser={getUser}/>}
         {tab==="my_history"&&!isManager&&!isAdmin&&<MyHistoryTab user={user} trips={co.trips} claims={co.claims} getUser={getUser} exportClaimsPDF={exportClaimsPDF}/>}
         {tab==="ledger"&&canApprove&&<TripLedgerTab trips={isAdmin?co.trips:visibleTrips} claims={isAdmin?co.claims:visibleClaims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} companyName={activeMeta?.name||""}/>}
-        {tab==="balances"&&canApprove&&<BalancesTab trips={co.trips} claims={co.claims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept)} getUser={getUser} isAdmin={isAdmin} fmt={fmt}/>}
-        {tab==="settlements"&&canApprove&&<SettlementsTab trips={co.trips} claims={co.claims} topups={co.topups} users={co.users} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} cid={cid} sbEnabled={SB_ENABLED}/>}
+        {tab==="balances"&&canApprove&&<BalancesTab trips={co.trips} claims={co.claims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept)} getUser={getUser} isAdmin={isAdmin} fmt={fmt} cid={cid} sbEnabled={SB_ENABLED} onReload={loadFromSB}/>}
         {/* ── HR Role View ── */}
         {tab==="hr_view"&&isHR&&<HROversightTab claims={co.claims} trips={co.trips} users={co.users} getUser={getUser} policy={co.policy} aretRequests={[]} fmt={fmt}/>}
         {tab==="dashboard"&&isHR&&<HROversightTab claims={co.claims} trips={co.trips} users={co.users} getUser={getUser} policy={co.policy} aretRequests={[]} fmt={fmt}/>}
@@ -3892,7 +3912,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           myUser={myUser}/>}
         {tab==="trip_approvals"&&canApprove&&<TripApprovalsTab trips={co.trips} getUser={getUser} approveTrip={approveTrip} rejectTrip={rejectTrip} isAdmin={isAdmin}/>}
         {tab==="editreqs"&&canApprove&&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id} reload={loadEditRequests}/>}
-        {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept||u.id===user.id)} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin}
+        {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept||u.id===user.id)} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin} currentUser={myUser}
           empGroups={co.empGroups||[]}
           sbSaveGroup={async(g)=>{
             if(SB_ENABLED){
@@ -3965,7 +3985,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               {id:"claims",icon:"📋",label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"},
               ...(canApprove?[{id:"ledger",icon:"📒",label:"Trip Ledger"}]:[]),
     ...(canApprove?[{id:"balances",icon:"⚖️",label:"Balances"}]:[]),
-    ...(canApprove?[{id:"settlements",icon:"💳",label:"Settlements"}]:[]),
+    ...(canApprove?[{id:"balances",icon:"⚖️",label:"Balances"}]:[]),
               ...(canApprove?[{id:"topup",icon:"💰",label:"Top-ups"}]:[]),
               {id:"analytics",icon:"📊",label:"Analytics"},
               {id:"inbox",icon:"🔔",label:"Inbox",badge:myNotifs.length},
@@ -4030,7 +4050,7 @@ function EmpDash({user,myUser,co,setTab}){
             <td style={{fontSize:12}}>{c.anomaly&&<span title="Anomaly" style={{marginRight:3}}>🔍</span>}{c.desc}</td>
             <td><span style={{background:GL,color:GD,padding:"1px 6px",borderRadius:4,fontSize:10,fontWeight:600}}>{c.category}</span></td>
             <td style={{fontWeight:700,fontSize:12}}>{fmt(c.amount)}</td>
-            <td><Badge s={c.autoApproved&&c.status==="Approved"?"Auto-Approved":c.status} sm/></td>
+            <td><Badge s={displayStatus(c,isAdmin)} sm/></td>
           </tr>)}</tbody>
         </table>
       </Card>
@@ -4061,7 +4081,7 @@ function MgrDash({co,meta,setTab,getUser,myUserId}){
   return(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
-        <div><h1 style={{fontFamily:FD,fontSize:22,fontWeight:700,color:INK}}>Organisation Dashboard</h1><p style={{color:MUTED,fontSize:12,marginTop:2}}>Full visibility — {meta.name}</p></div>
+        <div><h1 style={{fontFamily:FD,fontSize:22,fontWeight:700,color:INK}}>{isAdmin?"Organisation Dashboard":"Team Dashboard"}</h1><p style={{color:MUTED,fontSize:12,marginTop:2}}>{isAdmin?`Full visibility — ${meta.name}`:`${myDept||"Your department"} · ${meta.name}`}</p></div>
         <div style={{display:"flex",gap:8}}>
           {pending>0&&<Btn onClick={()=>setTab("approvals")} style={{background:"#ef4444",fontSize:11,padding:"7px 12px"}}>⏳ {pending} Pending</Btn>}
           {anomalies>0&&<Btn onClick={()=>setTab("approvals")} v="purple" style={{fontSize:11,padding:"7px 12px"}}>🔍 {anomalies} Anomalies</Btn>}
@@ -4165,9 +4185,9 @@ function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,subm
               {isManager&&<td><div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:22,height:22,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,fontWeight:700,color:GD}}>{e?.avatar}</div><span style={{fontSize:12}}>{e?.name}</span></div></td>}
               <td className="mob-hide" style={{fontSize:10,color:MUTED}}>{trip?.name?.slice(0,14)||"—"}</td>
               <td><span style={{background:GL,color:GD,padding:"1px 6px",borderRadius:4,fontSize:10,fontWeight:600}}>{CI[c.category]} {c.category}</span></td>
-              <td style={{fontSize:12}}>{c.flagged&&<span title="Cat%" style={{marginRight:2}}>⚠️</span>}{c.anomaly&&<span title="Anomaly" style={{marginRight:2}}>🔍</span>}{c.weekendFlag&&<span title="Weekend" style={{marginRight:2}}>📅</span>}{c.desc}</td>
+              <td style={{fontSize:12}}>{(isAdmin||isManager)&&c.flagged&&<span title="Cat%" style={{marginRight:2}}>⚠️</span>}{(isAdmin||isManager)&&c.anomaly&&<span title="Anomaly" style={{marginRight:2}}>🔍</span>}{c.weekendFlag&&<span title="Weekend" style={{marginRight:2}}>📅</span>}{c.desc}</td>
               <td style={{fontWeight:700,fontSize:12}}>{fmt(c.amount)}{c.origCur&&c.origCur!=="INR"&&<div style={{fontSize:9,color:MUTED}}>{c.origCur} {c.origAmount}</div>}</td>
-              <td><Badge s={c.autoApproved&&c.status==="Approved"?"Auto-Approved":c.status} sm/></td>
+              <td><Badge s={displayStatus(c,isAdmin)} sm/></td>
               <td onClick={ev=>ev.stopPropagation()}>
                 {isManager&&c.status==="Pending"&&<div style={{display:"flex",gap:3}}>
                   <Btn onClick={()=>setMdl({type:"approve",data:c})} style={{padding:"4px 8px",fontSize:10}}>✓</Btn>
@@ -5286,6 +5306,17 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
         }}
       />}
       {/* Itinerary / legs modal */}
+      {legsTrip&&<TripLegsModal trip={legsTrip} policy={policy}
+        onClose={()=>setLegsTrip(null)}
+        onSave={async(tripId,legs)=>{
+          if(sbUpdateTrip){
+            await sbUpdateTrip(tripId,{legs});
+          } else {
+            setTrips(p=>p.map(t=>t.id===tripId?{...t,legs}:t));
+          }
+          setLegsTrip(null);toast("✓ Itinerary saved");
+        }}
+      />}
       {/* Local Conveyance modal */}
       {conveyanceTrip&&<LocalConveyanceModal trip={conveyanceTrip} userId={userId} userName={users.find(u=>u.id===userId)?.name||""} policy={policy}
         onClose={()=>setConveyanceTrip(null)}
@@ -5315,17 +5346,6 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
           toast("✓ ARET submitted for approval");
           if(sbPushNotif) await sbPushNotif(null,`ARET submitted for trip "${aretTrip.name}" — excess expense pre-authorisation required`,"warn");
           setAretTrip(null);
-        }}
-      />}
-        onClose={()=>setLegsTrip(null)}
-        onSave={async(tripId,legs)=>{
-          if(sbUpdateTrip){
-            // Save each leg to trip_legs table
-            await sbUpdateTrip(tripId,{legs});
-          } else {
-            setTrips(p=>p.map(t=>t.id===tripId?{...t,legs}:t));
-          }
-          setLegsTrip(null);toast("✓ Itinerary saved");
         }}
       />}
       {/* Per-employee budget modal */}
@@ -5565,9 +5585,11 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
 }
 
 // ─── TOPUP TAB ────────────────────────────────────────────────────────────────
-function TopupTab({user,topups,setTopups,toast,sbCreateTopup,trips}){
+function TopupTab({user,topups,setTopups,toast,sbCreateTopup,trips,isManager,managerUsers}){
   const myTrips=(trips||[]).filter(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(user.id)));
   const [form,setForm]=useState({amount:"",reason:"",tripId:""});
+  const [mgrForm,setMgrForm]=useState({empId:"",amount:"",reason:"",tripId:""});
+  const [mgrTab,setMgrTab]=useState("own"); // "own" | "team"
   const inpS={width:"100%",padding:"10px 12px",border:`1.5px solid ${BDR}`,borderRadius:9,fontSize:13,background:"var(--input-bg,#fafff8)"};
   const submit=async()=>{
     if(!form.amount||!form.reason){toast("Fill amount and reason","error");return;}
@@ -5578,27 +5600,72 @@ function TopupTab({user,topups,setTopups,toast,sbCreateTopup,trips}){
     setForm({amount:"",reason:"",tripId:""});
     toast("✓ Top-up request sent to manager");
   };
+  const submitMgr=async()=>{
+    if(!mgrForm.empId||!mgrForm.amount||!mgrForm.reason){toast("Fill employee, amount and reason","error");return;}
+    const empTrips=(trips||[]).filter(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(mgrForm.empId)));
+    const tripId=mgrForm.tripId||empTrips[0]?.id;
+    if(!tripId){toast("No active trip for this employee","error");return;}
+    // Manager-issued topup is auto-approved
+    const req={id:uid(),empId:mgrForm.empId,amount:parseFloat(mgrForm.amount),reason:mgrForm.reason,date:today(),status:"Approved",tripId};
+    if(sbCreateTopup){await sbCreateTopup(req);}else{setTopups(p=>[...p,req]);}
+    setMgrForm({empId:"",amount:"",reason:"",tripId:""});
+    toast("✓ Top-up added — approved immediately");
+  };
   return(
-    <div style={{maxWidth:480}}>
-      <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:4}}>Request Balance Top-Up</h1>
-      <p style={{color:MUTED,fontSize:12,marginBottom:16}}>Request additional funds from your manager for a specific trip</p>
-      <Card style={{padding:20,marginBottom:12}}>
-        {/* Trip selection — mandatory */}
-        <div style={{marginBottom:12}}>
-          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Trip *</label>
-          {myTrips.length===0?(
-            <div style={{padding:"10px",background:"#fef3c7",borderRadius:7,fontSize:12,color:"#92400e"}}>⚠ No active trips. Top-up requires an active trip.</div>
-          ):(
-            <select value={form.tripId||myTrips[0]?.id||""} onChange={e=>setForm({...form,tripId:e.target.value})} style={{...inpS,appearance:"none"}}>
-              {myTrips.map(t=><option key={t.id} value={t.id}>{t.name} ({t.currency||"INR"})</option>)}
+    <div style={{maxWidth:540}}>
+      <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:4}}>
+        {isManager?"Top-Up Management":"Request Balance Top-Up"}
+      </h1>
+      {isManager&&<div style={{display:"flex",gap:8,marginBottom:16}}>
+        {[["own","My Request"],["team","Add for Team"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setMgrTab(id)} style={{padding:"6px 16px",borderRadius:7,border:`1.5px solid ${mgrTab===id?G:BDR}`,background:mgrTab===id?G:"transparent",color:mgrTab===id?"#fff":INK,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:FB}}>{label}</button>
+        ))}
+      </div>}
+      {(!isManager||mgrTab==="own")&&<>
+        <p style={{color:MUTED,fontSize:12,marginBottom:16}}>Request additional funds from your manager for a specific trip</p>
+        <Card style={{padding:20,marginBottom:12}}>
+          <div style={{marginBottom:12}}>
+            <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Trip *</label>
+            {myTrips.length===0?(
+              <div style={{padding:"10px",background:"#fef3c7",borderRadius:7,fontSize:12,color:"#92400e"}}>⚠ No active trips. Top-up requires an active trip.</div>
+            ):(
+              <select value={form.tripId||myTrips[0]?.id||""} onChange={e=>setForm({...form,tripId:e.target.value})} style={{...inpS,appearance:"none"}}>
+                {myTrips.map(t=><option key={t.id} value={t.id}>{t.name} ({t.currency||"INR"})</option>)}
+              </select>
+            )}
+          </div>
+          <div style={{marginBottom:12}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Amount (₹) *</label><input type="number" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} placeholder="e.g. 10000" style={inpS}/></div>
+          <div style={{marginBottom:16}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Reason *</label><textarea value={form.reason} onChange={e=>setForm({...form,reason:e.target.value})} rows={3} placeholder="Why do you need additional funds?" style={{...inpS,resize:"vertical"}}/></div>
+          <Btn onClick={submit} disabled={myTrips.length===0} style={{width:"100%",padding:11}}>Send Request</Btn>
+        </Card>
+      </>}
+      {isManager&&mgrTab==="team"&&<>
+        <p style={{color:MUTED,fontSize:12,marginBottom:16}}>Issue an approved top-up directly to a team member — no approval needed.</p>
+        <Card style={{padding:20,marginBottom:12}}>
+          <div style={{marginBottom:12}}>
+            <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Employee *</label>
+            <select value={mgrForm.empId} onChange={e=>{
+              const empTrips=(trips||[]).filter(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(e.target.value)));
+              setMgrForm({...mgrForm,empId:e.target.value,tripId:empTrips[0]?.id||""});
+            }} style={{...inpS,appearance:"none"}}>
+              <option value="">Select employee…</option>
+              {(managerUsers||[]).map(u=><option key={u.id} value={u.id}>{u.name} — {u.dept}</option>)}
             </select>
-          )}
-        </div>
-        <div style={{marginBottom:12}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Amount (₹) *</label><input type="number" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} placeholder="e.g. 10000" style={inpS}/></div>
-        <div style={{marginBottom:16}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Reason *</label><textarea value={form.reason} onChange={e=>setForm({...form,reason:e.target.value})} rows={3} placeholder="Why do you need additional funds?" style={{...inpS,resize:"vertical"}}/></div>
-        <Btn onClick={submit} disabled={myTrips.length===0} style={{width:"100%",padding:11}}>Send Request</Btn>
-      </Card>
-      {topups.length>0&&<Card>{topups.map(t=>{const trip=myTrips.find(x=>x.id===t.tripId);return(<div key={t.id} style={{padding:"10px 14px",borderBottom:`1px solid #f8faf6`,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:600,fontSize:12}}>{fmt(t.amount)}{trip&&<span style={{fontSize:10,color:MUTED,marginLeft:6}}>{trip.name}</span>}</div><div style={{fontSize:10,color:MUTED}}>{t.reason} · {t.date}</div></div><Badge s={t.status} sm/></div>);})}</Card>}
+          </div>
+          {mgrForm.empId&&<div style={{marginBottom:12}}>
+            <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Trip *</label>
+            {(()=>{const et=(trips||[]).filter(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(mgrForm.empId)));
+              return et.length===0?<div style={{padding:"10px",background:"#fef3c7",borderRadius:7,fontSize:12,color:"#92400e"}}>⚠ No active trips for this employee.</div>:
+              <select value={mgrForm.tripId||et[0]?.id||""} onChange={e=>setMgrForm({...mgrForm,tripId:e.target.value})} style={{...inpS,appearance:"none"}}>{et.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select>;
+            })()}
+          </div>}
+          <div style={{marginBottom:12}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Amount (₹) *</label><input type="number" value={mgrForm.amount} onChange={e=>setMgrForm({...mgrForm,amount:e.target.value})} placeholder="e.g. 10000" style={inpS}/></div>
+          <div style={{marginBottom:16}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Reason *</label><textarea value={mgrForm.reason} onChange={e=>setMgrForm({...mgrForm,reason:e.target.value})} rows={2} placeholder="Reason for top-up" style={{...inpS,resize:"vertical"}}/></div>
+          <div style={{background:"#f0fde9",border:`1px solid ${GM}`,borderRadius:7,padding:"8px 12px",marginBottom:12,fontSize:11,color:GD}}>✓ Manager-issued top-ups are approved immediately and credited to the trip wallet.</div>
+          <Btn onClick={submitMgr} style={{width:"100%",padding:11}}>Issue Top-Up →</Btn>
+        </Card>
+      </>}
+      {topups.length>0&&<Card>{topups.map(t=>{const trip=(trips||[]).find(x=>x.id===t.tripId);return(<div key={t.id} style={{padding:"10px 14px",borderBottom:`1px solid #f8faf6`,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:600,fontSize:12}}>{fmt(t.amount)}{trip&&<span style={{fontSize:10,color:MUTED,marginLeft:6}}>{trip.name}</span>}</div><div style={{fontSize:10,color:MUTED}}>{t.reason} · {t.date}</div></div><Badge s={t.status} sm/></div>);})}</Card>}
     </div>
   );
 }
@@ -5753,7 +5820,7 @@ function Analytics({claims,trips,users,isManager,getUser,policy,printSummary,use
           <span style={{fontFamily:"monospace",fontSize:10,color:GD,fontWeight:600,flexShrink:0}}>{c.id}</span>
           <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600,color:INK}}>{c.desc} — {e?.name}</div><div style={{fontSize:10,color:"#dc2626",marginTop:2}}>{(c.anomalyReasons||[]).join(" · ")}</div></div>
           <div style={{fontWeight:700,fontSize:12,color:INK,flexShrink:0}}>{fmt(c.amount)}</div>
-          <Badge s={c.autoApproved&&c.status==="Approved"?"Auto-Approved":c.status} sm/>
+          <Badge s={displayStatus(c,isAdmin)} sm/>
         </div>);})}
       </Card>}
       <Card style={{padding:18,marginTop:12}}>
@@ -5819,14 +5886,26 @@ function Audit({auditLog,claims,getUser}){
 }
 
 // ─── EMPLOYEES TAB ────────────────────────────────────────────────────────────
-function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,updateUserInSB,sbEnabled,companyDepts,isAdmin,empGroups,sbSaveGroup,sbDeleteGroup}){
+function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,updateUserInSB,sbEnabled,companyDepts,isAdmin,empGroups,sbSaveGroup,sbDeleteGroup,currentUser}){
   const depts=companyDepts||policy?.departments||DEFAULT_DEPTS;
   const hierarchy=policy?.approvalHierarchy||[];
+  const isHRRole=currentUser?.role==="hr";
+  // Non-admin managers only see employees strictly below their grade
+  const visibleEmps=isAdmin
+    ? users.filter(u=>u.role!=="admin")
+    : users.filter(u=>{
+        if(u.id===currentUser?.id) return true; // always see self
+        if(u.role==="admin") return false;
+        // Only see users at lower grade (subordinates)
+        const myGrade=currentUser?.grade||0;
+        const theirGrade=u.grade||0;
+        return theirGrade<myGrade||(theirGrade===0&&myGrade>0);
+      });
   const creatableRoles=isAdmin
     ?ROLES.filter(r=>["manager","finance","employee"].includes(r.id))
     :ROLES.filter(r=>["finance","employee"].includes(r.id));
   const countedUsers=users.filter(u=>u.role!=="admin");
-  const emps=users.filter(u=>u.role!=="admin");
+  const emps=visibleEmps;
   const activeEmps=countedUsers.filter(u=>!u.isSuspended);
   const maxUsers=companyMeta.maxUsers||0;
   const canAdd=activeEmps.length<maxUsers;
@@ -5878,7 +5957,19 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
       const gradeLbl=gradeNum>0?(editForm.gradeLabel||(gradeForLevel(editForm.grade)?.label||"")):editForm.gradeLabel||"";
       const newGroupIds=editForm.groupIds||[];
       const primaryGroup=newGroupIds[0]||null;
-      const patch={name:editForm.name,dept:editForm.dept,role:editForm.role,balance:parseFloat(editForm.balance)||0,mobile:editForm.mobile||undefined,grade:gradeNum,gradeLabel:gradeLbl,groupId:primaryGroup,reportingTo:editForm.reportingTo||null};
+      // Base patch — all roles can update name, mobile
+      const patch={name:editForm.name,mobile:editForm.mobile||undefined};
+      // Wallet balance: admin only
+      if(isAdmin) patch.balance=parseFloat(editForm.balance)||0;
+      // Department, role, grade: HR or admin only
+      if(isAdmin||isHRRole){
+        patch.dept=editForm.dept;
+        patch.role=editForm.role;
+        patch.grade=gradeNum;
+        patch.gradeLabel=gradeLbl;
+        patch.groupId=primaryGroup;
+        patch.reportingTo=editForm.reportingTo||null;
+      }
       if(editForm.password)patch.password=editForm.password;
       if(sbEnabled&&updateUserInSB){
         await updateUserInSB(editEmp.id,patch);
@@ -5893,6 +5984,8 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
             );
           }
         }
+        // Always update local state so UI reflects change immediately (don't wait for reload)
+        setUsers(p=>p.map(u=>u.id===editEmp.id?{...u,...patch,avatar:inits(editForm.name),groupIds:newGroupIds,groupName:(empGroups||[]).find(g=>g.id===primaryGroup)?.name||""}:u));
       } else {
         setUsers(p=>p.map(u=>u.id===editEmp.id?{...u,...patch,avatar:inits(editForm.name),groupIds:newGroupIds,groupName:(empGroups||[]).find(g=>g.id===primaryGroup)?.name||""}:u));
       }
@@ -6039,19 +6132,25 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
           <div style={{background:"var(--card,#fff)",borderRadius:14,padding:24,width:"min(540px,98vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 12px 40px rgba(0,0,0,.2)"}}>
             <h3 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK,marginBottom:14}}>Edit — {editEmp.name}</h3>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
-              {[["Full Name","text",editForm.name,v=>setEF({...editForm,name:v}),""],["Mobile","text",editForm.mobile,v=>setEF({...editForm,mobile:v}),"optional"],["Wallet ₹","number",editForm.balance,v=>setEF({...editForm,balance:v}),""],[" New Password","password",editForm.password,v=>setEF({...editForm,password:v}),"leave blank to keep"]].map(([l,t,v,fn,ph])=>(
+              {[["Full Name","text",editForm.name,v=>setEF({...editForm,name:v}),""],["Mobile","text",editForm.mobile,v=>setEF({...editForm,mobile:v}),"optional"],[" New Password","password",editForm.password,v=>setEF({...editForm,password:v}),"leave blank to keep"]].map(([l,t,v,fn,ph])=>(
                 <div key={l}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>{l}</label><input type={t} value={v} onChange={e=>fn(e.target.value)} placeholder={ph} style={inpS}/></div>
               ))}
-              <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Department</label>
-                <select value={editForm.dept} onChange={e=>setEF({...editForm,dept:e.target.value})} style={sS}>{depts.map(d=><option key={d}>{d}</option>)}</select></div>
-              <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Role</label>
-                <select value={editForm.role} onChange={e=>setEF({...editForm,role:e.target.value})} style={sS}>{creatableRoles.map(r=><option key={r.id} value={r.id}>{r.label}</option>)}</select></div>
-              {/* Grade */}
-              <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Grade</label>
-                <select value={editForm.grade||""} onChange={e=>{const h=gradeForLevel(e.target.value);setEF({...editForm,grade:e.target.value,gradeLabel:h?.label||editForm.gradeLabel});}} style={sS}>
-                  {gradeOptions.map(g=><option key={g.value} value={g.value}>{g.label}</option>)}
-                </select></div>
-              <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Grade Label</label><input value={editForm.gradeLabel||""} onChange={e=>setEF({...editForm,gradeLabel:e.target.value})} style={inpS} placeholder="e.g. Sr Engineer"/></div>
+              {/* Wallet edit: admin only — top-up is the proper route for everyone else */}
+              {isAdmin&&<div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Wallet ₹ <span style={{color:"#dc2626"}}>(Admin only)</span></label><input type="number" value={editForm.balance} onChange={e=>setEF({...editForm,balance:e.target.value})} style={inpS}/></div>}
+              {/* Department, role, grade: HR and admin only */}
+              {(isAdmin||isHRRole)&&<>
+                <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Department</label>
+                  <select value={editForm.dept} onChange={e=>setEF({...editForm,dept:e.target.value})} style={sS}>{depts.map(d=><option key={d}>{d}</option>)}</select></div>
+                <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Role</label>
+                  <select value={editForm.role} onChange={e=>setEF({...editForm,role:e.target.value})} style={sS}>{creatableRoles.map(r=><option key={r.id} value={r.id}>{r.label}</option>)}</select></div>
+                {/* Grade */}
+                <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Grade</label>
+                  <select value={editForm.grade||""} onChange={e=>{const h=gradeForLevel(e.target.value);setEF({...editForm,grade:e.target.value,gradeLabel:h?.label||editForm.gradeLabel});}} style={sS}>
+                    {gradeOptions.map(g=><option key={g.value} value={g.value}>{g.label}</option>)}
+                  </select></div>
+                <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Designation</label><input value={editForm.gradeLabel||""} onChange={e=>setEF({...editForm,gradeLabel:e.target.value})} style={inpS} placeholder="e.g. Sr Engineer"/></div>
+              </>}
+              {!(isAdmin||isHRRole)&&<div style={{gridColumn:"1/-1",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"8px 12px",fontSize:11,color:"#92400e"}}>⚠ Department, role, and grade changes require HR or Admin access.</div>}
               {/* Multi-group assignment */}
               <div style={{gridColumn:"1/-1"}}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:5,textTransform:"uppercase"}}>Groups {editEmp.role==="employee"?"(employee can be in 1 group)":"(can be in multiple groups)"}</label>
                 <div style={{display:"flex",flexWrap:"wrap",gap:7,padding:"8px 10px",border:`1.5px solid ${BDR}`,borderRadius:8,background:"var(--input-bg,#fafff8)",minHeight:36}}>
@@ -6186,9 +6285,8 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
         {/* Core */}
         <Card style={{padding:18}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Core Policy</div>
-          {[["Auto-Approve Limit (₹)","autoApproveLimit"],["Receipt Mandatory Above (₹)","receiptMandatoryAbove"],["Dual Approval Required Above (₹) — 0 to disable","dualApproveAbove"]].map(([l,k])=>(
+          {[["Receipt Mandatory Above (₹)","receiptMandatoryAbove"]].map(([l,k])=>(
             <div key={k} style={{marginBottom:12}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>{l}</label><input type="number" value={policy[k]||0} onChange={e=>setPolicy({...policy,[k]:parseFloat(e.target.value)||0})} style={inpS}/>
-              {k==="dualApproveAbove"&&<div style={{fontSize:10,color:MUTED,marginTop:2}}>Manager + Admin both must approve</div>}
             </div>
           ))}
           <Toggle on={policy.reimbursementMode}         onClick={()=>setPolicy({...policy,reimbursementMode:!policy.reimbursementMode})}         label="Reimbursement Mode"        sub="No wallet — employees claim back invoices"/>
@@ -6941,6 +7039,9 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
     }).filter(r=>r.user);
   };
 
+  // ledgerRows: computed from selected trip — declared here so all JSX can reference it
+  const ledgerRows=trip?buildLedger(trip):[];
+
   return(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
@@ -7128,10 +7229,24 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
 }
 
 
-function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn}){
+function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn,cid,sbEnabled,onReload}){
   const f=fmtFn||fmt;
   const[expandedEmp,setExpandedEmp]=useState(null);
   const[expandedTrip,setExpandedTrip]=useState(null);
+  const[settling,setSettling]=useState(null);
+
+  const markSettled=async(trip,empId)=>{
+    if(!window.confirm(`Mark trip "${trip.name}" as settled?\nBalance of ${f(Math.abs(0))} will be recorded as settled.`))return;
+    setSettling(trip.id+empId);
+    try{
+      if(sbEnabled&&supabase){
+        await supabase.from("trips").update({settled_at:new Date().toISOString(),settled_by:empId}).eq("id",trip.id);
+        await supabase.from("notifications").insert({id:"SETTLE-"+Date.now(),company_id:cid,user_id:empId,message:`Trip "${trip.name}" marked as settled`,type:"success",read:false,created_at:new Date().toISOString()});
+      }
+      if(onReload)await onReload();
+    }catch(e){alert("Settlement failed: "+e.message);}
+    finally{setSettling(null);}
+  };
 
   const allTrips=[...trips].sort((a,b)=>(b.startDate||"").localeCompare(a.startDate||""));
 
@@ -7165,8 +7280,8 @@ function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn}){
   return(
     <div>
       <div style={{marginBottom:14}}>
-        <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Balances</h1>
-        <p style={{color:MUTED,fontSize:12,marginTop:2}}>Employee-wise amounts due or recoverable across all trips</p>
+        <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Balances & Settlements</h1>
+        <p style={{color:MUTED,fontSize:12,marginTop:2}}>Employee-wise amounts due or recoverable. Press Settle against a trip once payment/recovery is complete.</p>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:18}} className="mob-grid-1">
         <Card style={{padding:14,borderLeft:"4px solid #dc2626"}}>
@@ -7223,6 +7338,7 @@ function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn}){
                   <div style={{flex:1}}>
                     <div style={{fontSize:13,fontWeight:600,color:INK}}>{t.name}
                       <span style={{marginLeft:6,fontSize:9,background:t.status==="active"?"#dcfce7":t.status==="closed"?"#f3f4f6":"#fef3c7",color:t.status==="active"?"#16a34a":t.status==="closed"?"#6b7280":"#92400e",padding:"1px 6px",borderRadius:4,fontWeight:700}}>{t.status}</span>
+                      {t.settled_at&&<span style={{marginLeft:6,fontSize:9,background:"#dcfce7",color:"#16a34a",padding:"1px 6px",borderRadius:4,fontWeight:700}}>✓ Settled</span>}
                     </div>
                     <div style={{fontSize:10,color:MUTED}}>{fmtDate(t.startDate)}→{fmtDate(t.endDate)} · {approved.length} approved, {rejected.length} rejected, {pending.length} pending</div>
                   </div>
@@ -7232,6 +7348,12 @@ function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn}){
                     </div>
                     <div style={{fontSize:9,color:MUTED}}>{f(spent)} spent of {f(budget)} budget</div>
                   </div>
+                  {!t.settled_at&&balance!==0&&(
+                    <button onClick={e=>{e.stopPropagation();markSettled(t,u.id);}} disabled={settling===t.id+u.id}
+                      style={{marginLeft:6,padding:"4px 10px",background:"#16a34a",color:"#fff",border:"none",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0,opacity:settling===t.id+u.id?.6:1}}>
+                      {settling===t.id+u.id?"…":"✓ Settle"}
+                    </button>
+                  )}
                   <span style={{color:MUTED,fontSize:10}}>{expandedTrip===t.id+u.id?"▲":"▼"}</span>
                 </div>
 
@@ -7928,6 +8050,7 @@ const HELP_CONTENT={
       {icon:"⚙️",title:"Policy",content:"Configure:\n• Auto-approve limit — claims under this go through instantly\n• Receipt mandatory above — employees must attach a bill\n• Weekend approval — Sat/Sun claims need manager sign-off\n• Multi-level approval — different approvers by claim size\n• Vendor blacklist — block specific vendors at submit time\n• Category % caps — category overspend routes to you\n• Department budgets — monthly limits per team\n• Scheduled reports — auto-email PDF summaries"},
       {icon:"📊",title:"Analytics",content:"Filter by date range and employee. Charts show: spend by category (bar), month-on-month trend, employee leaderboard vs dept budget, and AI anomaly report. Use 🖨️ Print to generate a formatted expense summary."},
       {icon:"⬇",title:"Exports",content:"Top bar exports:\n• CSV — all claims with full data, works with Excel\n• Tally XML — import directly into Tally Prime (Vouchers → Import)\n• GSTR-2A CSV — GST reconciliation format with IGST/CGST/SGST\n• Zoho Books CSV — import under Expenses in Zoho Books"},
+      {icon:"⌨️",title:"Keyboard Shortcuts",content:"Press ? or / anywhere to open this shortcut panel. All shortcuts are blocked when a modal is open.\n\nNavigation:\n• N — New Expense (Submit tab)\n• A — Approvals tab\n• C — Claims tab\n• T — Trips tab\n• D — Dashboard\n• F — Finance\n• I — Inbox / Notifications\n• B — Balances\n• L — Ledger\n• S — Settlements\n• U — Top-up\n• Y — Analytics\n• H — Help Manual\n\nGlobal:\n• ? or / — Toggle this shortcuts panel\n• Escape — Close any open modal"},
     ]
   },
   employee:{
@@ -7940,6 +8063,7 @@ const HELP_CONTENT={
       {icon:"💰",title:"Top-Up",content:"If your wallet balance is running low, submit a top-up request here with the amount needed and reason. Your manager will approve or reject it."},
       {icon:"🔔",title:"Notifications",content:"All approval decisions, rejections, and balance changes appear here. You'll also receive browser push notifications if you allow them. Check the inbox bell icon for unread alerts."},
       {icon:"👤",title:"Profile",content:"Update your name, email, and department. Change your password. Access from the avatar in the sidebar."},
+      {icon:"⌨️",title:"Keyboard Shortcuts",content:"Press ? or / anywhere to open this shortcut panel.\n\nNavigation:\n• N — New Expense (Submit tab)\n• C — My Claims tab\n• T — Trips tab\n• D — Dashboard\n• U — Top-up\n• I — Inbox / Notifications\n• H — Help Manual\n\nGlobal:\n• ? or / — Toggle this shortcuts panel\n• Escape — Close any open modal"},
     ]
   },
   auditor:{
@@ -7970,7 +8094,7 @@ function HelpManual({userRole,onClose,inline=false}){
   const section=content.sections[activeSection];
 
   const inner=(
-    <div style={{background:"#fff",borderRadius:inline?14:18,width:inline?"100%":720,maxHeight:inline?"none":"88vh",display:"flex",overflow:inline?"visible":"hidden",boxShadow:inline?"none":"0 24px 60px #0004",flexDirection:inline?"column":"row"}}>
+    <div style={{background:"var(--card,#fff)",borderRadius:inline?14:18,width:inline?"100%":720,maxHeight:inline?"none":"88vh",display:"flex",overflow:inline?"visible":"hidden",boxShadow:inline?"none":"0 24px 60px #0004",flexDirection:inline?"column":"row"}}>
       {/* Sidebar */}
       {!inline&&<div style={{width:220,background:DARK,flexShrink:0,display:"flex",flexDirection:"column",padding:"24px 12px"}}>
         <div style={{marginBottom:20}}><Logo width={140} dark/></div>
@@ -7986,23 +8110,23 @@ function HelpManual({userRole,onClose,inline=false}){
         </div>
       </div>}
       {/* Content */}
-      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"var(--card,#fff)"}}>
         {inline&&<div style={{display:"flex",gap:7,marginBottom:16,flexWrap:"wrap"}}>
-          {content.sections.map((s,i)=><button key={i} onClick={()=>setActiveSection(i)} style={{padding:"6px 12px",borderRadius:20,border:`1.5px solid ${activeSection===i?G:BDR}`,background:activeSection===i?G:"#fff",color:activeSection===i?"#fff":MUTED,fontFamily:FB,fontSize:11,fontWeight:600,cursor:"pointer"}}>{s.icon} {s.title}</button>)}
+          {content.sections.map((s,i)=><button key={i} onClick={()=>setActiveSection(i)} style={{padding:"6px 12px",borderRadius:20,border:`1.5px solid ${activeSection===i?G:BDR}`,background:activeSection===i?G:"var(--card,#fff)",color:activeSection===i?"#fff":MUTED,fontFamily:FB,fontSize:11,fontWeight:600,cursor:"pointer"}}>{s.icon} {s.title}</button>)}
         </div>}
-        {!inline&&<div style={{padding:"20px 24px 16px",borderBottom:`1px solid ${BDR}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        {!inline&&<div style={{padding:"20px 24px 16px",borderBottom:`1px solid ${BDR}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:"var(--card,#fff)"}}>
           <div>
             <div style={{fontSize:9,color:MUTED,fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Help Manual</div>
             <h2 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>{section.title}</h2>
           </div>
-          <button onClick={onClose} style={{width:32,height:32,borderRadius:8,background:"#f3f4f6",border:"none",cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",color:MUTED}}>✕</button>
+          <button onClick={onClose} style={{width:32,height:32,borderRadius:8,background:"var(--hover-bg,#f3f4f6)",border:"none",cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",color:MUTED}}>✕</button>
         </div>}
         {inline&&<h2 style={{fontFamily:FD,fontSize:18,fontWeight:700,color:INK,marginBottom:12}}>{section.icon} {section.title}</h2>}
-        <div style={{flex:1,overflow:"auto",padding:inline?"0":"24px"}}>
+        <div style={{flex:1,overflow:"auto",padding:inline?"0":"24px",background:"var(--card,#fff)"}}>
           {section.content.split('\n').map((line,i)=>{
-            if(line.startsWith('•')||line.match(/^\d+\./)) return<div key={i} style={{display:"flex",gap:8,marginBottom:7,paddingLeft:4}}><span style={{color:G,fontWeight:700,flexShrink:0,marginTop:1,fontSize:13}}>{line.match(/^\d+\./)?line.match(/^\d+\./)[0]:"•"}</span><span style={{fontSize:13,color:"var(--ink)",lineHeight:1.6}}>{line.replace(/^•\s*/,"").replace(/^\d+\.\s*/,"")}</span></div>;
+            if(line.startsWith('•')||line.match(/^\d+\./)) return<div key={i} style={{display:"flex",gap:8,marginBottom:7,paddingLeft:4}}><span style={{color:G,fontWeight:700,flexShrink:0,marginTop:1,fontSize:13}}>{line.match(/^\d+\./)?line.match(/^\d+\./)[0]:"•"}</span><span style={{fontSize:13,color:INK,lineHeight:1.6}}>{line.replace(/^•\s*/,"").replace(/^\d+\.\s*/,"")}</span></div>;
             if(line==="") return<div key={i} style={{height:10}}/>;
-            return<p key={i} style={{fontSize:13,color:"var(--ink)",lineHeight:1.7,marginBottom:4}}>{line}</p>;
+            return<p key={i} style={{fontSize:13,color:INK,lineHeight:1.7,marginBottom:4}}>{line}</p>;
           })}
           <div style={{marginTop:20,background:GL,border:`1px solid ${GM}`,borderRadius:10,padding:"14px 16px"}}>
             <div style={{fontSize:10,fontWeight:700,color:GD,textTransform:"uppercase",letterSpacing:1,marginBottom:7}}>💡 Quick Tips</div>
@@ -8012,7 +8136,7 @@ function HelpManual({userRole,onClose,inline=false}){
             {!["employee","manager","superadmin"].includes(role)&&["All data exports from the top bar buttons","Anomaly filter shows AI-flagged claims instantly"].map((t,i)=><div key={i} style={{fontSize:12,color:GD,marginBottom:5}}>→ {t}</div>)}
           </div>
         </div>
-        <div style={{padding:"14px 24px",borderTop:`1px solid ${BDR}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{padding:"14px 24px",borderTop:`1px solid ${BDR}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:"var(--card,#fff)"}}>
           <span style={{fontSize:11,color:MUTED}}>{activeSection+1} of {content.sections.length}</span>
           <div style={{display:"flex",gap:8}}>
             <Btn v="outline" onClick={()=>setActiveSection(Math.max(0,activeSection-1))} disabled={activeSection===0} style={{padding:"7px 14px",fontSize:12}}>← Prev</Btn>
@@ -8915,7 +9039,7 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
           <div style={{fontSize:14,fontWeight:700,color:INK,marginTop:2}}>{c.desc}</div>
           <div style={{fontFamily:FD,fontSize:22,fontWeight:700,color:INK,marginTop:3}}>{fmt(c.amount)}{c.origCur&&c.origCur!=="INR"&&<span style={{fontSize:11,fontWeight:400,color:MUTED}}> ({c.origCur} {c.origAmount})</span>}</div>
         </div>
-        {[["Employee",e?.name],["Date",c.date+(c.weekendFlag?" 📅":"")],["Category",`${CI[c.category]||""} ${c.category}`],["Trip",trip?.name],["Vendor",c.vendor||"—"],["Notes",c.notes||"—"],...(c.remarks&&(isAdmin||isManager||!c.remarks.includes("anomaly"))?[["Remarks",c.remarks]]:[])].map(([k,v])=>(
+        {[["Employee",e?.name],["Date",c.date+(c.weekendFlag?" 📅":"")],["Category",`${CI[c.category]||""} ${c.category}`],["Trip",trip?.name],["Vendor",c.vendor||"—"],["Notes",c.notes||"—"],...(c.remarks&&(isAdmin||(isManager&&c.empId!==userId))?[["Remarks",c.remarks]]:[])].map(([k,v])=>(
           <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid #f3f4f6`,fontSize:12}}><span style={{color:MUTED}}>{k}</span><span style={{fontWeight:600,color:INK,maxWidth:260,textAlign:"right"}}>{v}</span></div>
         ))}
         {/* GST Bifurcation — visible to manager/admin/finance */}
@@ -8937,7 +9061,7 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
           </div>
           <div style={{fontSize:10,color:MUTED,marginTop:3}}>Finance team marks ITC eligibility for GSTR-2A matching</div>
         </div>}
-        {c.anomaly&&(isAdmin||isManager)&&<div style={{background:"#ede9fe",border:"1px solid #c4b5fd",borderRadius:7,padding:"8px 11px",marginTop:9,fontSize:11,color:"#7c3aed"}}>🔍 Anomaly: {(c.anomalyReasons||[]).join(" · ")}</div>}
+        {c.anomaly&&(isAdmin||(isManager&&c.empId!==userId))&&<div style={{background:"#ede9fe",border:"1px solid #c4b5fd",borderRadius:7,padding:"8px 11px",marginTop:9,fontSize:11,color:"#7c3aed"}}>🔍 Anomaly: {(c.anomalyReasons||[]).join(" · ")}</div>}
         {/* Receipts */}
         {displayReceipts.length>0&&<div style={{marginTop:10}}>
           <div style={{fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",letterSpacing:.5,marginBottom:7}}>Receipts ({displayReceipts.length})</div>
@@ -8976,8 +9100,8 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
           <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Remarks (optional)</label>
           <textarea value={remarks} onChange={e=>setRemarks(e.target.value)} rows={2} placeholder="Add a note…" style={{width:"100%",padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontFamily:FB,fontSize:12,resize:"vertical",outline:"none",display:"block",boxSizing:"border-box"}}/>
           <div style={{display:"flex",gap:8,marginTop:10}}>
-            {type==="approve"&&<Btn onClick={()=>handleDecision(c.id,"Approved",remarks)} style={{flex:1}}>✓ Confirm Approval</Btn>}
-            {type==="reject"&&<Btn v="danger" onClick={()=>handleDecision(c.id,"Rejected",remarks)} style={{flex:1}}>✗ Confirm Rejection</Btn>}
+            {type==="approve"&&<Btn onClick={async()=>{await handleDecision(c.id,"Approved",remarks);setMdl(null);}} style={{flex:1}}>✓ Confirm Approval</Btn>}
+            {type==="reject"&&<Btn v="danger" onClick={async()=>{await handleDecision(c.id,"Rejected",remarks);setMdl(null);}} style={{flex:1}}>✗ Confirm Rejection</Btn>}
             <Btn v="outline" onClick={()=>setMdl(null)}>Cancel</Btn>
           </div>
         </div>}
