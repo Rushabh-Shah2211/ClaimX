@@ -2797,6 +2797,23 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         toast(msg2,"error");throw new Error(msg2);
       }
     }
+    // ── Validate claim city/date against itinerary leg ─────────────────────────
+    if(selectedTrip?.legs?.length){
+      const legValidation=validateClaimAgainstLeg(
+        {city:form.city||"",date:claimDate,category:form.category,amount,leg_id:form.legId||null},
+        selectedTrip,
+        co.policy
+      );
+      if(legValidation.errors.length>0){
+        const msg=legValidation.errors[0];
+        toast(msg,"error");
+        throw new Error(msg);
+      }
+      if(legValidation.warnings.length>0){
+        // Show as toast warning — don't block, but inform
+        legValidation.warnings.forEach(w=>toast("⚠ "+w,"warn"));
+      }
+    }
     const weekend=co.policy.weekendRequiresApproval&&isWknd(claimDate);
     const noRcpt=co.policy.receiptMandatoryAbove>0&&amount>co.policy.receiptMandatoryAbove&&(!form.receipts||!form.receipts.length);
     if(noRcpt){toast(`Receipt required for expenses above ${fmt(co.policy.receiptMandatoryAbove)}. Please upload your invoice.`,"error");return;}
@@ -2903,11 +2920,13 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       receipts:form.receipts||[],
       remarks:auto?"Approved":"",
       flagged:catEx,anomaly:isAnomaly,anomalyReasons:[...reasons,...(Object.keys(form.manualEdits||{}).length>0?[`Fields manually edited after OCR scan: ${Object.keys(form.manualEdits||{}).join(", ")}`]:[])],manualEdits:form.manualEdits||{},comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||"",projectCode:form.projectCode||selectedTrip?.projectCode||"",
-      gstAmount:parseFloat(form.gstAmount)||0,gstItc:null};
+      gstAmount:parseFloat(form.gstAmount)||0,gstItc:null,
+      // Itinerary linkage
+      legId:form.legId||null,city:form.city||"",cityTier:form.cityTier||"D"};
 
     if(!online){
       if(SB_ENABLED){
-        const sbRow={id:claimId,company_id:cid,trip_id:tripId,emp_id:user.id,date:claimDate,category:form.category,description:form.desc,vendor:form.vendor||"",amount,orig_amount:parseFloat(form.origAmount||amount),orig_currency:form.currency||"INR",status:auto?"Approved":"Pending",auto_approved:auto,remarks:auto?"Auto-approved":"",flagged:catEx,anomaly:isAnomaly,anomaly_reasons:reasons,weekend_flag:weekend,notes:form.notes||""};
+        const sbRow={id:claimId,company_id:cid,trip_id:tripId,emp_id:user.id,date:claimDate,category:form.category,description:form.desc,vendor:form.vendor||"",amount,orig_amount:parseFloat(form.origAmount||amount),orig_currency:form.currency||"INR",status:auto?"Approved":"Pending",auto_approved:auto,remarks:auto?"Auto-approved":"",flagged:catEx,anomaly:isAnomaly,anomaly_reasons:reasons,weekend_flag:weekend,notes:form.notes||"",leg_id:form.legId||null,city:form.city||"",city_tier:form.cityTier||"D"};
         enqueue({type:"claim",data:claimData,sbRow});
       } else {
         enqueue({type:"claim",data:claimData});
@@ -2925,6 +2944,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         orig_currency:form.currency||"INR",status:auto?"Approved":"Pending",
         auto_approved:auto,remarks:auto?"Auto-approved":"",flagged:catEx,
         anomaly:isAnomaly,anomaly_reasons:reasons,weekend_flag:weekend,notes:form.notes||"",
+        leg_id:form.legId||null,city:form.city||"",city_tier:form.cityTier||"D",
       });
       if(claimErr){toast(claimErr.message,"error");return;}
 
@@ -4597,7 +4617,7 @@ function InlineTripModal({user,co,sbCreateTrip,onClose}){
 // ─── SUBMIT TAB (OCR fixed — no stale closures) ───────────────────────────────
 function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCategories,onCreateTrip,sbCreateTrip}){
   const cats=companyCategories||DEFAULT_CATS;
-  const blankForm=()=>({id:uid(),date:today(),category:"",desc:"",amount:"",origAmount:"",currency:"INR",tripId:"",notes:"",vendor:"",receipts:[],ocrState:"idle",ocrData:null,scanning:false,gstAmount:"",projectCode:"",manualEdits:{}});
+  const blankForm=()=>({id:uid(),date:today(),category:"",desc:"",amount:"",origAmount:"",currency:"INR",tripId:"",legId:"",city:"",cityTier:"D",notes:"",vendor:"",receipts:[],ocrState:"idle",ocrData:null,scanning:false,gstAmount:"",projectCode:"",manualEdits:{}});
   const [forms,setForms]=useState(()=>{
     try{
       const d=localStorage.getItem("xpensr_draft_v1");
@@ -4845,12 +4865,78 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:10}}>
           <div><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Date *</label><input type="date" value={fm.date} onChange={e=>upd(idx,{date:e.target.value})} style={{...inpS,borderColor:fm.ocrState==="done"&&fm.date?G:BDR}}/></div>
           <div><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Trip / Period *</label>
-            <select value={fm.tripId||myTrips[0]?.id||""} onChange={e=>upd(idx,{tripId:e.target.value})} style={{...inpS,appearance:"none",paddingRight:28}}>
+            <select value={fm.tripId||myTrips[0]?.id||""} onChange={e=>{
+              // Reset leg selection when trip changes
+              upd(idx,{tripId:e.target.value,legId:"",city:"",cityTier:"D"});
+            }} style={{...inpS,appearance:"none",paddingRight:28}}>
               {myTrips.length===0&&<option value="">No active trips</option>}
               {myTrips.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
           </div>
         </div>
+        {/* Leg / City selector — shown only when selected trip has itinerary legs */}
+        {(()=>{
+          const resolvedTripId=fm.tripId||myTrips[0]?.id;
+          const selTrip=co.trips.find(t=>t.id===resolvedTripId);
+          const legs=selTrip?.legs||[];
+          if(!legs.length) return null;
+          const TIER_BADGE={A:"#16a34a",B:"#2563eb",C:"#d97706",D:"#6b7280"};
+          return(
+            <div style={{marginBottom:10}}>
+              <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>
+                City / Itinerary Leg *
+                <span style={{fontWeight:400,textTransform:"none",marginLeft:6,color:GD}}>— which city is this expense from?</span>
+              </label>
+              <select
+                value={fm.legId||""}
+                onChange={e=>{
+                  const leg=legs.find(l=>l.id===e.target.value);
+                  if(leg){
+                    upd(idx,{legId:leg.id,city:leg.toCity||"",cityTier:leg.cityTier||"D"});
+                  } else {
+                    upd(idx,{legId:"",city:"",cityTier:"D"});
+                  }
+                }}
+                style={{...inpS,appearance:"none",paddingRight:28,borderColor:fm.legId?G:BDR}}
+              >
+                <option value="">Select city leg…</option>
+                {legs.map((l,i)=>{
+                  const depart=l.departAt?.slice(0,10)||"";
+                  const arrive=l.arriveAt?.slice(0,10)||"";
+                  const dateRange=depart&&arrive?` (${depart} → ${arrive})`:"";
+                  return(
+                    <option key={l.id} value={l.id}>
+                      {i+1}. {l.fromCity||"—"} → {l.toCity||"—"}{dateRange} [Tier {l.cityTier||"D"}]
+                    </option>
+                  );
+                })}
+              </select>
+              {fm.legId&&(()=>{
+                const leg=legs.find(l=>l.id===fm.legId);
+                if(!leg)return null;
+                const badgeColor=TIER_BADGE[leg.cityTier||"D"];
+                const hotelLimit=leg.hotelLimit||0;
+                const diemRate=leg.diemRate||0;
+                return(
+                  <div style={{marginTop:6,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                    <span style={{background:badgeColor+"18",color:badgeColor,border:`1px solid ${badgeColor}40`,borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700}}>Tier {leg.cityTier||"D"} City</span>
+                    {hotelLimit>0&&<span style={{background:"#f0fdf4",color:"#16a34a",border:"1px solid #bbf7d0",borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:600}}>🏨 Hotel limit: {fmt(hotelLimit)}/night</span>}
+                    {diemRate>0&&<span style={{background:"#eff6ff",color:"#2563eb",border:"1px solid #bfdbfe",borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:600}}>🍽 Diem: {fmt(diemRate)}/day</span>}
+                    {/* Date range warning */}
+                    {(()=>{
+                      const depart=leg.departAt?.slice(0,10);
+                      const arrive=leg.arriveAt?.slice(0,10);
+                      if(fm.date&&depart&&arrive&&(fm.date<depart||fm.date>arrive)){
+                        return<span style={{background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d",borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:600}}>⚠ Date outside leg range ({depart} → {arrive})</span>;
+                      }
+                      return null;
+                    })()}
+                  </div>
+                );
+              })()}
+            </div>
+          );
+        })()}
         <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:11,marginBottom:10}}>
           <div><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Vendor / Merchant</label><input value={fm.vendor} onChange={e=>upd(idx,{vendor:e.target.value})} placeholder="Hotel / Airline / Restaurant" style={{...inpS,borderColor:fm.ocrState==="done"&&fm.vendor?G:BDR}}/></div>
           <div><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Currency</label>
