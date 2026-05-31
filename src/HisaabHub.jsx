@@ -149,6 +149,10 @@ const ROLES=[
   {id:"manager", label:"Manager", color:"#7ED957", perms:["approve","view_dept","manage_trips","export","submit","set_balance"]},
   // finance = read-only accounting + exports (never sees unapproved claims)
   {id:"finance", label:"Finance", color:"#f472b6", perms:["view_all","export","view_finance"]},
+  // hr = read-only oversight, policy view, ARET sign-off (cannot approve expenses)
+  {id:"hr",      label:"HR",      color:"#fb923c", perms:["view_all","export","view_hr","aret_signoff"]},
+  // cfo = read-only executive dashboard (high-level spend, no individual claim access)
+  {id:"cfo",     label:"CFO/CEO", color:"#0ea5e9", perms:["view_all","export","view_cfo"]},
   // employee = submit only, can create trips (pending manager approval)
   {id:"employee",label:"Employee",color:"#60a5fa", perms:["submit","view_own","create_trip"]},
 ];
@@ -208,7 +212,7 @@ const mapTrip=r=>r?({
     days:l.days||0,
   })),
 }):null;
-const mapClaim=r=>r?({id:r.id,companyId:r.company_id,tripId:r.trip_id,empId:r.emp_id,date:r.date,category:r.category,desc:r.description,vendor:r.vendor,amount:parseFloat(r.amount)||0,origAmount:parseFloat(r.orig_amount)||0,origCur:r.orig_currency,status:r.status,autoApproved:r.auto_approved,remarks:r.remarks,flagged:r.flagged,anomaly:r.anomaly,anomalyReasons:r.anomaly_reasons||[],weekendFlag:r.weekend_flag,notes:r.notes,
+const mapClaim=r=>r?({id:r.id,companyId:r.company_id,tripId:r.trip_id,empId:r.emp_id,date:r.date,category:r.category,desc:r.description,vendor:r.vendor,amount:parseFloat(r.amount)||0,origAmount:parseFloat(r.orig_amount)||0,origCur:r.orig_currency,status:r.status,autoApproved:r.auto_approved,rawStatus:r.status,remarks:r.remarks,flagged:r.flagged,anomaly:r.anomaly,anomalyReasons:r.anomaly_reasons||[],weekendFlag:r.weekend_flag,notes:r.notes,
   // Phase 1: Itinerary linkage
   legId:r.leg_id||null,                        // FK to trip_legs
   city:r.city||"",                             // City where expense occurred
@@ -228,9 +232,24 @@ const mapPolicy=r=>r?({autoApproveLimit:parseFloat(r.auto_approve_limit)||5000,r
   tripPurposes:Array.isArray(r.trip_purposes)?r.trip_purposes:["Sales Call","Purchase","Inspection","Seminar","Customer Support","Other"],
   noticePeriodDomestic:parseInt(r.notice_period_domestic)||0,
   noticePeriodOverseas:parseInt(r.notice_period_overseas)||15,
+  // Item 7: Monthly/yearly/team budgets
+  // monthlyBudgets: {dept: {monthly: N, yearly: N}, team: {monthly: N, yearly: N}}
+  monthlyDeptBudgets:r.monthly_dept_budgets||{},    // {Sales:{monthly:50000,yearly:600000},...}
+  yearlyDeptBudgets:r.yearly_dept_budgets||{},      // legacy — keep for compat
+  teamBudgets:r.team_budgets||{},                   // {groupId:{monthly:N,yearly:N}}
+  autoApproveMins:parseInt(r.auto_approve_mins)||10,
+  conveyanceRatePerKm:parseFloat(r.conveyance_rate_per_km)||4, // Item 6: delay before auto-approve fires
 }):null;
 const mapNotif=r=>r?({id:r.id,userId:r.user_id,text:r.text,type:r.type,read:r.read,time:new Date(r.created_at).toLocaleString()}):null;
 const mapAudit=r=>r?({id:r.id,action:r.action,claimId:r.claim_id,by:r.by_user_id,byName:r.by_name,at:new Date(r.created_at).toLocaleString(),remarks:r.remarks}):null;
+// Display status — hides "Auto-Approved" from employees (admin sees real status)
+const displayStatus=(claim,isAdmin)=>{
+  if(!claim)return"—";
+  const s=claim.status||"";
+  if(!isAdmin&&(s==="Auto-Approved"||(claim.autoApproved&&s==="Approved")))return "Approved";
+  return s;
+};
+
 const mapTopup=r=>r?({id:r.id,empId:r.emp_id,amount:parseFloat(r.amount),reason:r.reason,date:r.date,status:r.status,tripId:r.trip_id||null,companyId:r.company_id}):null;
 
 // ─── PHASE 1: GRADE-BASED APPROVAL ENGINE ────────────────────────────────────
@@ -362,6 +381,20 @@ function getVisibleUserIds(viewerId, allUsers, policy, allGroups){
   }
 
   // If grade system off — fall back to department
+  // Item 3: Also check same-grade users — can NOT see same-level peers
+  // Only see users strictly below your grade (own data always visible)
+  if(viewerGrade>0){
+    // Remove any same-grade non-subordinates that may have been added
+    for(const uid of [...result]){
+      if(uid===viewerId) continue;
+      const u=allUsers.find(x=>x.id===uid);
+      if(u&&(u.grade||0)>=viewerGrade&&u.id!==viewerId){
+        // Same grade or higher — only keep if admin
+        if(viewer.role!=="admin") result.delete(uid);
+      }
+    }
+  }
+
   if(viewerGrade===0&&viewer.role==="manager"){
     allUsers.filter(u=>u.dept===viewer.dept&&!u.isSuspended).forEach(u=>result.add(u.id));
   }
@@ -532,6 +565,7 @@ async function sbLoadCompany(cid){
     diemComps:(diemComps||[]),
     empGroups:(empGroups||[]).map(g=>({id:g.id,name:g.name,dept:g.dept,managerId:g.manager_id,description:g.description})),
     groupMemberships:(groupMemberships||[]),
+    budgetEnhancements:[], // loaded separately via loadBudgetEnhancements
   };
 }
 
@@ -2304,6 +2338,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     (co.policy?.gradeBased&&(user.grade||0)>0&&
       (co.policy?.approvalHierarchy||[]).some(h=>h.level===(user.grade||0)));
   const isFinance=user.role==="finance";
+  const isHR=user.role==="hr";
+  const isCFO=user.role==="cfo";
   const isEmployee=user.role==="employee";
   const needsDualApproval=(amount)=>co.policy.dualApproveAbove>0&&amount>=co.policy.dualApproveAbove;
   const myUser=co.users.find(u=>u.id===user.id);
@@ -2489,6 +2525,60 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   // ── Central approver notification helper ─────────────────────────────────────
   // Finds the correct manager for an employee's dept, respects delegation,
   // always notifies all admins too.
+  // ── Item 8: Budget Enhancement Request ────────────────────────────────────
+  const submitBudgetEnhancement=async(dept,groupId,period,currentLimit,requestedLimit,reason)=>{
+    const req={
+      id:"BER-"+uid(),
+      company_id:cid,
+      requested_by:user.id,
+      requester_name:user.name,
+      dept:dept||null,
+      group_id:groupId||null,
+      period,       // "monthly" | "yearly"
+      current_limit:currentLimit,
+      requested_limit:requestedLimit,
+      reason,
+      status:"Pending",
+      created_at:new Date().toISOString(),
+    };
+    if(SB_ENABLED){
+      const{error}=await supabase.from("budget_enhancements").insert(req);
+      if(error){
+        // Table may not exist yet — silently create fallback notification
+        await sbPushNotif(co.users.find(u=>u.role==="admin")?.id,
+          `📊 Budget enhancement request from ${user.name}: ${dept||"Team"} ${period} budget from ₹${currentLimit.toLocaleString("en-IN")} → ₹${requestedLimit.toLocaleString("en-IN")}. Reason: ${reason}`,
+          "warn");
+        toast("✓ Enhancement request sent to admin","info");
+        return;
+      }
+    }
+    // Notify all admins
+    for(const admin of co.users.filter(u=>u.role==="admin")){
+      await sbPushNotif(admin.id,`📊 Budget enhancement request from ${user.name}: ${dept||"Team"} ${period} budget ₹${currentLimit.toLocaleString("en-IN")} → ₹${requestedLimit.toLocaleString("en-IN")}. Reason: ${reason}`,"warn");
+    }
+    toast("✓ Enhancement request submitted to admin");
+  };
+
+  const approveBudgetEnhancement=async(req)=>{
+    if(!isAdmin){toast("Only admin can approve budget enhancements","error");return;}
+    // Update policy directly
+    const dept=req.dept;
+    const newPolicy={...co.policy};
+    if(!newPolicy.monthlyDeptBudgets)newPolicy.monthlyDeptBudgets={};
+    if(!newPolicy.monthlyDeptBudgets[dept])newPolicy.monthlyDeptBudgets[dept]={monthly:0,yearly:0};
+    if(req.period==="monthly"){
+      newPolicy.monthlyDeptBudgets[dept].monthly=req.requested_limit;
+    } else {
+      newPolicy.monthlyDeptBudgets[dept].yearly=req.requested_limit;
+    }
+    await savePolicyToSB(newPolicy);
+    if(SB_ENABLED){
+      await supabase.from("budget_enhancements").update({status:"Approved",reviewed_by:user.id,reviewed_at:new Date().toISOString()}).eq("id",req.id).then(()=>{}).catch(()=>{});
+    }
+    await sbPushNotif(req.requested_by,`✓ Budget enhancement approved: ${req.dept} ${req.period} budget increased to ₹${req.requested_limit.toLocaleString("en-IN")}`,"success");
+    toast(`✓ ${req.dept} ${req.period} budget updated to ₹${req.requested_limit.toLocaleString("en-IN")}`);
+  };
+
   const notifyApprovers=async(empId,text,type="info")=>{
     const emp=co.users.find(u=>u.id===empId)||{dept:null};
     const notified=new Set();
@@ -2753,7 +2843,57 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       setBusy(false);
       return;
     }
-    const auto=!catEx&&!weekend&&!noRcpt&&amount<=co.policy.autoApproveLimit&&!tripBudgetExceeded;
+    // ── ITEM 6: Comprehensive approval routing ──────────────────────────────
+    const policy=co.policy;
+    const autoLimit=policy.autoApproveLimit||0;
+    const dualLimit=policy.dualApproveAbove||0;
+
+    // Check monthly/yearly team & dept budget breach
+    const claimYear=claimDate.slice(0,4);
+    const claimMonth=claimDate.slice(0,7); // yyyy-mm
+    // Indian FY: April(04) to March(03)
+    const fyStart=claimMonth>=(claimYear+"-04")?claimYear+"-04":String(parseInt(claimYear)-1)+"-04";
+    const fyEnd=claimMonth>=(claimYear+"-04")?String(parseInt(claimYear)+1)+"-03":claimYear+"-03";
+    const emp=co.users.find(u=>u.id===user.id);
+    const empDept=emp?.dept||"";
+    const empGroupIds=(emp?.groupIds||[]);
+
+    // Monthly dept budget check
+    const monthlyDeptBudget=(policy.monthlyDeptBudgets?.[empDept]?.monthly)||0;
+    const monthlyDeptSpent=monthlyDeptBudget>0?co.claims.filter(c=>{
+      const cu=co.users.find(u=>u.id===c.empId);
+      return cu?.dept===empDept&&c.date?.slice(0,7)===claimMonth&&c.status!=="Rejected";
+    }).reduce((s,c)=>s+c.amount,0):0;
+    const monthlyDeptBreached=monthlyDeptBudget>0&&(monthlyDeptSpent+amount)>monthlyDeptBudget;
+
+    // Yearly dept budget check (April-March FY)
+    const yearlyDeptBudget=(policy.monthlyDeptBudgets?.[empDept]?.yearly)||(policy.departmentBudgets?.[empDept])||0;
+    const yearlyDeptSpent=yearlyDeptBudget>0?co.claims.filter(c=>{
+      const cu=co.users.find(u=>u.id===c.empId);
+      return cu?.dept===empDept&&c.date?.slice(0,7)>=fyStart&&c.date?.slice(0,7)<=fyEnd&&c.status!=="Rejected";
+    }).reduce((s,c)=>s+c.amount,0):0;
+    const yearlyDeptBreached=yearlyDeptBudget>0&&(yearlyDeptSpent+amount)>yearlyDeptBudget;
+
+    const budgetBreached=monthlyDeptBreached||yearlyDeptBreached;
+    const budgetBreachReason=monthlyDeptBreached?`Monthly dept budget (₹${monthlyDeptBudget.toLocaleString("en-IN")}) exceeded`:
+                             yearlyDeptBreached?`Annual dept budget (₹${yearlyDeptBudget.toLocaleString("en-IN")}) exceeded`:"";
+
+    // Core routing decision
+    // 1. Within auto-approve limit AND no flags → schedule auto-approve after delay
+    const canAutoApprove=autoLimit>0&&amount<=autoLimit&&!catEx&&!weekend&&!noRcpt&&!tripBudgetExceeded&&!budgetBreached;
+    // 2. Within auto-approve but category exceeded → pending with warning
+    const pendingCatEx=autoLimit>0&&amount<=autoLimit&&catEx;
+    // 3. Within auto-approve but trip budget exceeded → pending with warning (already hard-blocked above)
+    // 4. Above dual approval threshold → needs manager + admin
+    const needsDual=dualLimit>0&&amount>=dualLimit;
+    // 5. Budget breached → admin-only regardless of amount
+    // 6. Default: route via grade hierarchy
+    const auto=canAutoApprove;
+    // Routing remark for pending claims
+    const routingRemark=budgetBreached?`⚠ Budget breach: ${budgetBreachReason}. Admin approval required.`:
+                        catEx?"⚠ Category budget exceeded — manager review required":
+                        needsDual?"Dual approval required (above ₹"+dualLimit.toLocaleString("en-IN")+")":
+                        "Pending approval";
     const{isAnomaly,reasons}=detectAnomaly(form,amount);
     const claimId="EXP-"+uid();
 
@@ -2798,15 +2938,23 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
       // Update trip spent + user balance via Supabase
       if(auto){
-        await supabase.from("trips").update({spent:co.trips.find(t=>t.id===tripId)?.spent+amount||amount}).eq("id",tripId);
-        if(!co.policy.reimbursementMode)await supabase.from("users").update({balance:Math.max(0,(myUser?.balance||0)-amount)}).eq("id",user.id);
-        else await supabase.from("users").update({reimbursable:(myUser?.reimbursable||0)+amount}).eq("id",user.id);
-        await sbAddAudit("Auto-Approved",claimId,"Under limit");
-        toast("⚡ Auto-approved instantly!");
+        // Item 6: Auto-approve after configured delay (default 10 min)
+        const delayMins=co.policy.autoApproveMins||10;
+        toast(`⚡ Submitted — will auto-approve in ${delayMins} min${delayMins!==1?"s":""}!`);
+        setTimeout(async()=>{
+          try{
+            await supabase.from("claims").update({status:"Approved",auto_approved:true,remarks:"Auto-approved"}).eq("id",claimId);
+            await supabase.from("trips").update({spent:co.trips.find(t=>t.id===tripId)?.spent+amount||amount}).eq("id",tripId);
+            if(!co.policy.reimbursementMode)await supabase.from("users").update({balance:Math.max(0,(myUser?.balance||0)-amount)}).eq("id",user.id);
+            else await supabase.from("users").update({reimbursable:(myUser?.reimbursable||0)+amount}).eq("id",user.id);
+            await sbAddAudit("Auto-Approved",claimId,`Auto after ${delayMins} min`);
+            await sbPushNotif(user.id,`✓ Claim ${claimId} auto-approved (₹${amount.toLocaleString("en-IN")})`,"success");
+          }catch(e){console.warn("Auto-approve timer failed:",e.message);}
+        },delayMins*60*1000);
       } else {
         // Notify dept manager + admins, respecting delegation
         await notifyApprovers(user.id,`New claim ${claimId} from ${user.name} — ${fmt(amount)} awaiting approval`,"info");
-        toast(weekend?"⚠️ Weekend → manager":noRcpt?"⚠️ Receipt required":isAnomaly?"🔍 Anomaly flagged":catEx?"⚠️ Category % exceeded":"Claim submitted");
+        toast(budgetBreached?"⚠ "+budgetBreachReason+" — Admin approval only":weekend?"⚠️ Weekend → manager":noRcpt?"⚠️ Receipt required":isAnomaly?"🔍 Anomaly flagged":catEx?"⚠️ Category % exceeded":needsDual?"⏳ Dual approval required":"✓ Claim submitted");
       }
       await loadFromSB();
     } else {
@@ -2819,7 +2967,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       else{
         // Notify dept manager + admins, respecting delegation (localStorage path)
         notifyApprovers(user.id,`New claim ${claimId} from ${user.name} — ${fmt(amount)} awaiting approval`,"info");
-        toast(isAnomaly?"🔍 Submitted — anomaly flagged":catEx?"⚠️ Submitted — category % exceeded":"✓ Claim submitted");
+        toast(budgetBreached?"⚠ "+budgetBreachReason+" — Admin only":isAnomaly?"🔍 Anomaly flagged":catEx?"⚠️ Category % exceeded":needsDual?"⏳ Dual approval required":"✓ Claim submitted");
       }
     }
     // Handle expense splitting — create claims for each split colleague
@@ -2854,7 +3002,27 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const policy=co.policy;
     let finalStatus=decision;
 
+    // ── Item 1: No authority → admin fallback ───────────────────────────────
+    // ── Item 6: Budget breach → admin-only ──────────────────────────────────
     if(decision==="Approved"){
+      // Check if budget was breached — only admin can approve breached claims
+      const claimD=claim.date||today();
+      const claimMo=claimD.slice(0,7);
+      const cYear=claimD.slice(0,4);
+      const fyS=claimMo>=(cYear+"-04")?cYear+"-04":String(parseInt(cYear)-1)+"-04";
+      const fyE=claimMo>=(cYear+"-04")?String(parseInt(cYear)+1)+"-03":cYear+"-03";
+      const claimEmp=co.users.find(u=>u.id===claim.empId);
+      const claimDept=claimEmp?.dept||"";
+      const mDB=(policy.monthlyDeptBudgets?.[claimDept]?.monthly)||0;
+      const yDB=(policy.monthlyDeptBudgets?.[claimDept]?.yearly)||(policy.departmentBudgets?.[claimDept])||0;
+      const mSpent=mDB>0?co.claims.filter(c=>{const cu=co.users.find(u=>u.id===c.empId);return cu?.dept===claimDept&&c.date?.slice(0,7)===claimMo&&c.status!=="Rejected"&&c.id!==claim.id;}).reduce((s,c)=>s+c.amount,0):0;
+      const ySpent=yDB>0?co.claims.filter(c=>{const cu=co.users.find(u=>u.id===c.empId);return cu?.dept===claimDept&&c.date?.slice(0,7)>=fyS&&c.date?.slice(0,7)<=fyE&&c.status!=="Rejected"&&c.id!==claim.id;}).reduce((s,c)=>s+c.amount,0):0;
+      const budgetBreachedForApproval=(mDB>0&&(mSpent+claim.amount)>mDB)||(yDB>0&&(ySpent+claim.amount)>yDB);
+      if(budgetBreachedForApproval&&!isAdmin){
+        toast("⛔ Dept budget breached — only admin can approve this claim","error");
+        return;
+      }
+
       // ── Grade-based engine ────────────────────────────────────────────────────
       if(policy.gradeBased&&(policy.approvalHierarchy||[]).length>0){
         const approverGrade=user.grade||0;
@@ -3106,6 +3274,10 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         trip_purposes:newPolicy.tripPurposes||[],
         notice_period_domestic:newPolicy.noticePeriodDomestic||0,
         notice_period_overseas:newPolicy.noticePeriodOverseas||15,
+        monthly_dept_budgets:newPolicy.monthlyDeptBudgets||{},
+        team_budgets:newPolicy.teamBudgets||{},
+        auto_approve_mins:newPolicy.autoApproveMins||10,
+        conveyance_rate_per_km:newPolicy.conveyanceRatePerKm||4,
       };
 
       let{error}=await supabase.from("policy").upsert(fullRow);
@@ -3436,22 +3608,19 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   const navItems=[
     {id:"dashboard", icon:"▦",  label:"Dashboard"},
-    {id:"claims",    icon:"📋", label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"},
+    ...(!isCFO&&!isHR?[{id:"claims",icon:"📋",label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"}]:[]),
     ...(hasPerm("submit")&&!canApprove?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
-    {id:"trips",     icon:"🗂️", label:"Trips / Periods"},
+    ...(!isCFO&&!isHR?[{id:"trips",icon:"🗂️",label:"Trips / Periods"}]:[]),
     ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[]),
-    {id:"topup",icon:"💰",label:"Top-up"},
-    // Trip approvals merged into main Approvals tab - no separate tab
-    // Edit Requests merged into Approvals tab
+    ...(!isCFO&&!isHR?[{id:"topup",icon:"💰",label:"Top-up"}]:[]),
     {id:"analytics", icon:"📊", label:"Analytics"},
-    // Inbox moved to notification bell in top bar - not in sidebar
     ...(canApprove?[{id:"ledger",icon:"📒",label:"Trip Ledger"},{id:"balances",icon:"⚖️",label:"Balances"},{id:"settlements",icon:"💳",label:"Settlements"}]:[]),
-    ...(canApprove||isFinance?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
+    ...(canApprove||isFinance||isHR?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
     ...(isAdmin||isFinance?[{id:"finance_view",icon:"💼",label:"Finance"}]:[]),
+    ...(isHR?[{id:"hr_view",icon:"👔",label:"HR Oversight"},{id:"policy",icon:"⚙️",label:"Policy (view)"}]:[]),
+    ...(isCFO?[{id:"cfo_view",icon:"📈",label:"Executive View"}]:[]),
     ...(isAdmin||isManager?[{id:"employees",icon:"👥",label:"Employees"}]:[]),
     ...(isAdmin?[{id:"policy",icon:"⚙️",label:"Policy"}]:[]),
-    // My History merged into My Expenses (claims tab)
-    // Help moved to ? icon in toolbar
   ];
 
   return(
@@ -3596,7 +3765,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         </div>
 
         {/* TABS */}
-        {tab==="dashboard"&&!isManager&&!isFinance&&<EmpDash user={user} myUser={myUser} co={co} setTab={setTab}/>}
+        {tab==="dashboard"&&!isManager&&!isFinance&&!isHR&&!isCFO&&<EmpDash user={user} myUser={myUser} co={co} setTab={setTab}/>}
         {tab==="dashboard"&&isManager&&<>
           <TravelCalendar trips={isAdmin?co.trips:visibleTrips} users={co.users} isAdmin={isAdmin} myDept={myUser?.dept} visibleUserIds={visibleUserIds}/>
           <MgrDash co={co} meta={activeMeta} setTab={setTab} getUser={getUser} isAdmin={isAdmin} myUserId={user.id}/>
@@ -3614,6 +3783,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           sbPushNotif={sbPushNotif} companyUsers={co.users}
           sbCreateTrip={sbCreateTrip}
           policy={co.policy}
+          cid={cid}
           approveTrip={approveTrip} rejectTrip={rejectTrip}
           notifyApprovers={notifyApprovers}
           deleteTrip={deleteTrip}
@@ -3688,7 +3858,18 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="ledger"&&canApprove&&<TripLedgerTab trips={isAdmin?co.trips:visibleTrips} claims={isAdmin?co.claims:visibleClaims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} companyName={activeMeta?.name||""}/>}
         {tab==="balances"&&canApprove&&<BalancesTab trips={co.trips} claims={co.claims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept)} getUser={getUser} isAdmin={isAdmin} fmt={fmt}/>}
         {tab==="settlements"&&canApprove&&<SettlementsTab trips={co.trips} claims={co.claims} topups={co.topups} users={co.users} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} cid={cid} sbEnabled={SB_ENABLED}/>}
-        {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}/>}
+        {/* ── HR Role View ── */}
+        {tab==="hr_view"&&isHR&&<HROversightTab claims={co.claims} trips={co.trips} users={co.users} getUser={getUser} policy={co.policy} aretRequests={[]} fmt={fmt}/>}
+        {tab==="dashboard"&&isHR&&<HROversightTab claims={co.claims} trips={co.trips} users={co.users} getUser={getUser} policy={co.policy} aretRequests={[]} fmt={fmt}/>}
+        {/* ── CFO/CEO Executive View ── */}
+        {(tab==="cfo_view"||tab==="dashboard"&&isCFO)&&isCFO&&<CFODashboard claims={co.claims} trips={co.trips} users={co.users} policy={co.policy} topups={co.topups} getUser={getUser} fmt={fmt} activeMeta={activeMeta}/>}
+        {/* HR can view Policy in read-only mode */}
+        {tab==="policy"&&isHR&&<PolicyReadOnly policy={co.policy} users={co.users}/>}
+        {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}
+          onBudgetEnhancement={submitBudgetEnhancement}
+          onApproveBudgetEnhancement={approveBudgetEnhancement}
+          myDept={myUser?.dept}
+          myUser={myUser}/>}
         {tab==="trip_approvals"&&canApprove&&<TripApprovalsTab trips={co.trips} getUser={getUser} approveTrip={approveTrip} rejectTrip={rejectTrip} isAdmin={isAdmin}/>}
         {tab==="editreqs"&&canApprove&&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id} reload={loadEditRequests}/>}
         {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept||u.id===user.id)} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin}
@@ -4764,7 +4945,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
 }
 
 // ─── TRIPS TAB ────────────────────────────────────────────────────────────────
-function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTrip,toast,uid:userId,userRole,myUser,sbCreateTrip,sbPushNotif,companyUsers,sbUpdateTrip,policy,approveTrip,rejectTrip,notifyApprovers,deleteTrip,deleteClaim}){
+function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTrip,toast,uid:userId,userRole,myUser,sbCreateTrip,sbPushNotif,companyUsers,sbUpdateTrip,policy,approveTrip,rejectTrip,notifyApprovers,deleteTrip,deleteClaim,cid}){
   const [showNew,setShowNew]=useState(false);
   const [form,setForm]=useState({name:"",type:"trip",startDate:today(),endDate:"",budget:"",assignedTo:[],projectCode:"",tripMode:"balance",currency:"INR",categoryLimits:{},tripType:"domestic",purpose:"",customerName:"",accompanying:[]});
   const [newLegs,setNewLegs]=useState([]); // itinerary legs for new trip creation
@@ -4773,7 +4954,8 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
   const [editTrip,setEditTrip]=useState(null);
   const [budgetTrip,setBudgetTrip]=useState(null);
   const [legsTrip,setLegsTrip]=useState(null);
-  const [aretTrip,setAretTrip]=useState(null); // ARET modal
+  const [aretTrip,setAretTrip]=useState(null);
+  const [conveyanceTrip,setConveyanceTrip]=useState(null); // Local conveyance log
   const isEmployee=!isManager&&!isAdmin;
   const emps=users?.filter(u=>u.role==="employee")||[];
   const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",width:"100%"};
@@ -5018,6 +5200,28 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
         }}
       />}
       {/* Itinerary / legs modal */}
+      {/* Local Conveyance modal */}
+      {conveyanceTrip&&<LocalConveyanceModal trip={conveyanceTrip} userId={userId} userName={users.find(u=>u.id===userId)?.name||""} policy={policy}
+        onClose={()=>setConveyanceTrip(null)}
+        onSubmit={async(rows,totalAmt)=>{
+          // Submit as a single claim with conveyance sub-data in notes
+          const claimId="EXP-"+uid();
+          const desc=`Local Conveyance — ${rows.length} journey${rows.length!==1?"s":""} (${rows.map(r=>r.from+"→"+r.to).join(", ")})`;
+          if(sbCreateTrip){
+            // Use supabase directly
+            await supabase.from("claims").insert({
+              id:claimId,company_id:cid,trip_id:conveyanceTrip.id,emp_id:userId,
+              date:today(),category:"Local Conveyance",description:desc,
+              amount:totalAmt,orig_amount:totalAmt,orig_currency:"INR",
+              status:"Pending",auto_approved:false,
+              notes:JSON.stringify(rows),
+            }).then(()=>{}).catch(e=>console.warn("Conveyance claim:",e.message));
+            if(sbPushNotif) await sbPushNotif(null,`Local conveyance claim ₹${totalAmt.toLocaleString("en-IN")} submitted by ${users.find(u=>u.id===userId)?.name||userId}`,"info");
+          }
+          setConveyanceTrip(null);
+          toast(`✓ Conveyance claim ₹${totalAmt.toLocaleString("en-IN")} submitted`);
+        }}
+      />}
       {/* ARET modal */}
       {aretTrip&&<AretModal trip={aretTrip} user={users.find(u=>u.id===userId)||{name:""}} policy={policy}
         onClose={()=>setAretTrip(null)}
@@ -5076,6 +5280,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                     <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"");const pu=doc.output("bloburl");window.open(pu,"_blank");}catch(e){toast("PDF failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄 PDF</Btn>
                     {(isManager||isAdmin)&&<Btn v="outline" onClick={()=>generateTAR(t,users.find(u=>u.id===t.createdBy)||{name:""},users,"")} style={{fontSize:10,padding:"5px 8px"}}>📋 TAR</Btn>}
                     {(isManager||isAdmin)&&<Btn v="outline" onClick={()=>generateTERC(t,users.find(u=>u.id===t.createdBy)||{name:""},claims.filter(c=>c.tripId===t.id),policy,"")} style={{fontSize:10,padding:"5px 8px"}}>📑 TERC</Btn>}
+                    <Btn v="outline" onClick={()=>setConveyanceTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🚗 Conveyance</Btn>
                     <Btn v="outline" onClick={()=>setAretTrip(t)} style={{fontSize:10,padding:"5px 8px",borderColor:"#f59e0b",color:"#92400e"}}>⚠ ARET</Btn>
                     <Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Edit</Btn>
                     <Btn v="outline" onClick={()=>setLegsTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>📍 Itinerary</Btn>
@@ -5970,6 +6175,44 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
         <Card style={{padding:18}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Subscription</div>
 
+        {/* ── Item 6: Auto-approve timing ── */}
+        </Card><Card style={{padding:18}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Auto-Approve & Dual Approval Rules</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:10}}>
+            {[["Auto-Approve Limit (₹)","autoApproveLimit"],["Dual Approval Above (₹) — 0=off","dualApproveAbove"],["Auto-Approve Delay (minutes)","autoApproveMins"]].map(([l,k])=>(
+              <div key={k}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>{l}</label>
+                <input type="number" min="0" value={policy[k]||0} onChange={e=>setPolicy({...policy,[k]:parseFloat(e.target.value)||0})} style={{padding:"7px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,width:"100%"}}/></div>
+            ))}
+          </div>
+          <div style={{fontSize:10,color:MUTED}}>Claims within limit are auto-approved after delay. Category breach → manager review. Budget breach → admin only. Dual approval → manager + admin both required.</div>
+          <div style={{marginTop:10,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+            <label style={{fontSize:9,fontWeight:700,color:MUTED,textTransform:"uppercase"}}>Local Conveyance Rate (₹/km)</label>
+            <input type="number" min="0" step="0.5" value={policy.conveyanceRatePerKm||4} onChange={e=>setPolicy({...policy,conveyanceRatePerKm:parseFloat(e.target.value)||4})} style={{padding:"5px 8px",border:`1.5px solid ${BDR}`,borderRadius:6,fontSize:12,width:70}}/>
+            <span style={{fontSize:10,color:MUTED}}>applied for own-vehicle local conveyance entries</span>
+          </div>
+
+        {/* ── Item 7: Monthly & Yearly Dept Budgets ── */}
+        </Card><Card style={{padding:18}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Monthly & Annual Department Budgets</div>
+          <div style={{fontSize:10,color:MUTED,marginBottom:10}}>When breached, all new claims from that dept go to admin-only approval. 0 = no limit. Annual = April–March FY.</div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead><tr style={{background:GL}}>
+                {["Department","Monthly ₹","Annual ₹ (Apr–Mar)"].map(h=><th key={h} style={{padding:"7px 10px",textAlign:"left",color:GD,fontWeight:700,fontSize:10,textTransform:"uppercase"}}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {(policy.departments||DEFAULT_DEPTS).map(dept=>{
+                  const cur=policy.monthlyDeptBudgets?.[dept]||{monthly:0,yearly:0};
+                  return(<tr key={dept} style={{borderTop:`1px solid ${BDR}`}}>
+                    <td style={{padding:"7px 10px",fontWeight:600}}>{dept}</td>
+                    <td style={{padding:"5px 8px"}}><input type="number" min="0" value={cur.monthly||""} placeholder="0=no limit" onChange={e=>setPolicy({...policy,monthlyDeptBudgets:{...policy.monthlyDeptBudgets,[dept]:{...cur,monthly:parseFloat(e.target.value)||0}}})} style={{padding:"5px 8px",border:`1px solid ${BDR}`,borderRadius:6,fontSize:11,width:140}}/></td>
+                    <td style={{padding:"5px 8px"}}><input type="number" min="0" value={cur.yearly||""} placeholder="0=no limit" onChange={e=>setPolicy({...policy,monthlyDeptBudgets:{...policy.monthlyDeptBudgets,[dept]:{...cur,yearly:parseFloat(e.target.value)||0}}})} style={{padding:"5px 8px",border:`1px solid ${BDR}`,borderRadius:6,fontSize:11,width:140}}/></td>
+                  </tr>);
+                })}
+              </tbody>
+            </table>
+          </div>
+
         {/* ── PHASE 1: Grade-Based Approval Hierarchy ── */}
         </Card><Card style={{padding:18}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Grade-Based Approval Hierarchy</div>
@@ -6518,7 +6761,87 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
     doc.output("dataurlnewwindow");
   };
 
-  const ledgerRows=trip?buildLedger(trip):[];
+  // Item 5: Full Trip Summary PDF
+  const generateFullTripSummary=async(t,rows)=>{
+    const doc=new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
+    const W=297,ML=12,CW=W-2*ML;
+    let y=10;
+    // Header
+    doc.setFillColor(15,28,9);doc.rect(0,0,W,22,"F");
+    doc.setFont("helvetica","bold");doc.setFontSize(12);doc.setTextColor(126,217,87);
+    doc.text("XpensR by RB — Full Trip Summary Report",ML,14);
+    doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(170,190,160);
+    doc.text(`Generated: ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})}`,W-ML,14,{align:"right"});
+    y=26;
+    // Trip meta
+    doc.setFont("helvetica","bold");doc.setFontSize(12);doc.setTextColor(20,20,20);
+    doc.text(t.name||"Trip",ML,y);y+=6;
+    doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(80,80,80);
+    const metaItems=[`Status: ${t.status}`,`Period: ${fmtDate(t.startDate)} → ${fmtDate(t.endDate)}`,`Mode: ${t.tripMode==="reimbursement"?"Reimbursement":"Balance"}`,`Budget: ₹${(t.budget||0).toLocaleString("en-IN")}`,t.purpose?`Purpose: ${t.purpose}`:"",t.customerName?`Customer: ${t.customerName}`:""].filter(Boolean);
+    doc.text(metaItems.join("  ·  "),ML,y);y+=8;
+    // Itinerary
+    if((t.legs||[]).length>0){
+      doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(20,20,20);
+      doc.text("Itinerary:",ML,y);y+=5;
+      doc.setFillColor(21,128,61);doc.rect(ML,y,CW,6,"F");
+      doc.setFont("helvetica","bold");doc.setFontSize(7);doc.setTextColor(255,255,255);
+      let tx=ML+1;[{h:"Leg",w:14},{h:"From",w:36},{h:"To",w:36},{h:"Depart",w:28},{h:"Arrive",w:28},{h:"Mode",w:24},{h:"Tier",w:14},{h:"Days",w:14},{h:"Hotel Limit",w:28},{h:"Diem/day",w:24}].forEach(c=>{doc.text(c.h,tx,y+4);tx+=c.w;});y+=7;
+      (t.legs||[]).forEach((leg,i)=>{
+        doc.setFillColor(i%2?248:255,255,i%2?248:255);doc.rect(ML,y,CW,6,"F");
+        doc.setFont("helvetica","normal");doc.setFontSize(7);doc.setTextColor(30,30,30);
+        tx=ML+1;[String(i+1),leg.fromCity||"",leg.toCity||"",fmtDate(leg.departAt?.slice(0,10)||""),fmtDate(leg.arriveAt?.slice(0,10)||""),leg.mode||"",leg.cityTier||"D",String(leg.days||0),leg.hotelLimit>0?`₹${leg.hotelLimit.toLocaleString("en-IN")}/nt`:"—",leg.diemRate>0?`₹${leg.diemRate.toLocaleString("en-IN")}`:"-"].forEach((v,ci)=>{doc.text(v,tx,y+4);tx+=[14,36,36,28,28,24,14,14,28,24][ci];});y+=6.5;
+      });
+      y+=4;
+    }
+    // Employee summary
+    if(y>150){doc.addPage();y=14;}
+    doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(20,20,20);
+    doc.text("Employee-wise Expense Summary:",ML,y);y+=5;
+    const eCols=[{h:"Employee",w:40},{h:"Dept",w:24},{h:"Allocated",w:26},{h:"Topups",w:22},{h:"Total Funds",w:28},{h:"Approved",w:28},{h:"Pending",w:24},{h:"Rejected",w:24},{h:"Diem Entitlement",w:34},{h:"Diem Claimed",w:26},{h:"Net Balance",w:30}];
+    doc.setFillColor(21,128,61);doc.rect(ML,y,CW,6,"F");
+    doc.setFont("helvetica","bold");doc.setFontSize(7);doc.setTextColor(255,255,255);
+    let tx2=ML+1;eCols.forEach(c=>{doc.text(c.h,tx2,y+4);tx2+=c.w;});y+=7;
+    let grandApproved=0,grandPending=0,grandDiem=0;
+    rows.forEach((r,idx)=>{
+      const diem=empDiem(t,r.user.id);
+      const diemClaimed=claims.filter(c=>c.tripId===t.id&&c.empId===r.user.id&&(c.category==="Meals"||c.category==="Food"||c.category==="Daily Allowance")&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
+      grandApproved+=r.approvedAmt;grandPending+=r.pendingAmt;grandDiem+=diem;
+      doc.setFillColor(idx%2?248:255,idx%2?255:255,idx%2?248:255);doc.rect(ML,y,CW,6,"F");
+      doc.setFont("helvetica","normal");doc.setFontSize(7);doc.setTextColor(30,30,30);
+      tx2=ML+1;
+      [`${r.user.name?.slice(0,16)}`,r.user.dept||"",`₹${r.allocated.toLocaleString("en-IN")}`,r.empTopups>0?`+₹${r.empTopups.toLocaleString("en-IN")}`:"-",`₹${r.totalFunds.toLocaleString("en-IN")}`,`₹${r.approvedAmt.toLocaleString("en-IN")} (${r.approvedCount})`,r.pendingAmt>0?`₹${r.pendingAmt.toLocaleString("en-IN")}`:"-",r.rejectedAmt>0?`₹${r.rejectedAmt.toLocaleString("en-IN")}`:"-",`₹${diem.toLocaleString("en-IN")}`,`₹${Math.min(diemClaimed,diem).toLocaleString("en-IN")}`,r.balanceAsOfNow>0?`↩${r.balanceAsOfNow.toLocaleString("en-IN")}`:r.balanceAsOfNow<0?`↪${(-r.balanceAsOfNow).toLocaleString("en-IN")}`:"Settled"].forEach((v,i)=>{doc.text(String(v),tx2,y+4);tx2+=eCols[i].w;});
+      y+=6.5;if(y>185){doc.addPage();y=14;}
+    });
+    // Totals row
+    y+=2;doc.setFont("helvetica","bold");doc.setFontSize(8);doc.setTextColor(20,20,20);
+    doc.text(`Total Approved: ₹${grandApproved.toLocaleString("en-IN")}  |  Pending: ₹${grandPending.toLocaleString("en-IN")}  |  Total Diem Entitlement: ₹${grandDiem.toLocaleString("en-IN")}`,ML,y);y+=8;
+    // Invoice list
+    if(y>160){doc.addPage();y=14;}
+    doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(20,20,20);
+    doc.text("Invoice-wise Claim Detail:",ML,y);y+=5;
+    const iCols=[{h:"Claim ID",w:28},{h:"Date",w:22},{h:"Employee",w:34},{h:"Category",w:26},{h:"Vendor",w:30},{h:"Amount",w:22},{h:"Status",w:22},{h:"Approved By",w:30},{h:"City",w:22},{h:"Receipts",w:20}];
+    doc.setFillColor(21,128,61);doc.rect(ML,y,CW,6,"F");
+    doc.setFont("helvetica","bold");doc.setFontSize(7);doc.setTextColor(255,255,255);
+    let tx3=ML+1;iCols.forEach(c=>{doc.text(c.h,tx3,y+4);tx3+=c.w;});y+=7;
+    const tripClaims=claims.filter(c=>c.tripId===t.id).sort((a,b)=>a.date?.localeCompare(b.date));
+    tripClaims.forEach((c,idx)=>{
+      const emp=users.find(u=>u.id===c.empId);
+      doc.setFillColor(idx%2?248:255,255,idx%2?248:255);doc.rect(ML,y,CW,6,"F");
+      doc.setFont("helvetica","normal");doc.setFontSize(6.5);
+      const statusColor=c.status==="Approved"?[21,128,61]:c.status==="Rejected"?[200,30,30]:c.status==="Pending"?[180,100,0]:[80,80,80];
+      doc.setTextColor(30,30,30);
+      tx3=ML+1;
+      [c.id?.slice(-8)||"",fmtDate(c.date),emp?.name?.slice(0,16)||"",c.category||"",c.vendor?.slice(0,14)||"",`₹${c.amount.toLocaleString("en-IN")}`,c.status,c.remarks?.slice(0,14)||"",c.city||"",c.receipts?.length?String(c.receipts.length):"0"].forEach((v,i)=>{
+        if(i===6)doc.setTextColor(...statusColor);else doc.setTextColor(30,30,30);
+        doc.text(String(v),tx3,y+4);tx3+=iCols[i].w;
+      });
+      y+=6.5;if(y>190){doc.addPage();y=14;}
+    });
+    // Footer
+    doc.setFont("helvetica","normal");doc.setFontSize(6.5);doc.setTextColor(150,150,150);
+    doc.text(`XpensR by RB — Full Trip Summary — ${t.name} — ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})}`,W/2,202,{align:"center"});
+    doc.output("dataurlnewwindow");
+  };
 
   // Compute diem summary for all assignees on a trip
   const tripDiemSummary=(t)=>{
@@ -6553,7 +6876,8 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
         </select>
         {trip&&<>
           <Btn v="outline" onClick={()=>exportLedgerCSV(trip,ledgerRows)} style={{fontSize:11,padding:"6px 12px"}}>⬇ CSV</Btn>
-          <Btn v="outline" onClick={()=>exportLedgerPDF(trip,ledgerRows)} style={{fontSize:11,padding:"6px 12px"}}>📄 PDF</Btn>
+          <Btn v="outline" onClick={()=>exportLedgerPDF(trip,ledgerRows)} style={{fontSize:11,padding:"6px 12px"}}>📄 Ledger PDF</Btn>
+          <Btn onClick={()=>generateFullTripSummary(trip,ledgerRows)} style={{fontSize:11,padding:"6px 12px"}}>📋 Full Summary</Btn>
           <Btn v="outline" onClick={()=>setShowDiem(p=>!p)} style={{fontSize:11,padding:"6px 12px",borderColor:showDiem?"#7ED957":"",color:showDiem?"#3B6D11":""}}>🍽 {showDiem?"Hide":"Show"} Diem</Btn>
         </>}
       </div>
@@ -6805,8 +7129,9 @@ function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn}){
 
           {/* Trip breakdown */}
           {expandedEmp===u.id&&<div style={{borderTop:`1px solid ${BDR}`,background:"var(--bg,#f8faf6)"}}>
-            {tripData.map(({trip:t,approved,rejected,pending,spent,budget,balance})=>(
-              <div key={t.id} style={{borderBottom:`1px solid ${BDR}`}}>
+            {tripData.map(({trip:t,approved,rejected,pending,spent,budget,balance,approvedTopups:at})=>{
+              const tripTopups=at||(topups||[]).filter(tp=>tp.empId===u.id&&tp.tripId===t.id&&tp.status==="Approved").reduce((s,tp)=>s+tp.amount,0);
+              return(<div key={t.id} style={{borderBottom:`1px solid ${BDR}`}}>
                 <div onClick={()=>setExpandedTrip(expandedTrip===t.id+u.id?null:t.id+u.id)}
                   style={{display:"flex",alignItems:"center",gap:10,padding:"10px 18px 10px 28px",cursor:"pointer"}}>
                   <div style={{flex:1}}>
@@ -6827,8 +7152,8 @@ function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn}){
                 {/* Invoice drill-down */}
                 {expandedTrip===t.id+u.id&&<div style={{padding:"8px 18px 12px 36px"}}>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,marginBottom:10,fontSize:11}}>
-                    <div style={{padding:"6px 10px",background:"#dbeafe",borderRadius:6}}>💼 Budget: <strong>{f((budget||0)-(approvedTopups||0))}</strong></div>
-                    <div style={{padding:"6px 10px",background:"#dcfce7",borderRadius:6}}>➕ Top-ups: <strong>{f(approvedTopups||0)}</strong></div>
+                    <div style={{padding:"6px 10px",background:"#dbeafe",borderRadius:6}}>💼 Budget: <strong>{f((budget||0)-(tripTopups||0))}</strong></div>
+                    <div style={{padding:"6px 10px",background:"#dcfce7",borderRadius:6}}>➕ Top-ups: <strong>{f(tripTopups||0)}</strong></div>
                     <div style={{padding:"6px 10px",background:"#fee2e2",borderRadius:6}}>✗ Rejected: <strong>{f(rejected.reduce((s,c)=>s+c.amount,0))}</strong></div>
                     <div style={{padding:"6px 10px",background:balance>0?"#fee2e2":balance<0?"#dcfce7":"#f3f4f6",borderRadius:6,fontWeight:700}}>
                       {balance>0?`↩ ${f(balance)}`:balance<0?`↪ ${f(-balance)}`:"✓ Settled"}
@@ -6857,7 +7182,7 @@ function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn}){
                   </div>
                 </div>}
               </div>
-            ))}
+            );})}
           </div>}
         </Card>
       ))}
@@ -7017,7 +7342,9 @@ function SettlementsTab({trips,claims,topups,users,getUser,isAdmin,myDept,cid,sb
 }
 
 // ─── FINANCE TAB ─────────────────────────────────────────────────────────────
-function FinanceTab({claims,trips,getUser,users,isAdmin,policy,onExportPDF}){
+function FinanceTab({claims,trips,getUser,users,isAdmin,policy,onExportPDF,onBudgetEnhancement,onApproveBudgetEnhancement,myDept,myUser}){
+  const[berForm,setBerForm]=useState({dept:myDept||"",period:"monthly",requested:"",reason:""});
+  const[showBER,setShowBER]=useState(false);
   const[filter,setFilter]=useState("All");
   const[search,setSearch]=useState("");
   const shown=claims.filter(c=>
@@ -7035,9 +7362,83 @@ function FinanceTab({claims,trips,getUser,users,isAdmin,policy,onExportPDF}){
           <p style={{color:MUTED,fontSize:11,marginTop:2}}>Approved expenses ready for accounting · {shown.length} records · {fmt(total)} total</p>
         </div>
         <div style={{display:"flex",gap:8}}>
+          {onBudgetEnhancement&&<Btn v="outline" onClick={()=>setShowBER(p=>!p)} style={{fontSize:11,padding:"6px 12px",borderColor:"#f59e0b",color:"#92400e"}}>📊 Request Budget Enhancement</Btn>}
           <Btn v="outline" onClick={()=>onExportPDF&&onExportPDF(shown,"Finance Report",`${shown.length} records · ₹${total.toLocaleString("en-IN")}`)} style={{fontSize:11,padding:"6px 12px"}}>⬇ PDF</Btn>
         </div>
       </div>
+
+      {/* Budget status cards */}
+      {(policy.monthlyDeptBudgets&&Object.keys(policy.monthlyDeptBudgets).length>0)&&(()=>{
+        const now=new Date();
+        const claimMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+        const fyYear=now.getMonth()>=3?now.getFullYear():now.getFullYear()-1;
+        const fyStart=`${fyYear}-04`;const fyEnd=`${fyYear+1}-03`;
+        return(
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:8,marginBottom:14}}>
+            {Object.entries(policy.monthlyDeptBudgets).filter(([dept])=>!myDept||isAdmin||dept===myDept).map(([dept,b])=>{
+              if(!b.monthly&&!b.yearly)return null;
+              const mSpent=claims.filter(c=>{const u=users.find(x=>x.id===c.empId);return u?.dept===dept&&c.date?.slice(0,7)===claimMonth;}).reduce((s,c)=>s+c.amount,0);
+              const ySpent=claims.filter(c=>{const u=users.find(x=>x.id===c.empId);return u?.dept===dept&&c.date?.slice(0,7)>=fyStart&&c.date?.slice(0,7)<=fyEnd;}).reduce((s,c)=>s+c.amount,0);
+              const mPct=b.monthly>0?Math.min(100,Math.round(mSpent/b.monthly*100)):0;
+              const yPct=b.yearly>0?Math.min(100,Math.round(ySpent/b.yearly*100)):0;
+              const breached=mPct>=100||yPct>=100;
+              return(
+                <Card key={dept} style={{padding:12,borderColor:breached?"#fca5a5":BDR}}>
+                  <div style={{fontWeight:700,fontSize:12,color:INK,marginBottom:6}}>{dept}</div>
+                  {b.monthly>0&&<>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:2}}>
+                      <span style={{color:MUTED}}>Monthly</span>
+                      <span style={{fontWeight:600,color:mPct>=100?"#dc2626":"#16a34a"}}>{fmt(mSpent)} / {fmt(b.monthly)}</span>
+                    </div>
+                    <div style={{background:"#e5e7eb",borderRadius:4,height:5,marginBottom:6}}>
+                      <div style={{width:mPct+"%",background:mPct>=100?"#dc2626":mPct>=80?"#f59e0b":"#7ED957",borderRadius:4,height:"100%"}}/>
+                    </div>
+                  </>}
+                  {b.yearly>0&&<>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:2}}>
+                      <span style={{color:MUTED}}>Annual FY</span>
+                      <span style={{fontWeight:600,color:yPct>=100?"#dc2626":"#16a34a"}}>{fmt(ySpent)} / {fmt(b.yearly)}</span>
+                    </div>
+                    <div style={{background:"#e5e7eb",borderRadius:4,height:5}}>
+                      <div style={{width:yPct+"%",background:yPct>=100?"#dc2626":yPct>=80?"#f59e0b":"#7ED957",borderRadius:4,height:"100%"}}/>
+                    </div>
+                  </>}
+                  {breached&&<div style={{fontSize:9,color:"#dc2626",fontWeight:700,marginTop:4}}>⛔ BUDGET BREACHED — Admin approval only</div>}
+                </Card>
+              );
+            }).filter(Boolean)}
+          </div>
+        );
+      })()}
+
+      {/* Budget Enhancement Request Form */}
+      {showBER&&onBudgetEnhancement&&<Card style={{padding:18,marginBottom:14,borderColor:"#fcd34d",background:"#fffbeb"}}>
+        <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>📊 Budget Enhancement Request</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10,marginBottom:10}}>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Department</label>
+            <input value={berForm.dept} onChange={e=>setBerForm(f=>({...f,dept:e.target.value}))} style={{padding:"7px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,width:"100%"}}/></div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Period</label>
+            <select value={berForm.period} onChange={e=>setBerForm(f=>({...f,period:e.target.value}))} style={{padding:"7px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,width:"100%",appearance:"none"}}>
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Annual (FY)</option>
+            </select></div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Current Limit ₹</label>
+            <input type="number" value={(policy.monthlyDeptBudgets?.[berForm.dept]?.[berForm.period==="monthly"?"monthly":"yearly"])||0} readOnly style={{padding:"7px 10px",border:`1px solid ${BDR}`,borderRadius:7,fontSize:12,width:"100%",background:"var(--bg,#f9fafb)",color:MUTED}}/></div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Requested New Limit ₹</label>
+            <input type="number" value={berForm.requested} onChange={e=>setBerForm(f=>({...f,requested:e.target.value}))} placeholder="Enter new budget amount" style={{padding:"7px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,width:"100%"}}/></div>
+        </div>
+        <div style={{marginBottom:10}}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Reason for Enhancement</label>
+          <textarea value={berForm.reason} onChange={e=>setBerForm(f=>({...f,reason:e.target.value}))} placeholder="Explain why budget needs to be increased…" rows={2} style={{width:"100%",padding:"7px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,fontFamily:FB,resize:"vertical"}}/></div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn onClick={async()=>{
+            if(!berForm.dept||!berForm.requested||!berForm.reason){toast("Fill all fields","error");return;}
+            const cur=(policy.monthlyDeptBudgets?.[berForm.dept]?.[berForm.period==="monthly"?"monthly":"yearly"])||0;
+            await onBudgetEnhancement(berForm.dept,null,berForm.period,cur,parseFloat(berForm.requested),berForm.reason);
+            setShowBER(false);setBerForm({dept:myDept||"",period:"monthly",requested:"",reason:""});
+          }}>Submit Request →</Btn>
+          <Btn v="outline" onClick={()=>setShowBER(false)}>Cancel</Btn>
+        </div>
+      </Card>}
       <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
         {["All","Manager Approved","Approved"].map(s=>(
           <button key={s} onClick={()=>setFilter(s)} style={{padding:"5px 13px",borderRadius:20,border:`1.5px solid ${filter===s?G:BDR}`,background:filter===s?G:"#fff",color:filter===s?"#fff":MUTED,fontFamily:FB,fontSize:11,fontWeight:600,cursor:"pointer"}}>{s}</button>
@@ -7655,6 +8056,539 @@ function EditClaimInline({claim,trips,cid,sbEnabled,onClose}){
 }
 
 // ─── ARET MODAL — Authorisation Request for Excess Travel Expenses ────────────
+// ─── HR OVERSIGHT TAB ─────────────────────────────────────────────────────────
+function HROversightTab({claims,trips,users,getUser,policy,aretRequests,fmt}){
+  const[tab,setLocalTab]=useState("summary");
+  const total=claims.length,approved=claims.filter(c=>c.status==="Approved").length;
+  const pending=claims.filter(c=>c.status==="Pending").length;
+  const totalAmt=claims.filter(c=>c.status==="Approved").reduce((s,c)=>s+c.amount,0);
+
+  const StatCard=({label,value,sub,color="#7ED957"})=>(
+    <Card style={{padding:16}}>
+      <div style={{fontSize:11,color:MUTED,marginBottom:4}}>{label}</div>
+      <div style={{fontSize:22,fontWeight:700,color:color}}>{value}</div>
+      {sub&&<div style={{fontSize:10,color:MUTED,marginTop:2}}>{sub}</div>}
+    </Card>
+  );
+
+  const tabs=[["summary","📊 Summary"],["policy","⚙ Policy"],["compliance","📋 Compliance"],["aret","📝 ARET Queue"]];
+
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <div>
+          <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>👔 HR Oversight</h1>
+          <p style={{fontSize:12,color:MUTED,marginTop:2}}>Read-only view — policy compliance, expense oversight, ARET sign-off</p>
+        </div>
+        <div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,padding:"6px 12px",fontSize:11,color:"#92400e",fontWeight:600}}>
+          🔒 Read-Only Access
+        </div>
+      </div>
+
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+        {tabs.map(([id,label])=>(
+          <button key={id} onClick={()=>setLocalTab(id)}
+            style={{padding:"7px 16px",borderRadius:8,border:`1.5px solid ${tab===id?G:BDR}`,background:tab===id?G:"transparent",color:tab===id?"#fff":INK,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:FB}}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab==="summary"&&<>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
+          <StatCard label="Total Employees" value={users.filter(u=>u.role!=="admin").length} sub="active in system"/>
+          <StatCard label="Total Claims (All)" value={total} sub={`${approved} approved, ${pending} pending`}/>
+          <StatCard label="Total Approved Spend" value={`₹${(totalAmt/100000).toFixed(1)}L`} sub="company-wide"/>
+          <StatCard label="Active Trips" value={trips.filter(t=>t.status==="active").length} sub={`${trips.filter(t=>t.status==="pending_approval").length} pending approval`} color="#f59e0b"/>
+        </div>
+        {/* Dept-wise spend */}
+        <Card style={{padding:16,marginBottom:12}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Department-wise Expense Summary</div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead><tr style={{background:GL}}>
+                {["Department","Employees","Claims","Approved ₹","Pending ₹","Monthly Budget","Utilisation"].map(h=>(
+                  <th key={h} style={{padding:"7px 10px",textAlign:"left",color:GD,fontSize:10,fontWeight:700,textTransform:"uppercase"}}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {(policy.departments||DEFAULT_DEPTS).map(dept=>{
+                  const deptUsers=users.filter(u=>u.dept===dept&&u.role!=="admin");
+                  const deptClaims=claims.filter(c=>{const u=getUser(c.empId);return u?.dept===dept;});
+                  const appAmt=deptClaims.filter(c=>c.status==="Approved").reduce((s,c)=>s+c.amount,0);
+                  const pendAmt=deptClaims.filter(c=>c.status==="Pending").reduce((s,c)=>s+c.amount,0);
+                  const mBudget=(policy.monthlyDeptBudgets?.[dept]?.monthly)||0;
+                  const now=new Date();const claimMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+                  const mSpent=deptClaims.filter(c=>c.date?.slice(0,7)===claimMonth&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
+                  const pct=mBudget>0?Math.min(100,Math.round(mSpent/mBudget*100)):null;
+                  return(
+                    <tr key={dept} style={{borderTop:`1px solid ${BDR}`}}>
+                      <td style={{padding:"8px 10px",fontWeight:600}}>{dept}</td>
+                      <td style={{padding:"8px 10px",color:MUTED}}>{deptUsers.length}</td>
+                      <td style={{padding:"8px 10px"}}>{deptClaims.length}</td>
+                      <td style={{padding:"8px 10px",color:"#16a34a",fontWeight:600}}>{fmt(appAmt)}</td>
+                      <td style={{padding:"8px 10px",color:pendAmt>0?"#f59e0b":MUTED}}>{pendAmt>0?fmt(pendAmt):"—"}</td>
+                      <td style={{padding:"8px 10px",color:MUTED}}>{mBudget>0?fmt(mBudget):"No limit"}</td>
+                      <td style={{padding:"8px 10px"}}>
+                        {pct!==null?(
+                          <div style={{display:"flex",alignItems:"center",gap:6}}>
+                            <div style={{flex:1,background:"#e5e7eb",borderRadius:4,height:6}}>
+                              <div style={{width:pct+"%",background:pct>=100?"#dc2626":pct>=80?"#f59e0b":"#7ED957",borderRadius:4,height:"100%"}}/>
+                            </div>
+                            <span style={{fontSize:10,fontWeight:600,color:pct>=100?"#dc2626":pct>=80?"#f59e0b":"#16a34a"}}>{pct}%</span>
+                          </div>
+                        ):<span style={{color:MUTED,fontSize:10}}>—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </>}
+
+      {tab==="policy"&&<>
+        <Card style={{padding:16,marginBottom:12}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Current Policy Settings (Read-only)</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
+            {[["Auto-Approve Limit",`₹${(policy.autoApproveLimit||0).toLocaleString("en-IN")}`],
+              ["Dual Approval Above",policy.dualApproveAbove>0?`₹${policy.dualApproveAbove.toLocaleString("en-IN")}`:"Disabled"],
+              ["Receipt Required Above",`₹${(policy.receiptMandatoryAbove||0).toLocaleString("en-IN")}`],
+              ["Grade System",policy.gradeBased?"Enabled":"Disabled"],
+              ["City Classification",policy.cityClassification?"A/B/C/D":"Disabled"],
+              ["Approval Levels",`${(policy.approvalHierarchy||[]).length} levels defined`],
+            ].map(([label,val])=>(
+              <div key={label} style={{padding:"10px 12px",background:GL,borderRadius:8}}>
+                <div style={{fontSize:10,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:3}}>{label}</div>
+                <div style={{fontSize:13,fontWeight:700,color:INK}}>{val}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+        <Card style={{padding:16}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Approval Hierarchy</div>
+          {(policy.approvalHierarchy||[]).length===0&&<p style={{color:MUTED,fontSize:12}}>No grade-based approval hierarchy defined.</p>}
+          {(policy.approvalHierarchy||[]).sort((a,b)=>a.level-b.level).map(h=>(
+            <div key={h.level} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",borderBottom:`1px solid ${BDR}`}}>
+              <div style={{width:28,height:28,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:GD,fontSize:11}}>L{h.level}</div>
+              <div style={{flex:1}}>
+                <span style={{fontWeight:600,color:INK}}>{h.label||"Level "+h.level}</span>
+                <span style={{color:MUTED,fontSize:11,marginLeft:8}}>Ceiling: {h.ceiling>0?`₹${h.ceiling.toLocaleString("en-IN")}`:"Unlimited"}</span>
+              </div>
+              <div style={{fontSize:11,color:MUTED}}>
+                {users.filter(u=>u.grade===h.level).length} user{users.filter(u=>u.grade===h.level).length!==1?"s":""}
+              </div>
+            </div>
+          ))}
+        </Card>
+      </>}
+
+      {tab==="compliance"&&<>
+        <Card style={{padding:16,marginBottom:12}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Compliance Overview</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <div>
+              <div style={{fontSize:11,fontWeight:700,color:MUTED,marginBottom:8,textTransform:"uppercase"}}>Claims Over Limit (flagged)</div>
+              {claims.filter(c=>c.flagged).slice(0,8).map(c=>{
+                const emp=getUser(c.empId);
+                return(
+                  <div key={c.id} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid ${BDR}`,fontSize:11}}>
+                    <span>{emp?.name||"—"} — {c.category}</span>
+                    <span style={{fontWeight:600,color:"#f59e0b"}}>{fmt(c.amount)}</span>
+                  </div>
+                );
+              })}
+              {claims.filter(c=>c.flagged).length===0&&<p style={{fontSize:12,color:MUTED}}>No flagged claims ✓</p>}
+            </div>
+            <div>
+              <div style={{fontSize:11,fontWeight:700,color:MUTED,marginBottom:8,textTransform:"uppercase"}}>Anomaly Flags</div>
+              {claims.filter(c=>c.anomaly).slice(0,8).map(c=>{
+                const emp=getUser(c.empId);
+                return(
+                  <div key={c.id} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid ${BDR}`,fontSize:11}}>
+                    <span>{emp?.name||"—"} — {c.desc?.slice(0,20)}</span>
+                    <span style={{fontWeight:600,color:"#dc2626"}}>{fmt(c.amount)}</span>
+                  </div>
+                );
+              })}
+              {claims.filter(c=>c.anomaly).length===0&&<p style={{fontSize:12,color:MUTED}}>No anomalies ✓</p>}
+            </div>
+          </div>
+        </Card>
+        {/* Transport class violations */}
+        <Card style={{padding:16}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Travel Policy Compliance — Notice Period</div>
+          {trips.filter(t=>{
+            const noticeDays=t.tripType==="overseas"?(policy.noticePeriodOverseas||15):(policy.noticePeriodDomestic||3);
+            const created=t.createdAt||t.startDate;
+            const daysNotice=Math.floor((new Date(t.startDate)-new Date(created))/(86400000));
+            return noticeDays>0&&daysNotice<noticeDays&&t.status!=="declined";
+          }).slice(0,6).map(t=>{
+            const creator=getUser(t.createdBy);
+            return(
+              <div key={t.id} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${BDR}`,fontSize:11}}>
+                <span><strong>{t.name}</strong> by {creator?.name||"—"}</span>
+                <span style={{color:"#f59e0b",fontWeight:600}}>⚠ Short notice</span>
+              </div>
+            );
+          })}
+          {trips.length>0&&<p style={{fontSize:10,color:MUTED,marginTop:8}}>Showing trips with insufficient advance notice.</p>}
+        </Card>
+      </>}
+
+      {tab==="aret"&&<>
+        <Card style={{padding:16}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>📝 ARET Requests — HR Sign-off Queue</div>
+          {(aretRequests||[]).length===0&&(
+            <div style={{textAlign:"center",padding:32,color:MUTED}}>
+              <div style={{fontSize:32,marginBottom:8}}>📝</div>
+              <div style={{fontSize:13}}>No ARET requests pending HR sign-off</div>
+              <div style={{fontSize:11,marginTop:4}}>Excess travel expense authorisations will appear here</div>
+            </div>
+          )}
+          {(aretRequests||[]).map(req=>{
+            const emp=getUser(req.emp_id||req.empId);
+            return(
+              <div key={req.id} style={{border:`1px solid ${BDR}`,borderRadius:10,padding:14,marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:13,color:INK}}>{emp?.name||"—"}</div>
+                    <div style={{fontSize:11,color:MUTED}}>Trip: {req.tripName||req.trip_id} · Submitted: {fmtDate(req.created_at?.slice(0,10))}</div>
+                  </div>
+                  <span style={{background:req.status==="Approved"?"#dcfce7":req.status==="Rejected"?"#fee2e2":"#fef3c7",color:req.status==="Approved"?"#16a34a":req.status==="Rejected"?"#dc2626":"#92400e",padding:"3px 10px",borderRadius:12,fontSize:11,fontWeight:700}}>
+                    {req.status||"Pending HR"}
+                  </span>
+                </div>
+                <div style={{marginTop:8,display:"flex",gap:8}}>
+                  <div style={{flex:1,padding:"6px 10px",background:"#dbeafe",borderRadius:6,fontSize:11,textAlign:"center"}}>
+                    <div style={{color:MUTED,fontSize:9,textTransform:"uppercase"}}>Eligible</div>
+                    <div style={{fontWeight:700}}>₹{(req.total_eligible||0).toLocaleString("en-IN")}</div>
+                  </div>
+                  <div style={{flex:1,padding:"6px 10px",background:"#fee2e2",borderRadius:6,fontSize:11,textAlign:"center"}}>
+                    <div style={{color:MUTED,fontSize:9,textTransform:"uppercase"}}>Expected</div>
+                    <div style={{fontWeight:700,color:"#dc2626"}}>₹{(req.total_expected||0).toLocaleString("en-IN")}</div>
+                  </div>
+                  <div style={{flex:1,padding:"6px 10px",background:"#fef3c7",borderRadius:6,fontSize:11,textAlign:"center"}}>
+                    <div style={{color:MUTED,fontSize:9,textTransform:"uppercase"}}>Excess</div>
+                    <div style={{fontWeight:700,color:"#92400e"}}>₹{((req.total_expected||0)-(req.total_eligible||0)).toLocaleString("en-IN")}</div>
+                  </div>
+                </div>
+                {req.status==="Pending"&&(
+                  <div style={{marginTop:10,display:"flex",gap:8}}>
+                    <div style={{fontSize:10,color:"#0369a1",background:"#e0f2fe",padding:"4px 10px",borderRadius:6,flex:1}}>
+                      HR sign-off records that this ARET has been reviewed by HR Department before Chairman approval.
+                    </div>
+                    <button style={{padding:"6px 14px",background:"#7ED957",color:"#0f1c09",border:"none",borderRadius:8,fontWeight:700,fontSize:11,cursor:"pointer"}}>
+                      ✓ HR Sign-off
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </Card>
+      </>}
+    </div>
+  );
+}
+
+// ─── POLICY READ-ONLY VIEW (for HR) ──────────────────────────────────────────
+function PolicyReadOnly({policy,users}){
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>⚙ Policy — Read Only</h1>
+        <div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,padding:"6px 12px",fontSize:11,color:"#92400e",fontWeight:600}}>
+          🔒 HR View — Cannot Edit
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <Card style={{padding:16}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Core Policy</div>
+          {[["Auto-Approve Limit",`₹${(policy.autoApproveLimit||0).toLocaleString("en-IN")}`],
+            ["Auto-Approve Delay",`${policy.autoApproveMins||10} minutes`],
+            ["Dual Approval Above",policy.dualApproveAbove>0?`₹${policy.dualApproveAbove.toLocaleString("en-IN")}`:"Disabled"],
+            ["Receipt Mandatory Above",`₹${(policy.receiptMandatoryAbove||0).toLocaleString("en-IN")}`],
+            ["Reimbursement Mode",policy.reimbursementMode?"Yes":"No (Balance)"],
+            ["Weekend Claims",policy.weekendRequiresApproval?"Need Approval":"Allowed"],
+            ["Notice Period (Domestic)",`${policy.noticePeriodDomestic||0} days`],
+            ["Notice Period (Overseas)",`${policy.noticePeriodOverseas||15} days`],
+          ].map(([label,val])=>(
+            <div key={label} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${BDR}`,fontSize:12}}>
+              <span style={{color:MUTED}}>{label}</span><span style={{fontWeight:600,color:INK}}>{val}</span>
+            </div>
+          ))}
+        </Card>
+        <Card style={{padding:16}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Grade Levels</div>
+          {(policy.approvalHierarchy||[]).length===0&&<p style={{fontSize:12,color:MUTED}}>No grades configured.</p>}
+          {(policy.approvalHierarchy||[]).sort((a,b)=>a.level-b.level).map(h=>(
+            <div key={h.level} style={{display:"flex",gap:10,alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${BDR}`,fontSize:12}}>
+              <div style={{width:24,height:24,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:GD}}>L{h.level}</div>
+              <div style={{flex:1,fontWeight:500,color:INK}}>{h.label||"Level "+h.level}</div>
+              <div style={{color:MUTED,fontSize:11}}>{h.ceiling>0?`≤₹${h.ceiling.toLocaleString("en-IN")}`:"Unlimited"}</div>
+              <div style={{fontSize:10,color:MUTED}}>{users.filter(u=>u.grade===h.level).length} users</div>
+            </div>
+          ))}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ─── CEO/CFO EXECUTIVE DASHBOARD ─────────────────────────────────────────────
+function CFODashboard({claims,trips,users,policy,topups,getUser,fmt,activeMeta}){
+  const now=new Date();
+  const thisMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+  const lastMonth=new Date(now.getFullYear(),now.getMonth()-1,1);
+  const lastMonthStr=`${lastMonth.getFullYear()}-${String(lastMonth.getMonth()+1).padStart(2,"0")}`;
+  const fyYear=now.getMonth()>=3?now.getFullYear():now.getFullYear()-1;
+  const fyStart=`${fyYear}-04`,fyEnd=`${fyYear+1}-03`;
+
+  const appClaims=claims.filter(c=>c.status==="Approved");
+  const mtdSpend=appClaims.filter(c=>c.date?.slice(0,7)===thisMonth).reduce((s,c)=>s+c.amount,0);
+  const lastMoSpend=appClaims.filter(c=>c.date?.slice(0,7)===lastMonthStr).reduce((s,c)=>s+c.amount,0);
+  const ytdSpend=appClaims.filter(c=>c.date?.slice(0,7)>=fyStart&&c.date?.slice(0,7)<=fyEnd).reduce((s,c)=>s+c.amount,0);
+  const pendAmt=claims.filter(c=>c.status==="Pending").reduce((s,c)=>s+c.amount,0);
+  const pendCount=claims.filter(c=>c.status==="Pending").length;
+  const activeTrips=trips.filter(t=>t.status==="active").length;
+  const pendTrips=trips.filter(t=>t.status==="pending_approval").length;
+  const momChange=lastMoSpend>0?Math.round((mtdSpend-lastMoSpend)/lastMoSpend*100):0;
+
+  // Top spenders this month
+  const spenderMap={};
+  appClaims.filter(c=>c.date?.slice(0,7)===thisMonth).forEach(c=>{
+    if(!spenderMap[c.empId])spenderMap[c.empId]=0;
+    spenderMap[c.empId]+=c.amount;
+  });
+  const topSpenders=Object.entries(spenderMap).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([id,amt])=>({user:getUser(id),amt}));
+
+  // Dept breakdown YTD
+  const deptSpend={};
+  appClaims.filter(c=>c.date?.slice(0,7)>=fyStart&&c.date?.slice(0,7)<=fyEnd).forEach(c=>{
+    const u=getUser(c.empId);
+    const d=u?.dept||"Other";
+    if(!deptSpend[d])deptSpend[d]=0;
+    deptSpend[d]+=c.amount;
+  });
+  const deptRows=Object.entries(deptSpend).sort((a,b)=>b[1]-a[1]);
+  const totalDeptSpend=deptRows.reduce((s,[,v])=>s+v,0);
+
+  // Category breakdown MTD
+  const catSpend={};
+  appClaims.filter(c=>c.date?.slice(0,7)===thisMonth).forEach(c=>{
+    if(!catSpend[c.category])catSpend[c.category]=0;
+    catSpend[c.category]+=c.amount;
+  });
+  const catRows=Object.entries(catSpend).sort((a,b)=>b[1]-a[1]).slice(0,6);
+
+  const MetricCard=({label,value,sub,color,delta})=>(
+    <Card style={{padding:16}}>
+      <div style={{fontSize:10,color:MUTED,fontWeight:700,textTransform:"uppercase",marginBottom:4,letterSpacing:.5}}>{label}</div>
+      <div style={{fontSize:24,fontWeight:800,color:color||INK,lineHeight:1.1}}>{value}</div>
+      {sub&&<div style={{fontSize:10,color:MUTED,marginTop:4}}>{sub}</div>}
+      {delta!==undefined&&delta!==0&&<div style={{fontSize:11,fontWeight:600,color:delta>0?"#dc2626":"#16a34a",marginTop:4}}>
+        {delta>0?"↑":"↓"} {Math.abs(delta)}% vs last month
+      </div>}
+    </Card>
+  );
+
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
+        <div>
+          <h1 style={{fontFamily:FD,fontSize:22,fontWeight:700,color:INK}}>📈 Executive Dashboard</h1>
+          <p style={{fontSize:12,color:MUTED,marginTop:2}}>{activeMeta?.name||"Company"} · FY {fyYear}–{fyYear+1} · Read-only view</p>
+        </div>
+        <div style={{background:"#e0f2fe",border:"1px solid #7dd3fc",borderRadius:8,padding:"6px 12px",fontSize:11,color:"#0369a1",fontWeight:600}}>
+          📊 CFO/CEO — Read Only
+        </div>
+      </div>
+
+      {/* KPI row */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,marginBottom:16}}>
+        <MetricCard label="MTD Spend" value={`₹${(mtdSpend/1000).toFixed(0)}K`} sub={thisMonth} color="#7ED957" delta={momChange}/>
+        <MetricCard label="YTD Spend" value={`₹${(ytdSpend/100000).toFixed(1)}L`} sub={`FY ${fyYear}–${fyYear+1}`} color={INK}/>
+        <MetricCard label="Pending Approvals" value={pendCount} sub={`₹${(pendAmt/1000).toFixed(0)}K pending`} color={pendCount>10?"#f59e0b":MUTED}/>
+        <MetricCard label="Active Trips" value={activeTrips} sub={`${pendTrips} awaiting approval`} color="#2563eb"/>
+        <MetricCard label="Active Employees" value={users.filter(u=>u.role!=="admin"&&!u.isSuspended).length} sub={`${users.filter(u=>u.role==="manager").length} managers`} color={INK}/>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        {/* Dept breakdown */}
+        <Card style={{padding:16}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Department Spend — YTD</div>
+          {deptRows.map(([dept,amt])=>{
+            const pct=totalDeptSpend>0?Math.round(amt/totalDeptSpend*100):0;
+            const budget=(policy.monthlyDeptBudgets?.[dept]?.yearly)||(policy.departmentBudgets?.[dept])||0;
+            const bPct=budget>0?Math.min(100,Math.round(amt/budget*100)):null;
+            return(
+              <div key={dept} style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3}}>
+                  <span style={{fontWeight:600,color:INK}}>{dept}</span>
+                  <div style={{textAlign:"right"}}>
+                    <span style={{fontWeight:700,color:INK}}>{fmt(amt)}</span>
+                    {budget>0&&<span style={{fontSize:10,color:bPct>=100?"#dc2626":MUTED,marginLeft:6}}>{bPct}% of budget</span>}
+                  </div>
+                </div>
+                <div style={{background:"#e5e7eb",borderRadius:4,height:7}}>
+                  <div style={{width:pct+"%",background:bPct!=null&&bPct>=100?"#dc2626":bPct!=null&&bPct>=80?"#f59e0b":"#7ED957",borderRadius:4,height:"100%"}}/>
+                </div>
+              </div>
+            );
+          })}
+          {deptRows.length===0&&<p style={{fontSize:12,color:MUTED}}>No YTD spend data yet.</p>}
+        </Card>
+
+        {/* Category breakdown */}
+        <Card style={{padding:16}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Category Spend — This Month</div>
+          {catRows.map(([cat,amt])=>{
+            const pct=mtdSpend>0?Math.round(amt/mtdSpend*100):0;
+            return(
+              <div key={cat} style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3}}>
+                  <span style={{fontWeight:500,color:INK}}>{cat}</span>
+                  <span style={{fontWeight:700,color:INK}}>{fmt(amt)} <span style={{fontSize:10,color:MUTED}}>({pct}%)</span></span>
+                </div>
+                <div style={{background:"#e5e7eb",borderRadius:4,height:6}}>
+                  <div style={{width:pct+"%",background:"#2563eb",borderRadius:4,height:"100%"}}/>
+                </div>
+              </div>
+            );
+          })}
+          {catRows.length===0&&<p style={{fontSize:12,color:MUTED}}>No MTD claims yet.</p>}
+        </Card>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        {/* Top spenders */}
+        <Card style={{padding:16}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Top Spenders — This Month</div>
+          {topSpenders.map(({user:u,amt},i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:`1px solid ${BDR}`}}>
+              <div style={{width:22,height:22,borderRadius:"50%",background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:GD}}>{u?.avatar||"?"}</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:600,color:INK}}>{u?.name||"Unknown"}</div>
+                <div style={{fontSize:10,color:MUTED}}>{u?.dept||"—"} · {u?.gradeLabel||u?.role}</div>
+              </div>
+              <span style={{fontSize:12,fontWeight:700,color:INK}}>{fmt(amt)}</span>
+            </div>
+          ))}
+          {topSpenders.length===0&&<p style={{fontSize:12,color:MUTED}}>No spend data this month.</p>}
+        </Card>
+
+        {/* Budget utilisation */}
+        <Card style={{padding:16}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Budget Utilisation — Monthly</div>
+          {Object.entries(policy.monthlyDeptBudgets||{}).filter(([,b])=>b.monthly>0).map(([dept,b])=>{
+            const mSpent=appClaims.filter(c=>{const u=getUser(c.empId);return u?.dept===dept&&c.date?.slice(0,7)===thisMonth;}).reduce((s,c)=>s+c.amount,0);
+            const pct=Math.min(100,Math.round(mSpent/b.monthly*100));
+            return(
+              <div key={dept} style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3}}>
+                  <span style={{fontWeight:500,color:INK}}>{dept}</span>
+                  <span style={{fontWeight:600,color:pct>=100?"#dc2626":pct>=80?"#f59e0b":"#16a34a"}}>{fmt(mSpent)} / {fmt(b.monthly)} ({pct}%)</span>
+                </div>
+                <div style={{background:"#e5e7eb",borderRadius:4,height:7}}>
+                  <div style={{width:pct+"%",background:pct>=100?"#dc2626":pct>=80?"#f59e0b":"#7ED957",borderRadius:4,height:"100%",transition:"width .3s"}}/>
+                </div>
+                {pct>=100&&<div style={{fontSize:9,color:"#dc2626",fontWeight:600,marginTop:2}}>⛔ BREACHED — Admin only</div>}
+              </div>
+            );
+          })}
+          {Object.keys(policy.monthlyDeptBudgets||{}).length===0&&<p style={{fontSize:12,color:MUTED}}>No monthly budgets configured. Set them in Policy.</p>}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ─── LOCAL CONVEYANCE LOG ─────────────────────────────────────────────────────
+// Called from claim submission for Travel category with "local" subcategory
+function LocalConveyanceModal({trip,userId,userName,policy,onClose,onSubmit}){
+  const MODES=["Auto/Rickshaw","Taxi/Cab","Own Two-Wheeler","Own Car","Bus","Metro/Train","Other"];
+  const initRow=()=>({id:uid(),date:today(),from:"",to:"",km:"",mode:"",amount:"",voucher:""});
+  const[rows,setRows]=useState([initRow()]);
+  const[busy,setBusy]=useState(false);
+  const ratePerKm=policy?.conveyanceRatePerKm||4; // ₹4/km for own vehicle default
+  const updateRow=(i,patch)=>{
+    setRows(prev=>{
+      const a=[...prev];
+      const r={...a[i],...patch};
+      // Auto-calc amount for own vehicle based on km
+      if((r.mode==="Own Two-Wheeler"||r.mode==="Own Car")&&r.km){
+        r.amount=String(Math.round(parseFloat(r.km)*ratePerKm));
+      }
+      a[i]=r;return a;
+    });
+  };
+  const totalAmt=rows.reduce((s,r)=>s+(parseFloat(r.amount)||0),0);
+  const inpS={padding:"5px 8px",border:`1px solid ${BDR}`,borderRadius:6,fontSize:11,fontFamily:FB,width:"100%"};
+  const save=async()=>{
+    const valid=rows.every(r=>r.from&&r.to&&r.mode&&r.amount);
+    if(!valid){alert("All rows need From, To, Mode and Amount.");return;}
+    setBusy(true);
+    try{await onSubmit(rows,totalAmt);onClose();}
+    catch(e){alert("Failed: "+e.message);}
+    finally{setBusy(false);}
+  };
+  return(
+    <div data-modal="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:400,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{background:"var(--card,#fff)",borderRadius:16,padding:24,width:"min(820px,98vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 16px 48px rgba(0,0,0,.2)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+          <div>
+            <h2 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>🚗 Local Conveyance Log</h2>
+            <p style={{fontSize:11,color:MUTED,marginTop:2}}>Trip: {trip?.name} · Rate for own vehicle: ₹{ratePerKm}/km</p>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:MUTED}}>✕</button>
+        </div>
+
+        {/* Header row */}
+        <div style={{display:"grid",gridTemplateColumns:"28px 90px 1fr 1fr 50px 1fr 80px 80px 24px",gap:6,padding:"5px 0",marginBottom:4}}>
+          {["#","Date","From","To","km","Mode","Amount ₹","Voucher",""].map((h,i)=>(
+            <div key={i} style={{fontSize:9,fontWeight:700,color:MUTED,textTransform:"uppercase"}}>{h}</div>
+          ))}
+        </div>
+
+        {rows.map((r,i)=>(
+          <div key={r.id} style={{display:"grid",gridTemplateColumns:"28px 90px 1fr 1fr 50px 1fr 80px 80px 24px",gap:6,marginBottom:6,alignItems:"center"}}>
+            <div style={{fontSize:11,fontWeight:700,color:MUTED,textAlign:"center"}}>{i+1}</div>
+            <input type="date" value={r.date} onChange={e=>updateRow(i,{date:e.target.value})} style={inpS}/>
+            <input value={r.from} onChange={e=>updateRow(i,{from:e.target.value})} placeholder="From place" style={inpS}/>
+            <input value={r.to} onChange={e=>updateRow(i,{to:e.target.value})} placeholder="To place" style={inpS}/>
+            <input type="number" value={r.km} onChange={e=>updateRow(i,{km:e.target.value})} placeholder="km" style={inpS}/>
+            <select value={r.mode} onChange={e=>updateRow(i,{mode:e.target.value})} style={{...inpS,appearance:"none"}}>
+              <option value="">Select…</option>
+              {MODES.map(m=><option key={m}>{m}</option>)}
+            </select>
+            <input type="number" value={r.amount} onChange={e=>updateRow(i,{amount:e.target.value})} placeholder="₹" style={inpS}/>
+            <input value={r.voucher} onChange={e=>updateRow(i,{voucher:e.target.value})} placeholder="Voucher #" style={inpS}/>
+            {rows.length>1?<button onClick={()=>setRows(p=>p.filter((_,j)=>j!==i))} style={{background:"none",border:"none",cursor:"pointer",color:"#dc2626",fontSize:14,padding:0}}>✕</button>:<div/>}
+          </div>
+        ))}
+
+        <button onClick={()=>setRows(p=>[...p,initRow()])}
+          style={{background:"none",border:`1.5px dashed ${BDR}`,borderRadius:7,padding:"6px 14px",cursor:"pointer",fontSize:11,color:MUTED,width:"100%",marginBottom:12}}>
+          + Add Journey
+        </button>
+
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",background:GL,borderRadius:8,marginBottom:14}}>
+          <span style={{fontSize:12,fontWeight:600,color:INK}}>{rows.length} journey{rows.length!==1?"s":" "} · Total</span>
+          <span style={{fontSize:15,fontWeight:800,color:GD}}>₹{totalAmt.toLocaleString("en-IN")}</span>
+        </div>
+
+        <div style={{fontSize:10,color:MUTED,marginBottom:12}}>Own vehicle claims are auto-calculated at ₹{ratePerKm}/km. Actual receipts for taxi/auto/cab must be attached as part of the claim.</div>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <Btn v="outline" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={save} disabled={busy}>{busy?"Saving…":"Submit Conveyance →"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AretModal({trip,user,policy,onClose,onSubmit}){
   const categories=["Transportation","Local Conveyance","Lodging / Hotel","Diem Allowance","Communication Expenses","Others"];
   const[rows,setRows]=useState(categories.map(cat=>({cat,eligible:"",expected:"",reason:""})));
