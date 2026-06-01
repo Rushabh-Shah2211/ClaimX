@@ -5,6 +5,14 @@ import { createClient } from "@supabase/supabase-js";
 // ─── SUPABASE CLIENT ──────────────────────────────────────────────────────────
 const SUPA_URL  = import.meta.env.VITE_SUPABASE_URL  || "";
 const SUPA_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+
+// Production-safe logger — no output in prod builds, prevents data leakage via console
+const IS_DEV = import.meta.env.DEV === true;
+const log = { // eslint-disable-line
+  warn:  (...a) => { if(IS_DEV) log.warn(...a); },
+  error: (...a) => { if(IS_DEV) log.error(...a); },
+  info:  (...a) => { if(IS_DEV) log.info(...a); },
+};
 const supabase  = (SUPA_URL && SUPA_ANON)
   ? createClient(SUPA_URL, SUPA_ANON, {
       auth:{ persistSession:true, autoRefreshToken:true, storageKey:'xpensr_sb_auth' }
@@ -19,7 +27,7 @@ const setSupabaseJWT=async(accessToken, refreshToken)=>{
       access_token: accessToken,
       refresh_token: refreshToken || accessToken,
     });
-  }catch(e){console.warn('setSupabaseJWT:',e.message);}
+  }catch(e){log.warn('setSupabaseJWT:',e.message);}
 };
 
 const SB_ENABLED = !!supabase; // false → falls back to localStorage demo mode
@@ -167,7 +175,7 @@ const setRLSContext=async(userId)=>{
     await supabase.rpc('set_user_context',{p_user_id:userId});
   }catch(e){
     // Non-fatal — app still works, just without RLS enforcement on this session
-    console.warn('RLS context not set:',e.message);
+    log.warn('RLS context not set:',e.message);
   }
 };
 
@@ -497,8 +505,8 @@ function validateClaimAgainstLeg(claim, trip, policy){
 // ─── SB: load full company data ───────────────────────────────────────────────
 async function sbLoadCompany(cid){
   // Fetch each table separately so one failure doesn't kill the whole load
-  const safe=async(q,fallback=[])=>{try{const{data,error}=await q;if(error){console.warn("sbLoadCompany query error:",error.message);return fallback;}return data||fallback;}catch(e){console.warn("sbLoadCompany exception:",e.message);return fallback;}};
-  const safeSingle=async(q,fallback=null)=>{try{const{data,error}=await q;if(error){console.warn("sbLoadCompany single error:",error.message);return fallback;}return data||fallback;}catch(e){return fallback;}};
+  const safe=async(q,fallback=[])=>{try{const{data,error}=await q;if(error){log.warn("sbLoadCompany query error:",error.message);return fallback;}return data||fallback;}catch(e){log.warn("sbLoadCompany exception:",e.message);return fallback;}};
+  const safeSingle=async(q,fallback=null)=>{try{const{data,error}=await q;if(error){log.warn("sbLoadCompany single error:",error.message);return fallback;}return data||fallback;}catch(e){return fallback;}};
 
   const [meta,users,trips,claims,topups,audit,notifs,policy,tripLegs,diemComps,empGroups,groupMemberships]=await Promise.all([
     safeSingle(supabase.from("companies").select("*").eq("id",cid).single()),
@@ -546,7 +554,7 @@ async function sbLoadCompany(cid){
         try{
           const{data}=await supabase.storage.from("receipts").createSignedUrl(rc.storage_path, 3600);
           url = data?.signedUrl||null;
-        }catch(e){ console.warn("Failed to get signed URL for",rc.storage_path); }
+        }catch(e){ log.warn("Failed to get signed URL for",rc.storage_path); }
       }
       return{id:rc.id,name:rc.file_name,storagePath:rc.storage_path,type:rc.mime_type,url};
     }));
@@ -608,7 +616,9 @@ const mkPolicy=()=>({
 });
 
 // ─── DEMO DATA (localStorage fallback when Supabase not configured) ───────────
-const SA={id:"sa1",name:"Super Admin",email:"rushabh@rbshah.co.in",password:"superadmin@123",role:"superadmin",avatar:"SA"};
+// Super Admin credentials are environment-based — never hardcoded
+// Set VITE_SA_EMAIL and VITE_SA_PASS in Vercel env vars
+const SA={id:"sa1",name:"Super Admin",email:import.meta.env.VITE_SA_EMAIL||"",password:import.meta.env.VITE_SA_PASS||"",role:"superadmin",avatar:"SA"};
 const STORAGE_KEY="xpensr_v1_db";
 const SESSION_KEY="xpensr_v1_sess";
 const loadDB=()=>{try{const r=localStorage.getItem(STORAGE_KEY);return r?JSON.parse(r):null;}catch{return null;}};
@@ -620,12 +630,12 @@ const DB0={
   rbshah:{
     meta:{id:"rbshah",name:"R B Shah & Associates",industry:"CA Firm",plan:"Pro",maxUsers:20,status:"Active",createdOn:"2026-01-15"},
     users:[
-      {id:"mgr1",cid:"rbshah",name:"Rushabh Shah",  email:"rushabh@rbshah.in",  password:"admin@123",   role:"manager", avatar:"RS",dept:"Management",balance:0,    reimbursable:0,delegateTo:null},
-      {id:"emp1",cid:"rbshah",name:"Janvi Davda",   email:"janvi@rbshah.in",    password:"janvi@111",  role:"employee",avatar:"JD",dept:"Audit",      balance:25000,reimbursable:0,delegateTo:null},
-      {id:"emp2",cid:"rbshah",name:"Rutvik C.",     email:"rutvik@rbshah.in",   password:"rutvik@222", role:"employee",avatar:"RC",dept:"Tax",        balance:18000,reimbursable:0,delegateTo:null},
-      {id:"emp3",cid:"rbshah",name:"Drashti Patel", email:"drashti@rbshah.in",  password:"drashti@333",role:"employee",avatar:"DP",dept:"GST",        balance:12000,reimbursable:0,delegateTo:null},
-      {id:"emp4",cid:"rbshah",name:"Anisha Desai",  email:"anisha@rbshah.in",   password:"anisha@444", role:"employee",avatar:"AD",dept:"Finance",    balance:20000,reimbursable:0,delegateTo:null},
-      {id:"emp5",cid:"rbshah",name:"Ami Parekh",    email:"ami@rbshah.in",      password:"ami@555",    role:"employee",avatar:"AP",dept:"Billing",    balance:15000,reimbursable:0,delegateTo:null},
+      {id:"mgr1",cid:"rbshah",name:"Demo Manager",  email:"manager@demo.local",  password:"",role:"manager", avatar:"DM",dept:"Management",balance:0,    reimbursable:0,delegateTo:null},
+      {id:"emp1",cid:"rbshah",name:"Demo Employee 1",email:"emp1@demo.local",     password:"",role:"employee",avatar:"D1",dept:"Audit",      balance:25000,reimbursable:0,delegateTo:null},
+      {id:"emp2",cid:"rbshah",name:"Demo Employee 2",email:"emp2@demo.local",     password:"",role:"employee",avatar:"D2",dept:"Tax",        balance:18000,reimbursable:0,delegateTo:null},
+      {id:"emp3",cid:"rbshah",name:"Demo Employee 3",email:"emp3@demo.local",     password:"",role:"employee",avatar:"D3",dept:"GST",        balance:12000,reimbursable:0,delegateTo:null},
+      {id:"emp4",cid:"rbshah",name:"Demo Employee 4",email:"emp4@demo.local",     password:"",role:"employee",avatar:"D4",dept:"Finance",    balance:20000,reimbursable:0,delegateTo:null},
+      {id:"emp5",cid:"rbshah",name:"Demo Employee 5",email:"emp5@demo.local",     password:"",role:"employee",avatar:"D5",dept:"Billing",    balance:15000,reimbursable:0,delegateTo:null},
     ],
     trips:[
       {id:"TRP-001",name:"Mumbai Client Visit",type:"trip",  startDate:"2026-03-25",endDate:"2026-03-28",status:"closed",budget:50000, spent:43200,assignedTo:["emp1","emp2"]},
@@ -658,8 +668,8 @@ const DB0={
   rogermot:{
     meta:{id:"rogermot",name:"Roger Motors Pvt. Ltd.",industry:"Automotive",plan:"Starter",maxUsers:5,status:"Active",createdOn:"2026-02-10"},
     users:[
-      {id:"rm_mgr1",cid:"rogermot",name:"Rajesh Patel",email:"rajesh@rogermotors.in",password:"rajesh@123",role:"manager", avatar:"RP",dept:"Management",balance:0,    reimbursable:0,delegateTo:null},
-      {id:"rm_emp1",cid:"rogermot",name:"Sneha Joshi", email:"sneha@rogermotors.in", password:"sneha@111", role:"employee",avatar:"SJ",dept:"Sales",      balance:10000,reimbursable:0,delegateTo:null},
+      {id:"rm_mgr1",cid:"rogermot",name:"Demo Manager",email:"manager@demo2.local",password:"",role:"manager", avatar:"DM",dept:"Management",balance:0,    reimbursable:0,delegateTo:null},
+      {id:"rm_emp1",cid:"rogermot",name:"Demo Employee",email:"emp@demo2.local",   password:"",role:"employee",avatar:"DE",dept:"Sales",      balance:10000,reimbursable:0,delegateTo:null},
     ],
     trips:[{id:"RM-T1",name:"Delhi Auto Expo",type:"trip",startDate:"2026-04-01",endDate:"2026-04-05",status:"active",budget:80000,spent:12400,assignedTo:["rm_emp1"]}],
     claims:[
@@ -686,14 +696,14 @@ const emailAlert=async(to,subject,body,htmlBody)=>{
           <div style="font-size:11px;color:#9ca3af;padding-top:12px;border-top:1px solid #e8f0e5">XpensR by RB · claim-x-beta.vercel.app</div>
         </div></div>`
       })});
-  }catch(e){console.warn("Email:",e.message);}
+  }catch(e){log.warn("Email:",e.message);}
 };
 const whatsappAlert=async(phone,templateName,params=[])=>{
   if(!phone||!SB_ENABLED)return;
   try{
     await fetch("/api/whatsapp",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({phone,templateName,params})});
-  }catch(e){console.warn("WhatsApp:",e.message);}
+  }catch(e){log.warn("WhatsApp:",e.message);}
 };
 const claimEmailHtml=(action,claim,remarks,companyName)=>{
   const rows=[["Claim ID",claim.id],["Amount","\u20b9"+(claim.amount||0).toLocaleString("en-IN")],["Date",claim.date||""],["Category",claim.category||""],["Description",claim.desc||""],...(remarks?[["Remarks",remarks]]:[])];
@@ -709,7 +719,219 @@ const claimEmailHtml=(action,claim,remarks,companyName)=>{
 
 
 // ─── TRIP SETTLEMENT PDF ──────────────────────────────────────────────────────
-const generateSettlementPDF=async(trip,claims,getUser,companyName)=>{
+const generateSettlementPDF=async(trip,allClaims,getUser,companyName,allUsers,policy)=>{
+  const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
+  const W=210,ML=15,MR=15,CW=W-ML-MR;
+  let y=10;
+  const newPage=()=>{doc.addPage();y=14;};
+  const checkY=(need=14)=>{if(y+need>278)newPage();};
+
+  const sectionHeader=(text,rgb=[21,128,61])=>{
+    checkY(10);
+    doc.setFillColor(...rgb);doc.rect(ML,y,CW,7,"F");
+    doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(255,255,255);
+    doc.text(text,ML+3,y+5);y+=9;
+  };
+
+  // ── Header ────────────────────────────────────────────────
+  doc.setFillColor(15,28,9);doc.rect(0,0,W,22,"F");
+  doc.setFont("helvetica","bold");doc.setFontSize(13);doc.setTextColor(126,217,87);
+  doc.text("XpensR by RB",ML,14);
+  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(180,200,170);
+  doc.text("Trip Closure & Settlement Report",ML+34,14);
+  doc.setTextColor(130,130,130);
+  doc.text((companyName||"").slice(0,40),W-MR,14,{align:"right"});
+  y=28;
+
+  // ── Trip Title ──────────────────────────────────────────
+  doc.setFont("helvetica","bold");doc.setFontSize(14);doc.setTextColor(20,20,20);
+  doc.text((trip.name||"Trip").slice(0,50),ML,y);y+=6;
+  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(100,100,100);
+  const metaLine=[fmtDate(trip.startDate)||"",fmtDate(trip.endDate)||"",trip.tripMode==="reimbursement"?"Reimbursement Mode":"Balance Mode",trip.currency||"INR",trip.purpose?"Purpose: "+trip.purpose:"",trip.customerName?"Customer: "+trip.customerName:""].filter(Boolean).join(" · ");
+  doc.text(metaLine,ML,y);y+=8;
+  doc.text(`Generated: ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"})}`,ML,y);y+=8;
+
+  // ── Section 1: Budget Performance ───────────────────────
+  sectionHeader("1. BUDGET PERFORMANCE");
+  const tripClaims=allClaims.filter(c=>c.tripId===trip.id);
+  const approvedClaims=tripClaims.filter(c=>c.status==="Approved");
+  const rejectedClaims=tripClaims.filter(c=>c.status==="Rejected");
+  const pendingClaims=tripClaims.filter(c=>c.status==="Pending"||c.status?.includes("Approved")&&c.status!=="Approved");
+  const totalApproved=approvedClaims.reduce((s,c)=>s+c.amount,0);
+  const totalRejected=rejectedClaims.reduce((s,c)=>s+c.amount,0);
+  const totalPending=pendingClaims.reduce((s,c)=>s+c.amount,0);
+  const budget=trip.budget||0;
+  const topupsTotal=trip.topupsTotal||0;
+  const totalFunds=budget+topupsTotal;
+  const isBalance=trip.tripMode!=="reimbursement";
+  const variance=totalApproved-budget;
+
+  const budgetRows=[
+    ["Total Trip Budget",`₹${budget.toLocaleString("en-IN")}`],
+    ["Top-ups Added",topupsTotal>0?`+₹${topupsTotal.toLocaleString("en-IN")}`:"Nil"],
+    ["Total Available Funds",`₹${totalFunds.toLocaleString("en-IN")}`],
+    ["Total Invoices Submitted",`₹${(totalApproved+totalRejected+totalPending).toLocaleString("en-IN")} (${tripClaims.length} claims)`],
+    ["Total Approved Expenses",`₹${totalApproved.toLocaleString("en-IN")} (${approvedClaims.length} claims)`],
+    ["Rejected Claims",totalRejected>0?`₹${totalRejected.toLocaleString("en-IN")} (${rejectedClaims.length} claims)`:"Nil"],
+    ["Pending / In-Approval",totalPending>0?`₹${totalPending.toLocaleString("en-IN")} (${pendingClaims.length} claims)`:"Nil"],
+    ["Budget Variance",`${variance>0?"Overspent by ₹"+(variance).toLocaleString("en-IN"):"Saved ₹"+(-variance).toLocaleString("en-IN")}`],
+  ];
+  budgetRows.forEach(([k,v],i)=>{
+    checkY(7);
+    doc.setFillColor(i%2?248:255,i%2?252:255,i%2?248:255);doc.rect(ML,y,CW,6,"F");
+    doc.setFont("helvetica",i===7?"bold":"normal");doc.setFontSize(8.5);
+    doc.setTextColor(i===7?(variance>0?180:21):30,i===7?(variance>0?30:128):30,i===7?(variance>0?30:61):30);
+    doc.text(k,ML+3,y+4.2);doc.text(v,W-MR,y+4.2,{align:"right"});y+=6.5;
+  });
+  y+=4;
+
+  // ── Section 2: Category-wise Expense Breakdown ──────────
+  sectionHeader("2. CATEGORY-WISE EXPENSE vs LIMITS");
+  const cats=[...new Set(approvedClaims.map(c=>c.category))].sort();
+  const catLimits=trip.categoryLimits||{};
+  doc.setFont("helvetica","bold");doc.setFontSize(7.5);doc.setTextColor(255,255,255);
+  // already in section header; draw table header row
+  doc.setFillColor(60,80,60);doc.rect(ML,y,CW,6,"F");
+  doc.setTextColor(255,255,255);
+  const catCols=[[ML+3,55,"Category"],[ML+58,28,"Approved"],[ML+86,28,"Rejected"],[ML+114,28,"% of Budget"],[ML+142,30,"Limit %"],[ML+172,28,"Status"]];
+  catCols.forEach(([x,w,h])=>doc.text(h,x,y+4));y+=7;
+  cats.forEach((cat,i)=>{
+    const catApproved=approvedClaims.filter(c=>c.category===cat).reduce((s,c)=>s+c.amount,0);
+    const catRejected=rejectedClaims.filter(c=>c.category===cat).reduce((s,c)=>s+c.amount,0);
+    const pctOfBudget=budget>0?((catApproved/budget)*100).toFixed(1):"-";
+    const limitPct=catLimits[cat]||0;
+    const exceeded=limitPct>0&&parseFloat(pctOfBudget)>limitPct;
+    checkY(7);
+    doc.setFillColor(i%2?248:255,i%2?252:255,i%2?248:255);doc.rect(ML,y,CW,6,"F");
+    doc.setFont("helvetica","normal");doc.setFontSize(8);
+    doc.setTextColor(30,30,30);
+    doc.text(cat,ML+3,y+4.2);
+    doc.text(`₹${catApproved.toLocaleString("en-IN")}`,ML+58,y+4.2);
+    doc.text(catRejected>0?`₹${catRejected.toLocaleString("en-IN")}`:"—",ML+86,y+4.2);
+    doc.text(pctOfBudget+"%",ML+114,y+4.2);
+    doc.text(limitPct>0?limitPct+"%":"No limit",ML+142,y+4.2);
+    if(exceeded){doc.setTextColor(200,30,30);doc.text("⛔ Exceeded",ML+172,y+4.2);}
+    else{doc.setTextColor(21,128,61);doc.text("✓ Within",ML+172,y+4.2);}
+    y+=6.5;
+  });
+  if(cats.length===0){doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(100,100,100);doc.text("No approved expenses to show.",ML+3,y+4);y+=8;}
+  y+=4;
+
+  // ── Section 3: Per-Diem Summary ──────────────────────────
+  sectionHeader("3. PER-DIEM ALLOWANCE vs ACTUAL CLAIMS");
+  doc.setFont("helvetica","italic");doc.setFontSize(7.5);doc.setTextColor(80,80,80);
+  doc.text("Policy: whichever is higher (Diem Entitlement or Approved Meal Claims) is counted as trip expense.",ML+3,y+4);y+=8;
+  const assigned=trip.assignedTo||[];
+  if(assigned.length>0){
+    doc.setFillColor(60,80,60);doc.rect(ML,y,CW,6,"F");doc.setTextColor(255,255,255);doc.setFontSize(7.5);doc.setFont("helvetica","bold");
+    const dCols=[[ML+3,38,"Employee"],[ML+41,30,"Entitlement"],[ML+71,30,"Meal Claims"],[ML+101,30,"Approved"],[ML+131,28,"Effective"],[ML+159,30,"Flat Balance"]];
+    dCols.forEach(([x,,h])=>doc.text(h,x,y+4));y+=7;
+    let totalEff=0;
+    assigned.forEach((uid,i)=>{
+      const u=typeof getUser==="function"?getUser(uid):(allUsers||[]).find(x=>x.id===uid);
+      const diemEnt=empDiem?.(trip,uid)||0;
+      const mealApproved=approvedClaims.filter(c=>c.empId===uid&&["Meals","Food","Daily Allowance"].includes(c.category)).reduce((s,c)=>s+c.amount,0);
+      const mealClaimed=tripClaims.filter(c=>c.empId===uid&&["Meals","Food","Daily Allowance"].includes(c.category)).reduce((s,c)=>s+c.amount,0);
+      const effective=Math.max(diemEnt,mealApproved);
+      const flatBal=mealApproved<diemEnt?(diemEnt-mealApproved):0;
+      totalEff+=effective;
+      checkY(7);
+      doc.setFillColor(i%2?248:255,i%2?252:255,i%2?248:255);doc.rect(ML,y,CW,6,"F");
+      doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(30,30,30);
+      doc.text((u?.name||uid).slice(0,18),ML+3,y+4.2);
+      doc.text(`₹${diemEnt.toLocaleString("en-IN")}`,ML+41,y+4.2);
+      doc.text(`₹${mealClaimed.toLocaleString("en-IN")}`,ML+71,y+4.2);
+      doc.text(`₹${mealApproved.toLocaleString("en-IN")}`,ML+101,y+4.2);
+      doc.setFont("helvetica","bold");doc.text(`₹${effective.toLocaleString("en-IN")}`,ML+131,y+4.2);
+      doc.setFont("helvetica","normal");doc.setTextColor(mealApproved>=diemEnt?80:21,mealApproved>=diemEnt?80:128,mealApproved>=diemEnt?80:61);
+      doc.text(flatBal>0?`+₹${flatBal.toLocaleString("en-IN")}`:"—",ML+159,y+4.2);
+      y+=6.5;
+    });
+    checkY(8);doc.setFont("helvetica","bold");doc.setFontSize(8.5);doc.setTextColor(20,20,20);
+    doc.text(`Total Effective Diem (included in trip expenses): ₹${totalEff.toLocaleString("en-IN")}`,ML+3,y+5);y+=10;
+  }
+
+  // ── Section 4: Employee-wise Settlement ─────────────────
+  sectionHeader("4. EMPLOYEE-WISE SETTLEMENT");
+  let totalRecoverable=0,totalPayable=0;
+  if(assigned.length>0){
+    doc.setFillColor(60,80,60);doc.rect(ML,y,CW,6,"F");doc.setTextColor(255,255,255);doc.setFontSize(7.5);doc.setFont("helvetica","bold");
+    const sCols=[[ML+3,38,"Employee"],[ML+41,26,"Allocated"],[ML+67,22,"Topups"],[ML+89,26,"Approved"],[ML+115,22,"Rejected"],[ML+137,22,"Pending"],[ML+159,W-MR-160,"Settlement"]];
+    sCols.forEach(([x,,h])=>doc.text(h,x,y+4));y+=7;
+    assigned.forEach((uid,i)=>{
+      const u=typeof getUser==="function"?getUser(uid):(allUsers||[]).find(x=>x.id===uid);
+      const empApproved=approvedClaims.filter(c=>c.empId===uid).reduce((s,c)=>s+c.amount,0);
+      const empRejected=rejectedClaims.filter(c=>c.empId===uid).reduce((s,c)=>s+c.amount,0);
+      const empPending=pendingClaims.filter(c=>c.empId===uid).reduce((s,c)=>s+c.amount,0);
+      const empAlloc=(trip.employeeBudgets?.[uid]?.allocated||0)||Math.round(budget/Math.max(assigned.length,1));
+      const empTopup=(trip.employeeBudgets?.[uid]?.topups||0);
+      const empFunds=empAlloc+empTopup;
+      const settlement=isBalance?(empFunds-empApproved):-empApproved;
+      if(isBalance&&settlement>0)totalRecoverable+=settlement;
+      if(isBalance&&settlement<0)totalPayable+=(-settlement);
+      checkY(7);
+      doc.setFillColor(i%2?248:255,i%2?252:255,i%2?248:255);doc.rect(ML,y,CW,6,"F");
+      doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(30,30,30);
+      doc.text((u?.name||uid).slice(0,18),ML+3,y+4.2);
+      doc.text(`₹${empAlloc.toLocaleString("en-IN")}`,ML+41,y+4.2);
+      doc.text(empTopup>0?`+₹${empTopup.toLocaleString("en-IN")}`:"—",ML+67,y+4.2);
+      doc.text(`₹${empApproved.toLocaleString("en-IN")}`,ML+89,y+4.2);
+      doc.text(empRejected>0?`₹${empRejected.toLocaleString("en-IN")}`:"—",ML+115,y+4.2);
+      doc.text(empPending>0?`₹${empPending.toLocaleString("en-IN")}`:"—",ML+137,y+4.2);
+      doc.setFont("helvetica","bold");
+      doc.setTextColor(settlement>0?200:settlement<0?21:60,settlement>0?30:settlement<0?128:80,settlement>0?30:settlement<0?61:60);
+      const sText=settlement>0?`↩ Recover ₹${settlement.toLocaleString("en-IN")}`:settlement<0?`↪ Pay ₹${(-settlement).toLocaleString("en-IN")}`:"✓ Settled";
+      doc.text(sText,ML+159,y+4.2);
+      y+=6.5;
+    });
+    y+=4;
+    // Net settlement summary
+    checkY(18);
+    doc.setFillColor(240,253,233);doc.rect(ML,y,CW,16,"F");
+    doc.setDrawColor(21,128,61);doc.rect(ML,y,CW,16,"S");
+    doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(20,20,20);
+    if(isBalance){
+      doc.text(`Total Recoverable from Employees: ₹${totalRecoverable.toLocaleString("en-IN")}`,ML+5,y+6);
+      doc.text(`Total Payable to Employees: ₹${totalPayable.toLocaleString("en-IN")}`,ML+5,y+12);
+    } else {
+      doc.text(`Total to Reimburse: ₹${totalApproved.toLocaleString("en-IN")}`,ML+5,y+9);
+    }
+    y+=20;
+  }
+
+  // ── Section 5: Invoice-wise Detail ──────────────────────
+  if(y>230){newPage();}
+  sectionHeader("5. INVOICE-WISE CLAIM DETAIL");
+  doc.setFillColor(60,80,60);doc.rect(ML,y,CW,6,"F");doc.setTextColor(255,255,255);doc.setFontSize(7);doc.setFont("helvetica","bold");
+  const iCols=[[ML+1,22,"Date"],[ML+23,24,"Claim ID"],[ML+47,32,"Employee"],[ML+79,26,"Category"],[ML+105,26,"Vendor"],[ML+131,20,"Amount"],[ML+151,24,"Status"],[ML+175,24,"Remarks"]];
+  iCols.forEach(([x,,h])=>doc.text(h,x,y+4));y+=7;
+  tripClaims.sort((a,b)=>(a.date||"").localeCompare(b.date||"")).forEach((c,idx)=>{
+    checkY(7);
+    const emp=typeof getUser==="function"?getUser(c.empId):(allUsers||[]).find(u=>u.id===c.empId);
+    const statusColor=c.status==="Approved"?[21,128,61]:c.status==="Rejected"?[200,30,30]:[180,100,0];
+    doc.setFillColor(idx%2?248:255,idx%2?252:255,idx%2?248:255);doc.rect(ML,y,CW,6,"F");
+    doc.setFont("helvetica","normal");doc.setFontSize(6.5);doc.setTextColor(30,30,30);
+    doc.text(fmtDate(c.date)||"",ML+1,y+4);
+    doc.text((c.id||"").slice(-10),ML+23,y+4);
+    doc.text((emp?.name||"").slice(0,14),ML+47,y+4);
+    doc.text((c.category||"").slice(0,14),ML+79,y+4);
+    doc.text((c.vendor||"—").slice(0,13),ML+105,y+4);
+    doc.text(`₹${c.amount.toLocaleString("en-IN")}`,ML+131,y+4);
+    doc.setTextColor(...statusColor);doc.text(c.status||"",ML+151,y+4);
+    doc.setTextColor(80,80,80);doc.text((c.remarks||"").slice(0,14),ML+175,y+4);
+    y+=6.5;
+  });
+
+  // ── Footer ─────────────────────────────────────────────
+  const pageCount=doc.internal.getNumberOfPages();
+  for(let i=1;i<=pageCount;i++){
+    doc.setPage(i);
+    doc.setFont("helvetica","normal");doc.setFontSize(7);doc.setTextColor(150,150,150);
+    doc.text(`XpensR by RB — Trip Closure Report — ${trip.name} — Page ${i}/${pageCount}`,W/2,290,{align:"center"});
+  }
+
+  return doc;
+};
   const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
   const W=210,ML=15,MR=15,CW=W-ML-MR;
   let y=10;
@@ -959,7 +1181,7 @@ function useOffline(){
 class ErrorBoundary extends Component{
   constructor(p){super(p);this.state={error:null};}
   static getDerivedStateFromError(e){return{error:e};}
-  componentDidCatch(e,i){console.error("XpensR Error:",e,i);}
+  componentDidCatch(e,i){log.error("XpensR Error:",e,i);}
   render(){
     if(this.state.error){return(
       <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f5faf3",fontFamily:FB,padding:24}}>
@@ -1211,8 +1433,8 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
         });
         if(error)throw new Error(error.message);
       } else {
-        await new Promise(r=>setTimeout(r,1200));
-        await attempt("rushabh@rbshah.co.in","admin@123");
+        // Google OAuth not configured — prompt user to use username/password
+        throw new Error("Google sign-in is not configured. Please use your username and password.");
       }
     }catch(e){setErr(e.message);setGB(false);}
   };
@@ -1278,10 +1500,16 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
   ];
 
   const tiers=[
-    {name:"Starter",users:"1–5 users",price:"₹299/user/month",color:"#3b82f6",features:["All core features","Email notifications","CSV/Tally exports","3 trips at a time"]},
-    {name:"Growth",users:"6–20 users",price:"₹249/user/month",color:"#7ED957",features:["Everything in Starter","WhatsApp notifications","Multi-level approvals","Trip ledger & balances","Priority support"],popular:true},
-    {name:"Scale",users:"21–50 users",price:"₹199/user/month",color:"#7c3aed",features:["Everything in Growth","Advanced analytics","Delegation workflows","Custom policy rules","Dedicated support"]},
-    {name:"Enterprise",users:"50+ users",price:"₹149/user/month",color:"#f59e0b",features:["Everything in Scale","Custom integrations","SLA guarantee","On-premise option","Account manager"]},
+    {name:"Starter",users:"1–5 users",price:"₹299/user/month",color:"#3b82f6",features:["All core features","Email notifications","CSV/Tally/Zoho exports","3 trips at a time","AI add-on available"]},
+    {name:"Growth",users:"6–20 users",price:"₹249/user/month",color:"#7ED957",features:["Everything in Starter","WhatsApp notifications","Multi-level approvals","Trip ledger & balances","AI OCR pack included (50K tokens)","Priority support"],popular:true},
+    {name:"Scale",users:"21–50 users",price:"₹199/user/month",color:"#7c3aed",features:["Everything in Growth","Advanced analytics","Delegation workflows","Custom policy rules","AI OCR pack included (200K tokens)","Dedicated support"]},
+    {name:"Enterprise",users:"50+ users",price:"₹149/user/month",color:"#f59e0b",features:["Everything in Scale","Custom integrations","SLA guarantee","On-premise option","AI OCR pack included (500K tokens)","Account manager"]},
+  ];
+  const aiPacks=[
+    {label:"Starter Pack",tokens:"50,000",price:"₹199",perK:"₹3.98/1K",desc:"~50 invoice scans"},
+    {label:"Growth Pack",tokens:"200,000",price:"₹599",perK:"₹3.00/1K",desc:"~200 scans"},
+    {label:"Pro Pack",tokens:"500,000",price:"₹1,199",perK:"₹2.40/1K",desc:"~500 scans"},
+    {label:"Enterprise Pack",tokens:"20,00,000",price:"₹3,999",perK:"₹2.00/1K",desc:"~2000 scans"},
   ];
 
   if(isPasswordRecovery){
@@ -1414,6 +1642,28 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
               </div>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* ── AI TOKEN PACKS ── */}
+      <section style={{padding:"40px max(24px,5vw) 50px",background:"#f0f9ff"}}>
+        <div style={{maxWidth:1180,margin:"0 auto"}}>
+          <div style={{textAlign:"center",marginBottom:24}}>
+            <div style={{display:"inline-block",background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,padding:"6px 18px",fontSize:12,color:"#2563eb",fontWeight:700,marginBottom:10}}>🤖 AI Invoice OCR — Optional Add-on</div>
+            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:800,color:"#0f1c09",marginBottom:6}}>Pay only for AI you use</h3>
+            <p style={{color:"#374151",fontSize:13}}>Token packs never expire. Tokens are shared across all employees in your company.</p>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12}}>
+            {aiPacks.map(p=>(
+              <div key={p.label} style={{background:"#fff",border:"1px solid #bfdbfe",borderRadius:12,padding:"18px 20px"}}>
+                <div style={{fontWeight:700,color:"#1d4ed8",fontSize:14,marginBottom:4}}>{p.label}</div>
+                <div style={{fontSize:24,fontWeight:800,color:"#0f1c09",marginBottom:2}}>{p.price}</div>
+                <div style={{fontSize:11,color:"#6b7280",marginBottom:6}}>{p.tokens} tokens · {p.perK}</div>
+                <div style={{fontSize:11,color:"#2563eb",fontWeight:600}}>{p.desc}</div>
+              </div>
+            ))}
+          </div>
+          <p style={{textAlign:"center",marginTop:14,fontSize:11,color:"#6b7280"}}>1 invoice scan ≈ 800–1,200 tokens · 1 chat message ≈ 200–500 tokens · Tokens never expire · Activated by your XpensR account manager</p>
         </div>
       </section>
 
@@ -1833,14 +2083,191 @@ function SaUsers({DB,userCounts}){
   </>);
 }
 function SaBilling({allCo,DB,userCounts}){
-  return(<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-    {allCo.map(co=>{const emps=SB_ENABLED?(userCounts[co.meta.id]||0):(DB[co.meta.id]?.users?.filter(u=>u.role==="employee").length||0);const tier=TIERED.find(t=>emps>=t.min&&emps<=t.max)||TIERED[0];return(
-      <Card key={co.meta.id} style={{padding:20}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}><div><div style={{fontWeight:700,color:INK}}>{co.meta.name}</div><div style={{fontSize:11,color:MUTED}}>{emps} employees</div></div><span style={{fontFamily:FD,fontSize:18,fontWeight:700,color:G}}>{fmt(emps*tier.ppu)}/mo</span></div></Card>
-    );})}
-    <Card style={{padding:20}}><div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Pricing Tiers</div>
-      <table style={{width:"100%"}}><thead><tr><th>Users</th><th>₹/user/mo</th></tr></thead><tbody>{TIERED.map(t=><tr key={t.min}><td style={{fontWeight:600,fontSize:12}}>{t.min}–{t.max===999?"50+":t.max}</td><td style={{color:INK,fontWeight:700,fontSize:12}}>{fmt(t.ppu)}</td></tr>)}</tbody></table>
-    </Card>
-  </div>);
+  const [aiTokens, setAiTokens] = useState({}); // companyId → {balance, used_total, plan_label}
+  const [aiUsage, setAiUsage] = useState([]);    // recent usage log rows
+  const [packForm, setPackForm] = useState({companyId:"", pack:"", customTokens:"", amountInr:""});
+  const [packBusy, setPackBusy] = useState(false);
+  const [tab, setAiTab] = useState("billing"); // "billing" | "tokens" | "usage"
+
+  const AI_PACKS = [
+    {id:"starter",  label:"Starter Pack",    tokens:50000,   price:199},
+    {id:"growth",   label:"Growth Pack",     tokens:200000,  price:599},
+    {id:"pro",      label:"Pro Pack",        tokens:500000,  price:1199},
+    {id:"enterprise",label:"Enterprise Pack",tokens:2000000, price:3999},
+    {id:"custom",   label:"Custom Amount",   tokens:0,       price:0},
+  ];
+
+  useEffect(()=>{
+    if(!SB_ENABLED) return;
+    // Load token balances for all companies
+    supabase.from("ai_tokens").select("company_id,balance,used_total,plan_label,is_active,last_topup_at")
+      .then(({data})=>{
+        if(data){const m={};data.forEach(r=>{m[r.company_id]=r;});setAiTokens(m);}
+      });
+    // Load recent usage
+    supabase.from("ai_usage_log").select("*").order("created_at",{ascending:false}).limit(200)
+      .then(({data})=>{ if(data) setAiUsage(data); });
+  },[]);
+
+  const sellPack = async() => {
+    if(!packForm.companyId) return;
+    const selectedPack = AI_PACKS.find(p=>p.id===packForm.pack);
+    if(!selectedPack) return;
+    const tokens = packForm.pack==="custom" ? parseInt(packForm.customTokens)||0 : selectedPack.tokens;
+    const amountInr = packForm.pack==="custom" ? parseInt(packForm.amountInr)||0 : selectedPack.price;
+    if(tokens<=0){alert("Enter token amount");return;}
+    setPackBusy(true);
+    try{
+      const {data,error} = await supabase.rpc("add_ai_tokens",{
+        p_company_id: packForm.companyId,
+        p_tokens: tokens,
+        p_pack_name: selectedPack.label,
+        p_amount_inr: amountInr,
+        p_added_by: "superadmin",
+        p_note: `Sold by Super Admin · ₹${amountInr}`
+      });
+      if(error) throw new Error(error.message);
+      // Refresh balances
+      const {data:fresh} = await supabase.from("ai_tokens").select("company_id,balance,used_total,plan_label,is_active");
+      if(fresh){const m={};fresh.forEach(r=>{m[r.company_id]=r;});setAiTokens(m);}
+      setPackForm({companyId:"",pack:"",customTokens:"",amountInr:""});
+      alert(`✓ ${tokens.toLocaleString("en-IN")} tokens added to ${allCo.find(c=>c.meta.id===packForm.companyId)?.meta?.name||packForm.companyId}`);
+    }catch(e){alert("Failed: "+e.message);}
+    setPackBusy(false);
+  };
+
+  const inpS={padding:"8px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,background:"var(--input-bg,#fafff8)",width:"100%"};
+
+  return(
+    <div>
+      {/* Sub-nav */}
+      <div style={{display:"flex",gap:8,marginBottom:16}}>
+        {[["billing","💼 Billing"],["tokens","🤖 AI Tokens"],["usage","📊 Token Usage"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setAiTab(id)} style={{padding:"7px 16px",borderRadius:7,border:`1.5px solid ${tab===id?G:BDR}`,background:tab===id?G:"transparent",color:tab===id?"#fff":INK,fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:FB}}>{label}</button>
+        ))}
+      </div>
+
+      {tab==="billing"&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        {allCo.map(co=>{const emps=SB_ENABLED?(userCounts[co.meta.id]||0):(DB[co.meta.id]?.users?.filter(u=>u.role==="employee").length||0);const tier=TIERED.find(t=>emps>=t.min&&emps<=t.max)||TIERED[0];return(
+          <Card key={co.meta.id} style={{padding:20}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}><div><div style={{fontWeight:700,color:INK}}>{co.meta.name}</div><div style={{fontSize:11,color:MUTED}}>{emps} employees</div></div><span style={{fontFamily:FD,fontSize:18,fontWeight:700,color:G}}>{fmt(emps*tier.ppu)}/mo</span></div></Card>
+        );})}
+        <Card style={{padding:20}}><div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Pricing Tiers</div>
+          <table style={{width:"100%"}}><thead><tr><th>Users</th><th>₹/user/mo</th></tr></thead><tbody>{TIERED.map(t=><tr key={t.min}><td style={{fontWeight:600,fontSize:12}}>{t.min}–{t.max===999?"50+":t.max}</td><td style={{color:INK,fontWeight:700,fontSize:12}}>{fmt(t.ppu)}</td></tr>)}</tbody></table>
+        </Card>
+      </div>}
+
+      {tab==="tokens"&&<div>
+        {/* Sell Pack Form */}
+        <Card style={{padding:20,marginBottom:16,borderColor:G}}>
+          <div style={{fontFamily:FB,fontSize:14,fontWeight:700,color:INK,marginBottom:14}}>🤖 Sell AI Token Pack to Company</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:12}}>
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Company *</label>
+              <select value={packForm.companyId} onChange={e=>setPackForm({...packForm,companyId:e.target.value})} style={{...inpS,appearance:"none"}}>
+                <option value="">Select company…</option>
+                {allCo.map(c=><option key={c.meta.id} value={c.meta.id}>{c.meta.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Pack *</label>
+              <select value={packForm.pack} onChange={e=>setPackForm({...packForm,pack:e.target.value})} style={{...inpS,appearance:"none"}}>
+                <option value="">Select pack…</option>
+                {AI_PACKS.map(p=><option key={p.id} value={p.id}>{p.label}{p.tokens>0?` — ${(p.tokens/1000).toFixed(0)}K tokens`:""}{p.price>0?` (₹${p.price})`:"" }</option>)}
+              </select>
+            </div>
+            {packForm.pack==="custom"&&<>
+              <div>
+                <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Tokens *</label>
+                <input type="number" placeholder="e.g. 100000" value={packForm.customTokens} onChange={e=>setPackForm({...packForm,customTokens:e.target.value})} style={inpS}/>
+              </div>
+              <div>
+                <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Amount charged (₹) *</label>
+                <input type="number" placeholder="e.g. 399" value={packForm.amountInr} onChange={e=>setPackForm({...packForm,amountInr:e.target.value})} style={inpS}/>
+              </div>
+            </>}
+          </div>
+          <div style={{display:"flex",gap:10,alignItems:"center"}}>
+            <Btn onClick={sellPack} disabled={packBusy||!packForm.companyId||!packForm.pack} style={{padding:"8px 20px"}}>
+              {packBusy?"Adding…":"✓ Add Tokens"}
+            </Btn>
+            {packForm.pack&&packForm.pack!=="custom"&&(()=>{const p=AI_PACKS.find(x=>x.id===packForm.pack);return p?<div style={{fontSize:11,color:MUTED}}>{p.tokens.toLocaleString("en-IN")} tokens · ₹{p.price} · ₹{(p.price/p.tokens*1000).toFixed(2)}/1K tokens</div>:null;})()}
+          </div>
+        </Card>
+
+        {/* Company-wise token balances */}
+        <Card>
+          <div style={{padding:"12px 16px",borderBottom:`1px solid ${BDR}`,fontFamily:FB,fontSize:13,fontWeight:700,color:INK}}>AI Token Balances — All Companies</div>
+          <table style={{width:"100%"}}>
+            <thead><tr style={{background:"#f9fafb"}}>
+              {["Company","Balance","Used Total","Plan","Status","Last Topup"].map(h=>(
+                <th key={h} style={{padding:"8px 12px",fontSize:10,fontWeight:700,color:MUTED,textAlign:"left",textTransform:"uppercase"}}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {allCo.map(co=>{
+                const t=aiTokens[co.meta.id];
+                const balance=t?.balance||0;
+                const used=t?.used_total||0;
+                const isActive=t?.is_active!==false;
+                return(
+                  <tr key={co.meta.id} style={{borderBottom:`1px solid #f5f5f5`}}>
+                    <td style={{padding:"9px 12px",fontWeight:600,fontSize:12}}>{co.meta.name}</td>
+                    <td style={{padding:"9px 12px"}}>
+                      <span style={{fontWeight:700,fontSize:13,color:balance<=0?"#dc2626":balance<10000?"#f59e0b":"#16a34a"}}>
+                        {balance>0?(balance/1000).toFixed(1)+"K":"—"}
+                      </span>
+                    </td>
+                    <td style={{padding:"9px 12px",fontSize:11,color:MUTED}}>{used>0?(used/1000).toFixed(1)+"K":"—"}</td>
+                    <td style={{padding:"9px 12px",fontSize:11}}>{t?.plan_label||"—"}</td>
+                    <td style={{padding:"9px 12px"}}>
+                      {t?<span style={{background:isActive&&balance>0?"#dcfce7":balance<=0?"#fee2e2":"#fef3c7",color:isActive&&balance>0?"#16a34a":balance<=0?"#dc2626":"#92400e",borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700}}>
+                        {isActive&&balance>0?"Active":balance<=0?"Exhausted":"Paused"}
+                      </span>:<span style={{color:MUTED,fontSize:11}}>No subscription</span>}
+                    </td>
+                    <td style={{padding:"9px 12px",fontSize:11,color:MUTED}}>{t?.last_topup_at?new Date(t.last_topup_at).toLocaleDateString("en-IN"):"—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div style={{padding:"12px 16px",borderTop:`1px solid ${BDR}`,background:"#f0fde9",borderRadius:"0 0 10px 10px"}}>
+            <div style={{fontSize:11,color:GD,fontWeight:600}}>
+              💡 Cost guide: Claude Haiku ~₹0.20/1K tokens · Starter Pack (50K/₹199) = ~85% gross margin · Growth Pack (200K/₹599) = ~87%
+            </div>
+          </div>
+        </Card>
+      </div>}
+
+      {tab==="usage"&&<Card>
+        <div style={{padding:"12px 16px",borderBottom:`1px solid ${BDR}`,fontFamily:FB,fontSize:13,fontWeight:700,color:INK}}>AI Token Usage Log (last 200 calls)</div>
+        <table style={{width:"100%"}}>
+          <thead><tr style={{background:"#f9fafb"}}>
+            {["Time","Company","Feature","Model","Tokens Used","Input","Output"].map(h=>(
+              <th key={h} style={{padding:"7px 10px",fontSize:10,fontWeight:700,color:MUTED,textAlign:"left",textTransform:"uppercase"}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {aiUsage.map((row,i)=>(
+              <tr key={row.id||i} style={{borderBottom:`1px solid #f5f5f5`}}>
+                <td style={{padding:"7px 10px",fontSize:10,color:MUTED,fontFamily:"monospace"}}>{new Date(row.created_at).toLocaleString("en-IN",{dateStyle:"short",timeStyle:"short"})}</td>
+                <td style={{padding:"7px 10px",fontSize:11,fontWeight:600}}>{allCo.find(c=>c.meta.id===row.company_id)?.meta?.name||row.company_id}</td>
+                <td style={{padding:"7px 10px"}}>
+                  <span style={{background:row.feature==="ocr"?"#eff6ff":"#f5f3ff",color:row.feature==="ocr"?"#2563eb":"#7c3aed",borderRadius:4,padding:"2px 6px",fontSize:10,fontWeight:600}}>
+                    {row.feature==="ocr"?"📷 OCR":"💬 Chat"}
+                  </span>
+                </td>
+                <td style={{padding:"7px 10px",fontSize:10,color:MUTED,fontFamily:"monospace"}}>{row.model?.replace("claude-","").replace("-20250514","")}</td>
+                <td style={{padding:"7px 10px",fontWeight:700,fontSize:12,color:INK}}>{row.tokens_used?.toLocaleString("en-IN")}</td>
+                <td style={{padding:"7px 10px",fontSize:11,color:MUTED}}>{row.input_tokens?.toLocaleString("en-IN")}</td>
+                <td style={{padding:"7px 10px",fontSize:11,color:MUTED}}>{row.output_tokens?.toLocaleString("en-IN")}</td>
+              </tr>
+            ))}
+            {aiUsage.length===0&&<tr><td colSpan={7} style={{padding:20,textAlign:"center",color:MUTED,fontSize:12}}>No AI usage yet</td></tr>}
+          </tbody>
+        </table>
+      </div>}
+    </div>
+  );
 }
 function SaAudit({DB}){
   const[rows,setRows]=useState([]);
@@ -2135,7 +2562,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         try{
           const{data:erData,error:erErr}=await supabase.from("edit_requests").select("*").eq("company_id",cid).order("created_at",{ascending:false});
           if(!erErr&&erData)setEditRequests(erData.map(r=>({...r,claimId:r.claim_id||r.claimId,requestedBy:r.requested_by||r.requestedBy,requesterName:r.requester_name||r.requesterName,windowOpen:r.window_open||r.windowOpen,windowExpires:r.window_expires||r.windowExpires})));
-        }catch(erEx){console.warn("edit_requests init:",erEx.message);}
+        }catch(erEx){log.warn("edit_requests init:",erEx.message);}
       }
     }catch(e){setSbError(e.message);}
     finally{setLoadingData(false);}
@@ -2151,7 +2578,15 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     if(!SB_ENABLED&&cid)setCoData(DB[cid]);
   },[DB,cid]);
 
-  // ── Background refresh: every 5 minutes only (no live subscription that disrupts input) ──
+  // Load AI token balance for this company
+  useEffect(()=>{
+    if(!SB_ENABLED||!cid) return;
+    supabase.from("ai_tokens").select("balance,used_total,is_active,plan_label").eq("company_id",cid).maybeSingle()
+      .then(({data})=>{
+        if(data) setAiTokenBalance(data.balance||0);
+        else setAiTokenBalance(0);
+      });
+  },[cid]); (no live subscription that disrupts input) ──
   useEffect(()=>{
     if(!SB_ENABLED||!cid)return;
     const interval=setInterval(()=>{
@@ -2197,6 +2632,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const[showMobMore,setShowMobMore]=useState(false);
   const[showFab,setShowFab]=useState(false);
   const[showExportMenu,setShowExportMenu]=useState(false);
+  const[aiTokenBalance,setAiTokenBalance]=useState(null); // null = not yet loaded
 
   // Keyboard shortcuts
   useEffect(()=>{
@@ -2227,7 +2663,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     await notifyApprovers(req.empId,`💰 Fund request: ${req.empName} needs ₹${req.amount.toLocaleString("en-IN")} for "${tripName}" — ${req.reason}`,"warn");
     if(SB_ENABLED){
       const{error:topupErr}=await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:"Pending",trip_id:req.tripId});
-      if(topupErr){console.error("Topup insert error:",topupErr.message);toast("Fund request notification sent but DB save failed: "+topupErr.message,"error");return;}
+      if(topupErr){log.error("Topup insert error:",topupErr.message);toast("Fund request notification sent but DB save failed: "+topupErr.message,"error");return;}
       await loadFromSB();
     }
     toast("✓ Fund request sent to manager");
@@ -2244,7 +2680,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     if(online&&queue.length>0){
       flush(async item=>{
         if(item.type==="claim"){
-          if(SB_ENABLED){try{await supabase.from("claims").insert(item.sbRow);}catch(e){console.error(e);}}
+          if(SB_ENABLED){try{await supabase.from("claims").insert(item.sbRow);}catch(e){log.error(e);}}
           else setClaims(p=>[item.data,...p]);
         }
       });
@@ -2345,7 +2781,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const pendingClaims=visibleClaims.filter(c=>
     c.status==="Pending" ||
     (c.status?.startsWith("Level ")&&canApprove) ||
-    (c.status==="Manager Approved"&&isAdmin)
+    (c.status==="Manager Approved"&&isAdmin) ||
+    (c.status==="Budget-Escalation Approved"&&isManager)
   );
 
   // Claims this specific manager/admin should approve
@@ -2367,11 +2804,19 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   // Claims to show in ApprovalsTab — from reporting chain + grade engine
   const approvableClaimsForMe=(()=>{
-    if(!canApprove) return [];
+    if(!canApprove&&!isCFO&&!isHR) return [];
 
-    return pendingClaims.filter(c=>{
+    // Budget-breach escalation claims visible to CFO/HR/Admin
+    const escalationClaims=visibleClaims.filter(c=>
+      c.status==="Pending"&&c.budgetBreached&&
+      ["admin","cfo","hr"].includes(user.role)&&
+      c.empId!==user.id
+    );
+
+    if(!canApprove) return escalationClaims;
+
+    const regularClaims=pendingClaims.filter(c=>{
       if(c.empId===user.id) return false;
-      // Must be in my visible chain
       if(!isAdmin&&!visibleUserIds.has(c.empId)) return false;
 
       if(co.policy?.gradeBased&&(co.policy?.approvalHierarchy?.length>0)){
@@ -2391,6 +2836,13 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         emp.dept===u.dept
       );
       return inMyDept||delegatedToMe;
+    });
+
+    // Deduplicate
+    const seen=new Set();
+    return [...escalationClaims,...regularClaims].filter(c=>{
+      if(seen.has(c.id)) return false;
+      seen.add(c.id); return true;
     });
   })();
   const pendingTopups=(co.topups||[]).filter(t=>t.status==="Pending");
@@ -2442,7 +2894,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               mode:l.mode||"",city_tier:l.cityTier||"D",
               hotel_limit:l.hotelLimit||0,diem_rate:l.diemRate||0,days:l.days||1,
             }))
-          ).then(()=>{}).catch(e=>console.warn("Legs insert:",e.message));
+          ).then(()=>{}).catch(e=>log.warn("Legs insert:",e.message));
         }
         // Notify via grade-based approver routing
         if(tripStatus==="pending_approval"){
@@ -2645,7 +3097,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     if(!SB_ENABLED){return;}
     try{
       const{data,error}=await supabase.from("edit_requests").select("*").eq("company_id",cid).order("created_at",{ascending:false});
-      if(error){console.warn("edit_requests:",error.message);return;}
+      if(error){log.warn("edit_requests:",error.message);return;}
       if(data)setEditRequests(data.map(r=>({
         ...r,
         // Normalise snake_case → camelCase so component can use either
@@ -2655,7 +3107,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         windowOpen:r.window_open||r.windowOpen,
         windowExpires:r.window_expires||r.windowExpires,
       })));
-    }catch(e){console.warn("loadEditRequests:",e.message);}
+    }catch(e){log.warn("loadEditRequests:",e.message);}
   };
 
   const submitEditRequest=async(claim,reason)=>{
@@ -2664,7 +3116,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     if(SB_ENABLED){
       const{error:erErr}=await supabase.from("edit_requests").insert(req);
       if(erErr){
-        console.error("edit_requests insert error:",erErr.message);
+        log.error("edit_requests insert error:",erErr.message);
         if(erErr.message?.includes("does not exist")||erErr.code==="42P01"){
           toast("Edit requests table not set up — run xpensr_missing_tables.sql in Supabase","error");
           return;
@@ -2900,13 +3352,12 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const claimId="EXP-"+uid();
 
     const claimData={id:claimId,tripId,empId:user.id,date:claimDate,category:form.category,desc:form.desc,amount,origAmount:parseFloat(form.origAmount||amount),origCur:form.currency||"INR",
-      // Never reveal auto-approval to employee — show as plain "Pending" initially
       status:auto?"Approved":"Pending",autoApproved:auto,
       receipts:form.receipts||[],
-      remarks:auto?"Approved":"",
+      remarks:auto?"Approved":routingRemark,
+      budgetBreached,
       flagged:catEx,anomaly:isAnomaly,anomalyReasons:[...reasons,...(Object.keys(form.manualEdits||{}).length>0?[`Fields manually edited after OCR scan: ${Object.keys(form.manualEdits||{}).join(", ")}`]:[])],manualEdits:form.manualEdits||{},comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||"",projectCode:form.projectCode||selectedTrip?.projectCode||"",
       gstAmount:parseFloat(form.gstAmount)||0,gstItc:null,
-      // Itinerary linkage
       legId:form.legId||null,city:form.city||"",cityTier:form.cityTier||"D"};
 
     if(!online){
@@ -2937,7 +3388,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       for(const r of(form.receipts||[])){
         if(r.b64){
           try{await sbUploadReceipt(claimId,cid,r.b64,r.type,r.name);}
-          catch(e){console.warn("Receipt upload failed:",e.message);}
+          catch(e){log.warn("Receipt upload failed:",e.message);}
         }
       }
 
@@ -2954,7 +3405,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             else await supabase.from("users").update({reimbursable:(myUser?.reimbursable||0)+amount}).eq("id",user.id);
             await sbAddAudit("Auto-Approved",claimId,`Auto after ${delayMins} min`);
             await sbPushNotif(user.id,`✓ Claim ${claimId} auto-approved (₹${amount.toLocaleString("en-IN")})`,"success");
-          }catch(e){console.warn("Auto-approve timer failed:",e.message);}
+          }catch(e){log.warn("Auto-approve timer failed:",e.message);}
         },delayMins*60*1000);
       } else {
         // Notify dept manager + admins, respecting delegation
@@ -3023,12 +3474,27 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       const mSpent=mDB>0?co.claims.filter(c=>{const cu=co.users.find(u=>u.id===c.empId);return cu?.dept===claimDept&&c.date?.slice(0,7)===claimMo&&c.status!=="Rejected"&&c.id!==claim.id;}).reduce((s,c)=>s+c.amount,0):0;
       const ySpent=yDB>0?co.claims.filter(c=>{const cu=co.users.find(u=>u.id===c.empId);return cu?.dept===claimDept&&c.date?.slice(0,7)>=fyS&&c.date?.slice(0,7)<=fyE&&c.status!=="Rejected"&&c.id!==claim.id;}).reduce((s,c)=>s+c.amount,0):0;
       const budgetBreachedForApproval=(mDB>0&&(mSpent+claim.amount)>mDB)||(yDB>0&&(ySpent+claim.amount)>yDB);
-      if(budgetBreachedForApproval&&!isAdmin){
-        toast("⛔ Dept budget breached — only admin can approve this claim","error");
+    // ── Budget breach → escalate to CFO / Admin / HR — any ONE must approve first ──
+    if(budgetBreachedForApproval){
+      const escalationRoles=["admin","cfo","hr"];
+      const isEscalator=escalationRoles.includes(user.role);
+      if(!isEscalator){
+        toast("⛔ Dept budget breached — requires CFO, Admin, or HR approval first before manager can approve.","error");
         return;
       }
+      // Escalator approved — mark as "Budget-Escalation Approved" so manager can finalise
+      if(user.role!=="admin"){
+        // CFO or HR signed off — needs manager to still do final approval
+        finalStatus="Budget-Escalation Approved";
+        const mgrs=co.users.filter(u=>u.role==="manager"&&co.users.find(x=>x.id===claim.empId)?.dept===u.dept&&!u.isSuspended);
+        for(const m of mgrs) await sbPushNotif(m.id,`Claim ${claimId} (${fmt(claim.amount)}) budget-breach approved by ${user.name} (${user.role.toUpperCase()}) — awaiting your final approval`,"warn");
+        // Admin also notified
+        for(const a of co.users.filter(u=>u.role==="admin")) await sbPushNotif(a.id,`Claim ${claimId} budget-breach cleared by ${user.name} — manager final approval pending`,"info");
+      }
+      // Admin approves directly → full approval falls through below
+    }
 
-      // ── Grade-based engine ────────────────────────────────────────────────────
+    // ── Grade-based engine ────────────────────────────────────────────────────
       if(policy.gradeBased&&(policy.approvalHierarchy||[]).length>0){
         const approverGrade=user.grade||0;
         const submitter=co.users.find(u=>u.id===claim.empId);
@@ -3234,14 +3700,14 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
     // Generate PDF settlement
     try{
-      const doc=await generateSettlementPDF(trip,co.claims,getUser,activeMeta?.name);
+      const doc=await generateSettlementPDF(trip,co.claims,getUser,activeMeta?.name,co.users,co.policy);
       const pdfBlob=doc.output("blob");
       const url=URL.createObjectURL(pdfBlob);
       const a=document.createElement("a");
       a.href=url;a.download=`Settlement_${trip.name.replace(/\s+/g,"_")}_${trip.endDate||today()}.pdf`;
       document.body.appendChild(a);a.click();document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    }catch(e){console.warn("PDF generation failed:",e.message);}
+    }catch(e){log.warn("PDF generation failed:",e.message);}
 
     // Notify all stakeholders
     const notifyUsers=[
@@ -3304,7 +3770,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
       // If a column doesn't exist yet (migration not run), fall back to base columns only
       if(error&&(error.message?.includes("column")||error.message?.includes("schema cache"))){
-        console.warn("Policy full upsert failed, trying base columns only:",error.message);
+        log.warn("Policy full upsert failed, trying base columns only:",error.message);
         const baseRow={
           company_id:cid,
           auto_approve_limit:newPolicy.autoApproveLimit,
@@ -3377,7 +3843,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         }).eq("id",userId);
       }
     }catch(rpcErr){
-      console.warn("create_employee RPC failed:",rpcErr.message,". Trying direct insert...");
+      log.warn("create_employee RPC failed:",rpcErr.message,". Trying direct insert...");
       // Fallback: direct INSERT
       const newId=(crypto.randomUUID?.())||(Date.now()+"-"+Math.random()).toString(36);
       const av=(userData.name[0]+(userData.name.split(" ")[1]?.[0]||"")).toUpperCase();
@@ -3402,7 +3868,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       userId=newId;
     }
 
-    try{await loadFromSB();}catch(e){console.warn("loadFromSB after add:",e);}
+    try{await loadFromSB();}catch(e){log.warn("loadFromSB after add:",e);}
     toast(`✓ ${userData.name} added · Login: ${userData.username.toLowerCase()}`);
     return userId;
   };
@@ -3617,7 +4083,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       window.open(pdfUrl,"_blank");
       toast("✓ PDF downloaded");
     }catch(e){
-      console.error("PDF error:",e);
+      log.error("PDF error:",e);
       toast("PDF generation failed — "+e.message,"error");
     }
   };
@@ -3638,7 +4104,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     {id:"analytics", icon:"📊", label:"Analytics"},
     ...(canApprove?[{id:"ledger",icon:"📒",label:"Trip Ledger"},{id:"balances",icon:"⚖️",label:"Balances & Settlement"}]:[]),
     ...(canApprove||isFinance||isHR?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
-    ...(isAdmin||isFinance?[{id:"finance_view",icon:"💼",label:"Finance"}]:[]),
+    ...(isAdmin||isFinance||isManager?[{id:"finance_view",icon:"💼",label:isManager&&!isAdmin&&!isFinance?"Dept Budget":"Finance"}]:[]),
     ...(isHR?[{id:"hr_view",icon:"👔",label:"HR Oversight"},{id:"policy",icon:"⚙️",label:"Policy (view)"}]:[]),
     ...(!isAdmin&&isCFO?[{id:"cfo_view",icon:"📈",label:"Executive View"}]:[]),
     ...(isAdmin||isManager?[{id:"employees",icon:"👥",label:"Employees"}]:[]),
@@ -3816,7 +4282,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           trips={co.trips} isManager={isManager} isAdmin={isAdmin} isFinance={isFinance}
           getUser={getUser} setMdl={setMdl} submitEditRequest={submitEditRequest}
           hasEditWindow={hasEditWindow} userId={user.id} onExportPDF={exportClaimsPDF}/>}
-        {tab==="submit"&&hasPerm("submit")&&<SubmitTab user={user} co={co} submitClaim={submitClaim} camFile={camFile} clearCamFile={()=>setCamF(null)} onCam={()=>setSCam(true)} companyCategories={companyCategories} onCreateTrip={()=>setTab("trips")} sbCreateTrip={sbCreateTrip}/>}
+        {tab==="submit"&&hasPerm("submit")&&<SubmitTab user={user} co={co} submitClaim={submitClaim} camFile={camFile} clearCamFile={()=>setCamF(null)} onCam={()=>setSCam(true)} companyCategories={companyCategories} onCreateTrip={()=>setTab("trips")} sbCreateTrip={sbCreateTrip} aiTokenBalance={aiTokenBalance} setAiTokenBalance={setAiTokenBalance} cid={cid}/>}
         {tab==="trips"&&<TripsTab trips={isAdmin?co.trips:visibleTrips} setTrips={fn=>{if(!SB_ENABLED)setTrips(fn);}} claims={isAdmin?co.claims:visibleClaims}
           isManager={isManager} isAdmin={isAdmin} getUser={getUser} users={co.users}
           closeTrip={closeTrip} toast={toast} uid={user.id} userRole={user.role} myUser={myUser}
@@ -3903,7 +4369,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {(tab==="cfo_view")&&isCFO&&<CFODashboard claims={co.claims} trips={co.trips} users={co.users} policy={co.policy} topups={co.topups} getUser={getUser} fmt={fmt} activeMeta={activeMeta}/>}
         {/* HR can view Policy in read-only mode */}
         {tab==="policy"&&isHR&&<PolicyReadOnly policy={co.policy} users={co.users}/>}
-        {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}
+        {tab==="finance_view"&&(isAdmin||isFinance||isManager)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} isManager={isManager} policy={co.policy} onExportPDF={exportClaimsPDF}
           onBudgetEnhancement={submitBudgetEnhancement}
           onApproveBudgetEnhancement={approveBudgetEnhancement}
           myDept={myUser?.dept}
@@ -3930,7 +4396,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             toast("Group deleted");
           }}
         />}
-        {tab==="policy"&&isAdmin&&<Policy policy={co.policy} setPolicy={setCoPolicy} savePolicy={savePolicyToSB} toast={toast} users={co.users} sbEnabled={SB_ENABLED}/>}
+        {tab==="policy"&&isAdmin&&<Policy policy={co.policy} setPolicy={setCoPolicy} savePolicy={savePolicyToSB} toast={toast} users={co.users} sbEnabled={SB_ENABLED} cid={cid}/>}
         {tab==="help"&&<div>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
             <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Help & Getting Started</h1>
@@ -4112,10 +4578,30 @@ function MgrDash({co,meta,setTab,getUser,myUserId}){
           );})}
         </Card>
         <Card style={{padding:18}}>
-          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:12}}>Department Budgets</div>
-          {Object.entries(co.policy.departmentBudgets||{}).filter(([d,b])=>b>0&&(isAdmin||d===myDept)).map(([dept,budget])=>(
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK}}>Department Budgets</div>
+            {!isAdmin&&<button onClick={()=>setTab("finance_view")} style={{fontSize:10,padding:"3px 9px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:5,cursor:"pointer",color:"#92400e",fontWeight:600}}>📊 Request Enhancement</button>}
+          </div>
+          {Object.entries(co.policy.monthlyDeptBudgets||{}).filter(([d])=>isAdmin||d===myDept).map(([dept,cfg])=>{
+            const monthly=cfg?.monthly||0;
+            const yearly=cfg?.yearly||0;
+            const now=today();const mo=now.slice(0,7);
+            const spent=deptClaims.filter(c=>getUser(c.empId)?.dept===dept&&c.status!=="Rejected"&&c.date?.slice(0,7)===mo).reduce((s,c)=>s+c.amount,0);
+            const remaining=monthly>0?Math.max(0,monthly-spent):null;
+            return monthly>0||yearly>0?(
+              <div key={dept} style={{marginBottom:12,padding:"8px 10px",background:"#f9fafb",borderRadius:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:4}}>
+                  <span style={{fontWeight:600,color:INK}}>{dept}</span>
+                  {remaining!==null&&<span style={{fontWeight:700,color:remaining<monthly*0.1?"#dc2626":remaining<monthly*0.3?"#f59e0b":"#16a34a",fontSize:11}}>₹{remaining.toLocaleString("en-IN")} left</span>}
+                </div>
+                {monthly>0&&<><div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:MUTED,marginBottom:2}}><span>Monthly: {fmt(spent)} / {fmt(monthly)}</span><span>{Math.min(100,Math.round(spent/monthly*100))}%</span></div><PBar value={spent} max={monthly} h={5}/></>}
+                {yearly>0&&<div style={{fontSize:9,color:MUTED,marginTop:3}}>Annual limit: {fmt(yearly)}</div>}
+              </div>
+            ):null;
+          })}
+          {Object.keys(co.policy.monthlyDeptBudgets||{}).length===0&&Object.entries(co.policy.departmentBudgets||{}).filter(([d,b])=>b>0&&(isAdmin||d===myDept)).map(([dept,budget])=>(
             <div key={dept} style={{marginBottom:10}}>
-              <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}><span style={{color:MUTED}}>{dept}</span><span style={{fontWeight:600}}>{fmt(deptClaims.filter(c=>getUser(c.empId)?.dept===dept&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0).toLocaleString("en-IN"))} / {fmt(budget)}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}><span style={{color:MUTED}}>{dept}</span><span style={{fontWeight:600}}>{fmt(deptClaims.filter(c=>getUser(c.empId)?.dept===dept&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0))} / {fmt(budget)}</span></div>
               <PBar value={deptClaims.filter(c=>getUser(c.empId)?.dept===dept&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0)} max={budget} h={5}/>
             </div>
           ))}
@@ -4634,7 +5120,7 @@ function InlineTripModal({user,co,sbCreateTrip,onClose}){
 }
 
 // ─── SUBMIT TAB (OCR fixed — no stale closures) ───────────────────────────────
-function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCategories,onCreateTrip,sbCreateTrip}){
+function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCategories,onCreateTrip,sbCreateTrip,aiTokenBalance,setAiTokenBalance,cid}){
   const cats=companyCategories||DEFAULT_CATS;
   const blankForm=()=>({id:uid(),date:today(),category:"",desc:"",amount:"",origAmount:"",currency:"INR",tripId:"",legId:"",city:"",cityTier:"D",notes:"",vendor:"",receipts:[],ocrState:"idle",ocrData:null,scanning:false,gstAmount:"",projectCode:"",manualEdits:{}});
   const [forms,setForms]=useState(()=>{
@@ -4664,19 +5150,25 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
   // Updater — functional setState so it never reads stale forms
   const upd=useCallback((i,patch)=>setForms(prev=>prev.map((x,j)=>j===i?{...x,...patch}:x)),[]);
 
+  // AI features: requires VITE_AI_ENABLED=true AND company must have token balance > 0
+  const AI_ENABLED=import.meta.env.VITE_AI_ENABLED==="true" && (aiTokenBalance===null||aiTokenBalance>0);
+
   // doOCR — receives an explicit `snapshot` of forms so it never closes over stale state
   const doOCR=useCallback(async(i,b64,mime,snapshot)=>{
+    if(!AI_ENABLED){
+      upd(i,{ocrState:"disabled",scanning:false});
+      return; // AI disabled — fill form manually
+    }
     upd(i,{ocrState:"scanning",scanning:true,ocrData:null});
     try{
       const isImg=mime.startsWith("image/");
-      // /api/anthropic proxied by Netlify function in production
-      // and by Vite proxy in development
       const res=await fetch("/api/anthropic/v1/messages",{
         method:"POST",
-        headers:{"Content-Type":"application/json","anthropic-version":"2023-06-01"},
+        headers:{"Content-Type":"application/json","anthropic-version":"2023-06-01","x-company-id":cid||""},
         body:JSON.stringify({
-          model:"claude-sonnet-4-20250514",
+          model:"claude-haiku-4-5-20251001",
           max_tokens:900,
+          _feature:"ocr",
           system:`You are an invoice OCR assistant for an Indian business expense app. Analyse the receipt/invoice — including handwritten ones. Return ONLY a single valid JSON object, no markdown, no extra text. Keys: vendor(string), date(YYYY-MM-DD or ""), amount(number in detected currency), currency(ISO code), origAmount(number), description(5-8 words), category(one of: Travel|Meals|Accommodation|Office Supplies|Client Entertainment|Software|Training|Miscellaneous), invoice_number(string or ""), gst_number(string or ""), line_items(string[]), confidence("high"|"medium"|"low")`,
           messages:[{role:"user",content:isImg
             ?[{type:"image",source:{type:"base64",media_type:mime,data:b64}},{type:"text",text:"Extract expense data. ONLY JSON."}]
@@ -4686,10 +5178,21 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
       });
       if(!res.ok){
         let errMsg=`HTTP ${res.status}`;
-        try{const errData=await res.json();errMsg=errData?.error?.message||errMsg;}catch{}
+        try{
+          const errData=await res.json();
+          // Handle token-specific errors with friendly message
+          if(errData?.error?.code==="TOKENS_EXHAUSTED"||errData?.error?.code==="NO_AI_SUBSCRIPTION"){
+            upd(i,{ocrState:"no_tokens",scanning:false});
+            toast(errData.error.message||"AI tokens exhausted. Please purchase more.","warn");
+            return;
+          }
+          errMsg=errData?.error?.message||errMsg;
+        }catch{}
         throw new Error(errMsg);
       }
       const data=await res.json();
+      // Update token balance in real-time if server returns it
+      if(data?._tokenBalance!=null) setAiTokenBalance(data._tokenBalance);
       if(data.error)throw new Error(data.error.message||"API error");
       const raw=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
       if(!raw)throw new Error("Empty response");
@@ -4712,7 +5215,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
         notes:      [p.invoice_number?"Invoice: "+p.invoice_number:"",p.gst_number?"GSTIN: "+p.gst_number:"",p.line_items?.length?"Items: "+p.line_items.slice(0,3).join(", "):""].filter(Boolean).join(" | ")||(cur?.notes||""),
       });
     }catch(err){
-      console.error("OCR:",err.message);
+      log.error("OCR:",err.message);
       upd(i,{ocrState:"error",scanning:false});
     }
   },[upd]);
@@ -4814,6 +5317,9 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
           <div style={{width:28,height:28,borderRadius:8,background:`linear-gradient(135deg,${G},${GD})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13}}>🤖</div>
           <div style={{flex:1}}><div style={{fontWeight:700,color:INK,fontSize:13}}>AI Invoice Scanner</div><div style={{fontSize:11,color:MUTED}}>Upload · Drag & drop · Camera · Handwritten bills supported</div></div>
           {onCam&&<Btn v="dark" onClick={onCam} style={{padding:"6px 10px",fontSize:12}}>📷 Camera</Btn>}
+          {fm.ocrState==="disabled"&&<span style={{background:"#f3f4f6",color:MUTED,padding:"2px 8px",borderRadius:8,fontSize:10,fontWeight:600}}>AI scanning off</span>}
+          {fm.ocrState==="no_tokens"&&<span style={{background:"#fef3c7",color:"#92400e",padding:"2px 8px",borderRadius:8,fontSize:10,fontWeight:600}}>⛔ No tokens</span>}
+          {AI_ENABLED&&aiTokenBalance!=null&&aiTokenBalance>0&&fm.ocrState!=="done"&&<span style={{background:aiTokenBalance<5000?"#fef3c7":"#f0fde9",color:aiTokenBalance<5000?"#92400e":"#16a34a",padding:"2px 8px",borderRadius:8,fontSize:10,fontWeight:600}}>⚡ {(aiTokenBalance/1000).toFixed(0)}K tokens</span>}
           {fm.ocrState==="done"&&fm.ocrData&&<span style={{background:CONF[fm.ocrData.confidence]+"20",color:CONF[fm.ocrData.confidence],padding:"2px 8px",borderRadius:8,fontSize:10,fontWeight:700}}>{fm.ocrData.confidence==="high"?"✓ High":"~ Med"}</span>}
           {fm.ocrState==="error"&&<span style={{background:"#fee2e2",color:"#dc2626",padding:"2px 8px",borderRadius:8,fontSize:10,fontWeight:700}}>⚠ Failed — fill manually</span>}
           {fm.ocrState==="scanning"&&<span style={{color:GD,fontSize:11,display:"flex",alignItems:"center",gap:5}}><span style={{width:12,height:12,border:`2px solid ${GM}`,borderTopColor:G,borderRadius:"50%",animation:"spin .7s linear infinite",display:"inline-block"}}/> Scanning…</span>}
@@ -4860,6 +5366,51 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
           </div>
         )}
       </Card>
+
+      {/* Trip Budget & Category Limits Panel — visible to employee */}
+      {(()=>{
+        const selTrip=co.trips.find(t=>t.id===(fm.tripId||myTrips[0]?.id));
+        if(!selTrip?.budget) return null;
+        const spent=co.claims.filter(c=>c.tripId===selTrip.id&&c.empId===user.id&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
+        const remaining=Math.max(0,selTrip.budget-spent);
+        const pct=Math.min(100,Math.round(spent/selTrip.budget*100));
+        const catLimits=selTrip.categoryLimits||{};
+        const hasCatLimits=Object.keys(catLimits).some(k=>catLimits[k]>0);
+        return(
+          <Card style={{padding:14,marginBottom:12,borderColor:remaining<selTrip.budget*0.1?"#fca5a5":BDR}}>
+            <div style={{fontFamily:FB,fontSize:12,fontWeight:700,color:INK,marginBottom:8}}>📊 Your Trip Budget — {selTrip.name}</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+              {[["Total Budget",fmt(selTrip.budget),G],["Spent",fmt(spent),"#f59e0b"],["Remaining",fmt(remaining),remaining<selTrip.budget*0.2?"#dc2626":"#16a34a"]].map(([l,v,c])=>(
+                <div key={l} style={{background:"#f9fafb",borderRadius:7,padding:"7px 10px",textAlign:"center"}}>
+                  <div style={{fontSize:9,color:MUTED,textTransform:"uppercase",marginBottom:2}}>{l}</div>
+                  <div style={{fontWeight:700,fontSize:13,color:c}}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{height:6,background:"#e5e7eb",borderRadius:3,marginBottom:8,overflow:"hidden"}}>
+              <div style={{height:"100%",width:pct+"%",background:pct>90?"#dc2626":pct>70?"#f59e0b":G,borderRadius:3,transition:"width .3s"}}/>
+            </div>
+            {hasCatLimits&&<>
+              <div style={{fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",marginBottom:5}}>Category Spend Limits</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                {Object.entries(catLimits).filter(([,v])=>v>0).map(([cat,pctLimit])=>{
+                  const catSpent=co.claims.filter(c=>c.tripId===selTrip.id&&c.empId===user.id&&c.category===cat&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
+                  const catMax=Math.round(selTrip.budget*pctLimit/100);
+                  const catPct=catMax>0?Math.min(100,Math.round(catSpent/catMax*100)):0;
+                  return(
+                    <div key={cat} style={{background:"#f9fafb",border:`1px solid ${catPct>90?"#fca5a5":BDR}`,borderRadius:6,padding:"4px 8px",fontSize:10}}>
+                      <span style={{fontWeight:600,color:INK}}>{cat}</span>
+                      <span style={{color:MUTED}}> · {fmt(catSpent)}/{fmt(catMax)} ({pctLimit}%)</span>
+                      {catPct>=100&&<span style={{color:"#dc2626",fontWeight:700}}> ⛔</span>}
+                      {catPct>=80&&catPct<100&&<span style={{color:"#f59e0b",fontWeight:700}}> ⚠</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            </>}
+          </Card>
+        );
+      })()}
 
       {/* Alerts */}
 {/* Budget warning when trip budget exceeded */}
@@ -5331,7 +5882,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
               amount:totalAmt,orig_amount:totalAmt,orig_currency:"INR",
               status:"Pending",auto_approved:false,
               notes:JSON.stringify(rows),
-            }).then(()=>{}).catch(e=>console.warn("Conveyance claim:",e.message));
+            }).then(()=>{}).catch(e=>log.warn("Conveyance claim:",e.message));
             if(sbPushNotif) await sbPushNotif(null,`Local conveyance claim ₹${totalAmt.toLocaleString("en-IN")} submitted by ${users.find(u=>u.id===userId)?.name||userId}`,"info");
           }
           setConveyanceTrip(null);
@@ -5382,7 +5933,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                 </>}
                 {(isAdmin||isManager)&&(t.status==="active"||t.status==="closed")&&(
                   <div style={{display:"flex",gap:5}}>
-                    <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"");const pu=doc.output("bloburl");window.open(pu,"_blank");}catch(e){toast("PDF failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄 PDF</Btn>
+                    <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"",users,policy);const pu=doc.output("bloburl");window.open(pu,"_blank");}catch(e){toast("PDF failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄 PDF</Btn>
                     {(isManager||isAdmin)&&<Btn v="outline" onClick={()=>generateTAR(t,users.find(u=>u.id===t.createdBy)||{name:""},users,"")} style={{fontSize:10,padding:"5px 8px"}}>📋 TAR</Btn>}
                     {(isManager||isAdmin)&&<Btn v="outline" onClick={()=>generateTERC(t,users.find(u=>u.id===t.createdBy)||{name:""},claims.filter(c=>c.tripId===t.id),policy,"")} style={{fontSize:10,padding:"5px 8px"}}>📑 TERC</Btn>}
                     <Btn v="outline" onClick={()=>setConveyanceTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🚗 Conveyance</Btn>
@@ -6250,7 +6801,106 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
     </div>
   );
 }
-function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sbEnabled}){
+// ─── AI TOKEN WIDGET — shown in Policy tab for company admin ─────────────────
+function AiTokenWidget({cid,sbEnabled}){
+  const [tokenData,setTokenData]=useState(null);
+  const [history,setHistory]=useState([]);
+  const [loading,setLoading]=useState(true);
+
+  useEffect(()=>{
+    if(!sbEnabled||!cid){setLoading(false);return;}
+    Promise.all([
+      supabase.from("ai_tokens").select("balance,used_total,plan_label,is_active,last_topup_at").eq("company_id",cid).maybeSingle(),
+      supabase.from("ai_token_packs").select("pack_name,tokens_added,amount_inr,created_at").eq("company_id",cid).order("created_at",{ascending:false}).limit(10),
+      supabase.from("ai_usage_log").select("tokens_used,feature,created_at").eq("company_id",cid).order("created_at",{ascending:false}).limit(50),
+    ]).then(([{data:td},{data:packs},{data:usage}])=>{
+      setTokenData(td||null);
+      setHistory(packs||[]);
+      setLoading(false);
+    });
+  },[cid,sbEnabled]);
+
+  if(loading) return<div style={{color:MUTED,fontSize:12}}>Loading AI subscription…</div>;
+
+  if(!tokenData||tokenData.balance==null){
+    return(
+      <div>
+        <div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,padding:"12px 14px",marginBottom:10}}>
+          <div style={{fontWeight:700,color:"#92400e",fontSize:12,marginBottom:4}}>🤖 AI Features not activated</div>
+          <div style={{fontSize:11,color:"#92400e"}}>
+            AI invoice OCR and chat assistant are not active for your company.<br/>
+            Contact your XpensR account manager to purchase a token pack.
+          </div>
+        </div>
+        <div style={{fontSize:11,color:MUTED}}>
+          <b>Available packs:</b> Starter (50K tokens · ₹199) · Growth (200K · ₹599) · Pro (500K · ₹1,199) · Enterprise (2M · ₹3,999)
+        </div>
+      </div>
+    );
+  }
+
+  const balance=tokenData.balance||0;
+  const used=tokenData.used_total||0;
+  const total=balance+used;
+  const pct=total>0?Math.min(100,Math.round(balance/total*100)):0;
+  const isLow=balance<10000;
+  const isExhausted=balance<=0;
+
+  return(
+    <div>
+      {/* Balance summary */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:12}}>
+        {[
+          ["Remaining Balance",`${(balance/1000).toFixed(1)}K`,isExhausted?"#dc2626":isLow?"#f59e0b":"#16a34a"],
+          ["Total Used",`${(used/1000).toFixed(1)}K`,MUTED],
+          ["Pack",tokenData.plan_label||"—",INK],
+        ].map(([l,v,c])=>(
+          <div key={l} style={{background:"#f9fafb",borderRadius:8,padding:"10px 12px"}}>
+            <div style={{fontSize:9,color:MUTED,textTransform:"uppercase",marginBottom:3}}>{l}</div>
+            <div style={{fontWeight:700,fontSize:15,color:c}}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Progress bar */}
+      <div style={{marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:MUTED,marginBottom:4}}>
+          <span>Token balance</span><span>{pct}% remaining</span>
+        </div>
+        <div style={{height:8,background:"#e5e7eb",borderRadius:4,overflow:"hidden"}}>
+          <div style={{height:"100%",width:pct+"%",background:pct<20?"#dc2626":pct<40?"#f59e0b":G,borderRadius:4,transition:"width .3s"}}/>
+        </div>
+      </div>
+
+      {/* Alerts */}
+      {isExhausted&&<div style={{background:"#fee2e2",border:"1px solid #fca5a5",borderRadius:7,padding:"8px 12px",fontSize:11,color:"#dc2626",fontWeight:600,marginBottom:10}}>
+        ⛔ All AI tokens used. Contact your XpensR account manager to purchase more tokens.
+      </div>}
+      {isLow&&!isExhausted&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"8px 12px",fontSize:11,color:"#92400e",marginBottom:10}}>
+        ⚠ Low token balance ({(balance/1000).toFixed(1)}K remaining). Contact your account manager soon.
+      </div>}
+
+      {/* Purchase history */}
+      {history.length>0&&<>
+        <div style={{fontWeight:700,fontSize:11,color:INK,marginBottom:6}}>Purchase History</div>
+        {history.slice(0,5).map((h,i)=>(
+          <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"5px 0",borderBottom:`1px solid #f5f5f5`,color:INK}}>
+            <span>{h.pack_name}</span>
+            <span style={{color:GD,fontWeight:600}}>+{(h.tokens_added/1000).toFixed(0)}K tokens</span>
+            <span style={{color:MUTED}}>{h.amount_inr>0?`₹${h.amount_inr}`:"—"}</span>
+            <span style={{color:MUTED}}>{new Date(h.created_at).toLocaleDateString("en-IN")}</span>
+          </div>
+        ))}
+      </>}
+
+      <div style={{marginTop:10,fontSize:10,color:MUTED}}>
+        1 AI invoice scan ≈ 800–1,200 tokens · 1 chat message ≈ 200–500 tokens
+      </div>
+    </div>
+  );
+}
+
+function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sbEnabled,cid}){
   const[policy,setPolicy]=useState(()=>({...initPol}));
   const lastSavedRef=useRef(null);
   // Only sync from parent when it changes AND we haven't just saved
@@ -6354,11 +7004,11 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
             <div style={{marginTop:8,padding:"7px 10px",background:GL,borderRadius:7,fontSize:11,color:GD}}>✓ {policy.scheduledReports?.frequency} reports → {policy.scheduledReports?.email||"(set email above)"}</div>
           </div>}
         </Card>
-        {/* Subscription */}
+        {/* AI Token Subscription */}
         <Card style={{padding:18}}>
-          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Subscription</div>
-
-        {/* ── Item 6: Auto-approve timing ── */}
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>🤖 AI Features — Token Balance</div>
+          <AiTokenWidget cid={cid} sbEnabled={sbEnabled}/>
+        </Card>
         </Card><Card style={{padding:18}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Auto-Approve & Dual Approval Rules</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:10}}>
@@ -7030,11 +7680,20 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
   const tripDiemSummary=(t)=>{
     return (t.assignedTo||[]).map(uid=>{
       const u=users.find(x=>x.id===uid);
-      const diem=empDiem(t,uid);
+      const diemEntitlement=empDiem(t,uid);
       const claimed=claims.filter(c=>c.tripId===t.id&&c.empId===uid&&(c.category==="Meals"||c.category==="Food"||c.category==="Daily Allowance")&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
-      const approved=Math.min(claimed,diem); // capped at entitlement
-      const balance=diem-claimed;
-      return{user:u,uid,diem,claimed,approved,balance,legs:(t.legs||[])};
+      const approvedClaimed=claims.filter(c=>c.tripId===t.id&&c.empId===uid&&(c.category==="Meals"||c.category==="Food"||c.category==="Daily Allowance")&&c.status==="Approved").reduce((s,c)=>s+c.amount,0);
+      // Rule: whichever is higher — entitlement or approved claimed amount — is used
+      const effectiveDiem=Math.max(diemEntitlement,approvedClaimed);
+      // If employee claimed less than entitlement, the flat balance (entitlement − claimed) is paid additionally
+      const flatBalance=approvedClaimed<diemEntitlement?(diemEntitlement-approvedClaimed):0;
+      return{user:u,uid,
+        diemEntitlement,    // what policy allows
+        claimed,            // what employee submitted (incl pending)
+        approvedClaimed,    // what was actually approved
+        effectiveDiem,      // MAX of entitlement vs approved (this goes into trip expense)
+        flatBalance,        // additional flat allowance payable if claimed < entitlement
+        legs:(t.legs||[])};
     }).filter(r=>r.user);
   };
 
@@ -7548,7 +8207,7 @@ function SettlementsTab({trips,claims,topups,users,getUser,isAdmin,myDept,cid,sb
 }
 
 // ─── FINANCE TAB ─────────────────────────────────────────────────────────────
-function FinanceTab({claims,trips,getUser,users,isAdmin,policy,onExportPDF,onBudgetEnhancement,onApproveBudgetEnhancement,myDept,myUser}){
+function FinanceTab({claims,trips,getUser,users,isAdmin,isManager,policy,onExportPDF,onBudgetEnhancement,onApproveBudgetEnhancement,myDept,myUser}){
   const[berForm,setBerForm]=useState({dept:myDept||"",period:"monthly",requested:"",reason:""});
   const[showBER,setShowBER]=useState(false);
   const[filter,setFilter]=useState("All");
@@ -7864,18 +8523,25 @@ Active trips: ${(co?.trips||[]).filter(t=>t.status==="active").length}.
 Pending claims: ${(co?.claims||[]).filter(c=>c.status==="Pending").length}.
 Be concise, helpful, and use bullet points when listing steps. If you can't help, offer to connect to a human assistant.`;
 
+  const AI_CHAT_ENABLED=import.meta.env.VITE_AI_ENABLED==="true";
+
   const send=async()=>{
     if(!input.trim()||busy)return;
     const userMsg={role:"user",content:input};
     const newMsgs=[...msgs,userMsg];
     setMsgs(newMsgs);setInput("");setBusy(true);
+    if(!AI_CHAT_ENABLED){
+      setMsgs(p=>[...p,{role:"assistant",content:"AI assistant is currently disabled. Please refer to the Help Manual (press H) or contact your Admin for assistance."}]);
+      setBusy(false);return;
+    }
     const newCount=chatCount+1;
     setChatCount(newCount);
     try{
       const res=await fetch("/api/anthropic/v1/messages",{
-        method:"POST",headers:{"Content-Type":"application/json","anthropic-version":"2023-06-01"},
+        method:"POST",headers:{"Content-Type":"application/json","anthropic-version":"2023-06-01","x-company-id":cid||""},
         body:JSON.stringify({
-          model:"claude-sonnet-4-20250514",max_tokens:500,
+          model:"claude-haiku-4-5-20251001",max_tokens:500,
+          _feature:"chat",
           system:CONTEXT,
           messages:newMsgs.slice(-10).map(m=>({role:m.role,content:m.content}))
         })
@@ -9189,7 +9855,7 @@ export default function Root(){
 
     // ── STEP 2: No saved session — check Supabase for Google OAuth session ────
     const hardTimer=setTimeout(()=>{
-      console.warn("Auth timeout — forcing login screen");
+      log.warn("Auth timeout — forcing login screen");
       setLoading(false);
     }, 3000); // 3s max — never hang
 
@@ -9259,7 +9925,7 @@ export default function Root(){
         .from("users").select("*").eq("id",authUserId).maybeSingle();
 
       if(pErr){
-        console.warn("users table error:",pErr.message,"code:",pErr.code);
+        log.warn("users table error:",pErr.message,"code:",pErr.code);
         // If RLS blocks even reading users table, show error on login
         return;
       }
@@ -9272,21 +9938,18 @@ export default function Root(){
 
       // ── Neither found — fallback: check if email matches known SA email ─
       // Handles case where super_admins RLS blocks the table query
-      if(authUser.email==="rushabh@rbshah.co.in"||saRow===null&&authUser.email===SA.email){
+      if(authUser.email===SA.email||saRow===null&&authUser.email===SA.email){
         // Likely the SA account — treat as superadmin
-        console.log("Resolving as superadmin via email match:",authUser.email);
+        log.info("Resolving as superadmin via auth match");
         setSession({userId:authUserId,companyId:null,role:"superadmin",
           sbUser:{id:authUserId,name:"Super Admin",email:authUser.email,role:"superadmin",avatar:"SA"}});
         return;
       }
 
       // No profile found — user authenticated but not set up in DB yet
-      console.warn("Authenticated user has no profile row. Email:",authUser.email,
-        "\nRun in Supabase SQL editor:\n",
-        `INSERT INTO public.super_admins (id) VALUES ('${authUserId}') ON CONFLICT DO NOTHING;`
-      );
+      log.warn("Authenticated user has no profile row. Check super_admins table.");
     }catch(e){
-      console.error("resolveSupabaseUser error:",e);
+      log.error("resolveSupabaseUser error:",e);
     }finally{
       setLoading(false);resolving.current=false;
     }
