@@ -1700,7 +1700,6 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
         </table></Card>}
         {tab==="users"&&<SaUsers DB={DB} userCounts={userCounts}/>}
         {tab==="help"&&<HelpManual userRole="superadmin" onClose={()=>setTab("companies")} inline={true}/>}
-        {tab==="help"&&<HelpManual userRole="superadmin" onClose={()=>setTab("companies")} inline={true}/>}
       </div>
       {/* Create Company Modal */}
       {modal?.type==="newCo"&&(
@@ -2197,6 +2196,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const[showChatbot,setShowChatbot]=useState(false);
   const[showMobMore,setShowMobMore]=useState(false);
   const[showFab,setShowFab]=useState(false);
+  const[showExportMenu,setShowExportMenu]=useState(false);
 
   // Keyboard shortcuts
   useEffect(()=>{
@@ -2324,7 +2324,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       (co.policy?.approvalHierarchy||[]).some(h=>h.level===(user.grade||0)));
   const isFinance=user.role==="finance";
   const isHR=user.role==="hr";
-  const isCFO=user.role==="cfo";
+  const isCFO=user.role==="cfo"||user.role==="admin"; // admin gets full CFO executive view
   const isEmployee=user.role==="employee";
   const needsDualApproval=(amount)=>co.policy.dualApproveAbove>0&&amount>=co.policy.dualApproveAbove;
   const myUser=co.users.find(u=>u.id===user.id);
@@ -2393,7 +2393,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       return inMyDept||delegatedToMe;
     });
   })();
-  const pendingTopups=co.topups.filter(t=>t.status==="Pending");
+  const pendingTopups=(co.topups||[]).filter(t=>t.status==="Pending");
 
   // ── sbCreateTrip — defined once, used by both TripsTab and SubmitTab ─────────
   const sbCreateTrip=async(trip,assigned,legs=[])=>{
@@ -3628,18 +3628,19 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   );
 
   const navItems=[
-    {id:"dashboard", icon:"▦",  label:"Dashboard"},
-    ...(!isCFO&&!isHR?[{id:"claims",icon:"📋",label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"}]:[]),
+    {id:"dashboard", icon:"▦",  label:isAdmin?"Org Dashboard":isCFO&&!isAdmin?"Executive Dash":isHR?"HR Overview":"Dashboard"},
+    ...(isAdmin?[{id:"cfo_view",icon:"📈",label:"Executive View"}]:[]),
+    ...(!isCFO||isAdmin?(!isHR?[{id:"claims",icon:"📋",label:isAdmin?"All Claims":isManager?"Dept Claims":"My Expenses"}]:[]):[]),
     ...(hasPerm("submit")&&!canApprove?[{id:"submit",icon:"＋",label:"New Expense"}]:[]),
-    ...(!isCFO&&!isHR?[{id:"trips",icon:"🗂️",label:"Trips / Periods"}]:[]),
+    ...(!isCFO||isAdmin?(!isHR?[{id:"trips",icon:"🗂️",label:"Trips / Periods"}]:[]):[]),
     ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[]),
-    ...(!isCFO&&!isHR?[{id:"topup",icon:"💰",label:"Top-up"}]:[]),
+    ...(!isCFO||isAdmin?(!isHR?[{id:"topup",icon:"💰",label:"Top-up"}]:[]):[]),
     {id:"analytics", icon:"📊", label:"Analytics"},
     ...(canApprove?[{id:"ledger",icon:"📒",label:"Trip Ledger"},{id:"balances",icon:"⚖️",label:"Balances & Settlement"}]:[]),
     ...(canApprove||isFinance||isHR?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
     ...(isAdmin||isFinance?[{id:"finance_view",icon:"💼",label:"Finance"}]:[]),
     ...(isHR?[{id:"hr_view",icon:"👔",label:"HR Oversight"},{id:"policy",icon:"⚙️",label:"Policy (view)"}]:[]),
-    ...(isCFO?[{id:"cfo_view",icon:"📈",label:"Executive View"}]:[]),
+    ...(!isAdmin&&isCFO?[{id:"cfo_view",icon:"📈",label:"Executive View"}]:[]),
     ...(isAdmin||isManager?[{id:"employees",icon:"👥",label:"Employees"}]:[]),
     ...(isAdmin?[{id:"policy",icon:"⚙️",label:"Policy"}]:[]),
   ];
@@ -3747,32 +3748,29 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             <div style={{minWidth:0}}><div style={{fontWeight:700,color:INK,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{activeMeta.name}</div><div style={{fontSize:10,color:MUTED}}>{activeMeta.plan}{user.delegateTo?` · →${getUser(user.delegateTo)?.name?.split(" ")[0]}`:""}</div></div>
           </div>
           <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-            {hasPerm("export")&&(()=>{
-              const [showExportMenu,setShowExportMenu]=useState(false);
-              return(
-                <div style={{position:"relative"}} className="mob-hide">
-                  <Btn v="outline" onClick={()=>setShowExportMenu(p=>!p)} style={{fontSize:10,padding:"5px 10px"}}>⬇ Export ▾</Btn>
-                  {showExportMenu&&<>
-                    <div style={{position:"fixed",inset:0,zIndex:199}} onClick={()=>setShowExportMenu(false)}/>
-                    <div style={{position:"absolute",top:"100%",right:0,marginTop:4,background:"var(--card,#fff)",border:`1px solid ${BDR}`,borderRadius:10,boxShadow:"0 8px 24px #0002",zIndex:200,minWidth:160,overflow:"hidden"}}>
-                      {[
-                        {icon:"📊",label:"CSV",fn:exportCSV},
-                        {icon:"📗",label:"Excel (CSV)",fn:exportCSV},
-                        {icon:"📒",label:"Tally XML",fn:exportTally},
-                        {icon:"📘",label:"GSTR-2A",fn:exportGSTR},
-                        {icon:"🔵",label:"Zoho Books",fn:exportZoho},
-                      ].map(({icon,label,fn})=>(
-                        <button key={label} onClick={()=>{fn();setShowExportMenu(false);}} style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"10px 14px",background:"none",border:"none",borderBottom:`1px solid ${BDR}`,cursor:"pointer",fontFamily:FB,fontSize:12,color:INK,textAlign:"left",transition:"background .1s"}}
-                          onMouseEnter={e=>e.currentTarget.style.background="var(--hover-bg,#f0fde9)"}
-                          onMouseLeave={e=>e.currentTarget.style.background="none"}>
-                          <span style={{fontSize:14}}>{icon}</span>{label}
-                        </button>
-                      ))}
-                    </div>
-                  </>}
-                </div>
-              );
-            })()}
+            {hasPerm("export")&&(
+              <div style={{position:"relative"}} className="mob-hide">
+                <Btn v="outline" onClick={()=>setShowExportMenu(p=>!p)} style={{fontSize:10,padding:"5px 10px"}}>⬇ Export ▾</Btn>
+                {showExportMenu&&<>
+                  <div style={{position:"fixed",inset:0,zIndex:199}} onClick={()=>setShowExportMenu(false)}/>
+                  <div style={{position:"absolute",top:"100%",right:0,marginTop:4,background:"var(--card,#fff)",border:`1px solid ${BDR}`,borderRadius:10,boxShadow:"0 8px 24px #0002",zIndex:200,minWidth:160,overflow:"hidden"}}>
+                    {[
+                      {icon:"📊",label:"CSV",fn:exportCSV},
+                      {icon:"📗",label:"Excel (CSV)",fn:exportCSV},
+                      {icon:"📒",label:"Tally XML",fn:exportTally},
+                      {icon:"📘",label:"GSTR-2A",fn:exportGSTR},
+                      {icon:"🔵",label:"Zoho Books",fn:exportZoho},
+                    ].map(({icon,label,fn})=>(
+                      <button key={label} onClick={()=>{fn();setShowExportMenu(false);}} style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"10px 14px",background:"none",border:"none",borderBottom:`1px solid ${BDR}`,cursor:"pointer",fontFamily:FB,fontSize:12,color:INK,textAlign:"left",transition:"background .1s"}}
+                        onMouseEnter={e=>e.currentTarget.style.background="var(--hover-bg,#f0fde9)"}
+                        onMouseLeave={e=>e.currentTarget.style.background="none"}>
+                        <span style={{fontSize:14}}>{icon}</span>{label}
+                      </button>
+                    ))}
+                  </div>
+                </>}
+              </div>
+            )}
             {isManager&&<Btn v="outline" onClick={async()=>{
                 // Monthly digest — email to all finance users
                 const financeUsers=co.users.filter(u=>u.role==="finance"||u.role==="admin");
@@ -3806,12 +3804,13 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         </div>
 
         {/* TABS */}
-        {tab==="dashboard"&&!isManager&&!isFinance&&!isHR&&!isCFO&&<EmpDash user={user} myUser={myUser} co={co} setTab={setTab}/>}
         {tab==="dashboard"&&isManager&&<>
           <TravelCalendar trips={isAdmin?co.trips:visibleTrips} users={co.users} isAdmin={isAdmin} myDept={myUser?.dept} visibleUserIds={visibleUserIds}/>
           <MgrDash co={co} meta={activeMeta} setTab={setTab} getUser={getUser} isAdmin={isAdmin} myUserId={user.id}/>
         </>}
-        {tab==="dashboard"&&isFinance&&!isManager&&<EmpDash user={user} myUser={myUser} co={co} setTab={setTab}/>}
+        {tab==="dashboard"&&isHR&&!isManager&&<HROversightTab claims={co.claims} trips={co.trips} users={co.users} getUser={getUser} policy={co.policy} aretRequests={[]} fmt={fmt}/>}
+        {tab==="dashboard"&&user.role==="cfo"&&<CFODashboard claims={co.claims} trips={co.trips} users={co.users} policy={co.policy} topups={co.topups} getUser={getUser} fmt={fmt} activeMeta={activeMeta}/>}
+        {tab==="dashboard"&&!isManager&&!isHR&&user.role!=="cfo"&&<EmpDash user={user} myUser={myUser} co={co} setTab={setTab}/>}
         {tab==="claims"&&<ClaimsTab
           claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return c.empId===user.id||e?.dept===myUser?.dept;}):isFinance?co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved"):co.claims.filter(c=>c.empId===user.id)}
           trips={co.trips} isManager={isManager} isAdmin={isAdmin} isFinance={isFinance}
@@ -3886,7 +3885,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             }
           }}
         />}
-        {tab==="approvals"&&canApprove&&<ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} onReload={loadFromSB} onReloadEditRequests={loadEditRequests}/>}
+        {tab==="approvals"&&canApprove&&<ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} onReload={loadFromSB} onReloadEditRequests={loadEditRequests} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}}/>}
         {tab==="topup"&&<TopupTab user={user} topups={canApprove?co.topups.filter(t=>t.status==="Pending"||t.empId===user.id):co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} trips={co.trips} isManager={isManager||isAdmin} managerUsers={isManager||isAdmin?co.users.filter(u=>visibleUserIds.has(u.id)&&u.id!==user.id):[]} sbCreateTopup={async(req)=>{if(SB_ENABLED){const{error:te}=await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:req.status||"Pending",trip_id:req.tripId});if(te){toast("Top-up request failed: "+te.message,"error");return;}if(req.status==="Approved"){await handleTopup({...req,id:req.id},false);}await loadFromSB();}else{setTopups(p=>[...p,req]);}}}/>}
         {tab==="analytics"&&<Analytics
           claims={isAdmin?co.claims:visibleClaims.filter(c=>isManager||c.empId===user.id)}
@@ -3899,10 +3898,9 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="ledger"&&canApprove&&<TripLedgerTab trips={isAdmin?co.trips:visibleTrips} claims={isAdmin?co.claims:visibleClaims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} companyName={activeMeta?.name||""}/>}
         {tab==="balances"&&canApprove&&<BalancesTab trips={co.trips} claims={co.claims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept)} getUser={getUser} isAdmin={isAdmin} fmt={fmt} cid={cid} sbEnabled={SB_ENABLED} onReload={loadFromSB}/>}
         {/* ── HR Role View ── */}
-        {tab==="hr_view"&&isHR&&<HROversightTab claims={co.claims} trips={co.trips} users={co.users} getUser={getUser} policy={co.policy} aretRequests={[]} fmt={fmt}/>}
-        {tab==="dashboard"&&isHR&&<HROversightTab claims={co.claims} trips={co.trips} users={co.users} getUser={getUser} policy={co.policy} aretRequests={[]} fmt={fmt}/>}
+        {tab==="hr_view"&&(isHR||isAdmin)&&<HROversightTab claims={co.claims} trips={co.trips} users={co.users} getUser={getUser} policy={co.policy} aretRequests={[]} fmt={fmt}/>}
         {/* ── CFO/CEO Executive View ── */}
-        {(tab==="cfo_view"||tab==="dashboard"&&isCFO)&&isCFO&&<CFODashboard claims={co.claims} trips={co.trips} users={co.users} policy={co.policy} topups={co.topups} getUser={getUser} fmt={fmt} activeMeta={activeMeta}/>}
+        {(tab==="cfo_view")&&isCFO&&<CFODashboard claims={co.claims} trips={co.trips} users={co.users} policy={co.policy} topups={co.topups} getUser={getUser} fmt={fmt} activeMeta={activeMeta}/>}
         {/* HR can view Policy in read-only mode */}
         {tab==="policy"&&isHR&&<PolicyReadOnly policy={co.policy} users={co.users}/>}
         {tab==="finance_view"&&(isAdmin||isFinance)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} policy={co.policy} onExportPDF={exportClaimsPDF}
@@ -4017,6 +4015,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
 // ─── EMPLOYEE DASHBOARD ───────────────────────────────────────────────────────
 function EmpDash({user,myUser,co,setTab}){
+  const isAdmin=myUser?.role==="admin";
   const claims=co.claims.filter(c=>c.empId===user.id);
   const approved=claims.filter(c=>c.status==="Approved").reduce((s,c)=>s+c.amount,0);
   const activeTrip=co.trips.find(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(user.id)));
@@ -5423,7 +5422,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
 }
 
 // ─── APPROVALS TAB ────────────────────────────────────────────────────────────
-function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip,users,user,editRequests,approveEditRequest,rejectEditRequest,onReload,onReloadEditRequests}){
+function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip,users,user,editRequests,approveEditRequest,rejectEditRequest,onReload,onReloadEditRequests,setClaims}){
   const [filter,setFilter]=useState("All");
   const [selected,setSelected]=useState(new Set());
   const pendingTrips=(trips||[]).filter(t=>t.status==="pending_approval");
@@ -5568,8 +5567,8 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
                     <button onClick={async()=>{
                       const note=c.anomaly?"":prompt("Enter anomaly note (what to check):")?.trim()||"Manager flagged as anomaly";
                       const newAnomaly=!c.anomaly;
-                      if(SB_ENABLED){await supabase.from("claims").update({anomaly:newAnomaly,anomaly_reasons:newAnomaly?[...((c.anomalyReasons||[]).filter(r=>!r.includes("Manager flagged"))),note]:[]}).eq("id",c.id);await loadFromSB();}
-                      else setClaims(p=>p.map(x=>x.id===c.id?{...x,anomaly:newAnomaly,anomalyReasons:newAnomaly?[note]:[]}:x));
+                      if(SB_ENABLED){await supabase.from("claims").update({anomaly:newAnomaly,anomaly_reasons:newAnomaly?[...((c.anomalyReasons||[]).filter(r=>!r.includes("Manager flagged"))),note]:[]}).eq("id",c.id);if(onReload)await onReload();}
+                      else if(setClaims)setClaims(p=>p.map(x=>x.id===c.id?{...x,anomaly:newAnomaly,anomalyReasons:newAnomaly?[note]:[]}:x));
                     }} title={c.anomaly?"Remove anomaly flag":"Flag as anomaly — enter note"} style={{padding:"5px 8px",background:c.anomaly?"#ede9fe":"#f3f4f6",border:c.anomaly?"1px solid #c4b5fd":"none",borderRadius:6,cursor:"pointer",fontSize:12}}>🔍</button>
                   </div>
                 </div>
@@ -5733,7 +5732,7 @@ function SpendingBehaviourChart({claims,users,getUser,isManager}){
   );
 }
 
-function Analytics({claims,trips,users,isManager,getUser,policy,printSummary,user}){
+function Analytics({claims,trips,users,isManager,isAdmin,getUser,policy,printSummary,user}){
   const [from,setFrom]=useState("2026-01-01");
   const [to,setTo]=useState(today());
   const [empFilter,setEF]=useState("All");
@@ -5902,7 +5901,7 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
         return theirGrade<myGrade||(theirGrade===0&&myGrade>0);
       });
   const creatableRoles=isAdmin
-    ?ROLES.filter(r=>["manager","finance","employee"].includes(r.id))
+    ?ROLES.filter(r=>["manager","finance","hr","cfo","employee"].includes(r.id))
     :ROLES.filter(r=>["finance","employee"].includes(r.id));
   const countedUsers=users.filter(u=>u.role!=="admin");
   const emps=visibleEmps;
@@ -7424,9 +7423,8 @@ function SettlementsTab({trips,claims,topups,users,getUser,isAdmin,myDept,cid,sb
           created_at:new Date().toISOString(),
         });
       }
-      // Reload page to reflect settlement
-      // Don't reload page — just refresh data from Supabase
-      if(typeof loadFromSB==="function")await loadFromSB();
+      // Reload data after settlement
+      if(typeof window.__xpensr_reload==="function")await window.__xpensr_reload();
       else setSettling(null);
     }catch(e){
       alert("Settlement failed: "+e.message);
