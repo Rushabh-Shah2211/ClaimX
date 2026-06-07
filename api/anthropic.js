@@ -35,6 +35,11 @@ export default async function handler(req, res) {
   setCORS(req, res);
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
+  // Reject oversized payloads (max 1MB for API calls)
+  const contentLength = parseInt(req.headers['content-length'] || '0');
+  if (contentLength > 1_000_000) {
+    return res.status(413).json({ error: 'Request too large.' });
+  }
 
   // Every request must carry the company ID in the header
   const companyId = req.headers['x-company-id'] || '';

@@ -1,6 +1,7 @@
 import React,{ useState, useRef, useEffect, useCallback, useMemo, Component, createContext, useContext } from "react";
 import { jsPDF } from "jspdf";
 import { createClient } from "@supabase/supabase-js";
+import "./security.js"; // Security hardening — devtools blocking, session protection
 
 // ─── SUPABASE CLIENT ──────────────────────────────────────────────────────────
 const SUPA_URL  = import.meta.env.VITE_SUPABASE_URL  || "";
@@ -37,6 +38,11 @@ const G="#7ED957",GD="#5CB83A",GL="var(--gl)",GM="var(--gm)";
 const DARK="#0f1c09",INK="var(--ink)",MUTED="var(--muted)",BDR="var(--bdr)";
 const FD="'Playfair Display',serif",FB="'DM Sans',sans-serif";
 const GLSTYLE=`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&family=Sora:wght@300;400&display=swap');
+/* ── SECURITY: prevent easy screenshot/scraping of financial values ── */
+.xpensr-amount{user-select:none;-webkit-user-select:none;}
+.xpensr-root img{pointer-events:none;}
+/* Prevent printing of sensitive pages without explicit action */
+@media print{.no-print{display:none!important;}}
 /* ── LIGHT THEME (default) ── */
 :root,[data-dark="false"]{
   --ink:#1a2e12;
@@ -621,10 +627,23 @@ const mkPolicy=()=>({
 const SA={id:"sa1",name:"Super Admin",email:import.meta.env.VITE_SA_EMAIL||"",password:import.meta.env.VITE_SA_PASS||"",role:"superadmin",avatar:"SA"};
 const STORAGE_KEY="xpensr_v1_db";
 const SESSION_KEY="xpensr_v1_sess";
-const loadDB=()=>{try{const r=localStorage.getItem(STORAGE_KEY);return r?JSON.parse(r):null;}catch{return null;}};
-const saveDB=d=>{try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d));}catch(e){}};
-const loadSess=()=>{try{const s=localStorage.getItem(SESSION_KEY);return s?JSON.parse(s):null;}catch{return null;}};
-const saveSess=s=>{try{s?localStorage.setItem(SESSION_KEY,JSON.stringify(s)):localStorage.removeItem(SESSION_KEY);}catch{}};
+// ── Obfuscation layer for localStorage — makes data unreadable in DevTools ──
+// XOR cipher with a per-browser fingerprint-derived key + base64 encoding.
+// Not cryptographic — but makes raw values in Application→Storage unreadable.
+const _SK=(()=>{const b=navigator?.userAgent?.slice(0,20)||"x";let k=0;for(let i=0;i<b.length;i++)k=(k*31+b.charCodeAt(i))>>>0;return(k>>>0).toString(36).padStart(8,"0");})();
+const _enc=str=>{try{let r="";for(let i=0;i<str.length;i++)r+=String.fromCharCode(str.charCodeAt(i)^_SK.charCodeAt(i%_SK.length));return btoa(r);}catch{return btoa(encodeURIComponent(str));}};
+const _dec=enc=>{try{const s=atob(enc);let r="";for(let i=0;i<s.length;i++)r+=String.fromCharCode(s.charCodeAt(i)^_SK.charCodeAt(i%_SK.length));return r;}catch{try{return decodeURIComponent(atob(enc));}catch{return null;}}};
+// Strip sensitive fields before persisting session
+const _safeSession=s=>{
+  if(!s)return null;
+  const{access_token,refresh_token,...rest}=s;
+  if(rest.sbUser){const{password_hash,password,...u}=rest.sbUser;rest.sbUser=u;}
+  return rest;
+};
+const loadDB=()=>{try{const r=localStorage.getItem(STORAGE_KEY);if(!r)return null;const d=_dec(r);return JSON.parse(d||r);}catch{return null;}};
+const saveDB=d=>{try{localStorage.setItem(STORAGE_KEY,_enc(JSON.stringify(d)));}catch{}};
+const loadSess=()=>{try{const s=localStorage.getItem(SESSION_KEY);if(!s)return null;const d=_dec(s);return JSON.parse(d||s);}catch{return null;}};
+const saveSess=s=>{try{if(!s){localStorage.removeItem(SESSION_KEY);return;}localStorage.setItem(SESSION_KEY,_enc(JSON.stringify(_safeSession(s))));}catch{}};
 
 const DB0={
   rbshah:{
@@ -645,7 +664,7 @@ const DB0={
       {id:"EXP-001",tripId:"TRP-001",empId:"emp1",date:"2026-03-26",category:"Travel",              desc:"Flight BOM-AMD",            amount:8500, origAmount:8500, origCur:"INR",status:"Approved",autoApproved:false,receipts:[],remarks:"Approved",      flagged:false,anomaly:false,anomalyReasons:[],comments:[],vendor:"IndiGo",  weekendFlag:false,notes:""},
       {id:"EXP-002",tripId:"TRP-001",empId:"emp1",date:"2026-03-26",category:"Meals",               desc:"Team dinner",               amount:3200, origAmount:3200, origCur:"INR",status:"Approved",autoApproved:true, receipts:[],remarks:"Auto-approved",flagged:false,anomaly:false,anomalyReasons:[],comments:[],vendor:"",        weekendFlag:false,notes:""},
       {id:"EXP-003",tripId:"TRP-002",empId:"emp2",date:"2026-04-02",category:"Software",            desc:"Zoho subscription",         amount:4999, origAmount:4999, origCur:"INR",status:"Approved",autoApproved:true, receipts:[],remarks:"Auto-approved",flagged:false,anomaly:false,anomalyReasons:[],comments:[],vendor:"Zoho",     weekendFlag:false,notes:""},
-      {id:"EXP-004",tripId:"TRP-002",empId:"emp1",date:"2026-04-03",category:"Client Entertainment",desc:"Client dinner Roger Motors", amount:6800, origAmount:6800, origCur:"INR",status:"Pending", autoApproved:false,receipts:[],remarks:"",            flagged:true, anomaly:false,anomalyReasons:[],comments:[{userId:"mgr1",name:"Rushabh Shah",text:"Please share the bill",time:"2026-04-03 10:30"}],vendor:"Trident",weekendFlag:false,notes:""},
+      {id:"EXP-004",tripId:"TRP-002",empId:"emp1",date:"2026-04-03",category:"Client Entertainment",desc:"Client dinner Roger Motors", amount:6800, origAmount:6800, origCur:"INR",status:"Pending", autoApproved:false,receipts:[],remarks:"",            flagged:true, anomaly:false,anomalyReasons:[],comments:[{userId:"mgr1",name:"Demo Manager",text:"Please share the bill",time:"2026-04-03 10:30"}],vendor:"Trident",weekendFlag:false,notes:""},
       {id:"EXP-005",tripId:"TRP-002",empId:"emp3",date:"2026-04-04",category:"Office Supplies",     desc:"Printer cartridges",        amount:1450, origAmount:1450, origCur:"INR",status:"Rejected",autoApproved:false,receipts:[],remarks:"Over cat %",   flagged:false,anomaly:false,anomalyReasons:[],comments:[],vendor:"",        weekendFlag:false,notes:""},
       {id:"EXP-006",tripId:"TRP-002",empId:"emp4",date:"2026-04-04",category:"Training",            desc:"GST certification",         amount:12000,origAmount:12000,origCur:"INR",status:"Pending", autoApproved:false,receipts:[],remarks:"",            flagged:false,anomaly:true, anomalyReasons:["Amount is 2.5× avg for Training"],comments:[],vendor:"ICAI",     weekendFlag:false,notes:""},
       {id:"EXP-007",tripId:"TRP-002",empId:"emp5",date:"2026-04-05",category:"Travel",              desc:"Cab to client office",      amount:850,  origAmount:850,  origCur:"INR",status:"Approved",autoApproved:true, receipts:[],remarks:"Auto-approved",flagged:false,anomaly:false,anomalyReasons:[],comments:[],vendor:"Ola",      weekendFlag:false,notes:""},
@@ -654,9 +673,9 @@ const DB0={
     ],
     topups:[{id:"TUP-001",empId:"emp3",amount:5000,reason:"Additional travel needed",date:"2026-04-03",status:"Pending"}],
     auditLog:[
-      {id:"AL-001",action:"Approved",     claimId:"EXP-001",by:"mgr1",byName:"Rushabh Shah",at:"2026-03-27 09:12",remarks:"Approved"},
+      {id:"AL-001",action:"Approved",     claimId:"EXP-001",by:"mgr1",byName:"Demo Manager",at:"2026-03-27 09:12",remarks:"Approved"},
       {id:"AL-002",action:"Auto-Approved",claimId:"EXP-002",by:"SYSTEM",byName:"System",   at:"2026-03-27 14:35",remarks:"Under limit"},
-      {id:"AL-003",action:"Rejected",     claimId:"EXP-005",by:"mgr1",byName:"Rushabh Shah",at:"2026-04-05 11:20",remarks:"Over category %"},
+      {id:"AL-003",action:"Rejected",     claimId:"EXP-005",by:"mgr1",byName:"Demo Manager",at:"2026-04-05 11:20",remarks:"Over category %"},
     ],
     notifications:[
       {id:"N-001",userId:"emp1",text:"Your claim EXP-001 was approved",    type:"success",read:false,time:"2026-03-27 09:12"},
@@ -932,171 +951,6 @@ const generateSettlementPDF=async(trip,allClaims,getUser,companyName,allUsers,po
 
   return doc;
 };
-  const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
-  const W=210,ML=15,MR=15,CW=W-ML-MR;
-  let y=10;
-  const newPage=()=>{doc.addPage();y=14;};
-  const checkY=(need=14)=>{if(y+need>278)newPage();};
-
-  // ── Header ────────────────────────────────────────────────
-  doc.setFillColor(15,28,9);doc.rect(0,0,W,22,"F");
-  doc.setFont("helvetica","bold");doc.setFontSize(13);doc.setTextColor(126,217,87);
-  doc.text("XpensR",ML,14);
-  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(180,200,170);
-  doc.text("by RB — Trip Settlement Statement",ML+22,14);
-  doc.setTextColor(130,130,130);
-  doc.text(String(companyName||"").slice(0,40),W-MR,14,{align:"right"});
-  y=30;
-
-  // Trip details
-  doc.setTextColor(20,20,20);
-  doc.setFontSize(14);
-  doc.setFont("helvetica","bold");
-  doc.text(trip.name||"Trip",ML,y);
-  y+=6;
-  doc.setFontSize(9);
-  doc.setFont("helvetica","normal");
-  doc.setTextColor(100,100,100);
-  doc.text(`${fmtDate(trip.startDate)||""} → ${fmtDate(trip.endDate)||""} · ${trip.tripMode==="reimbursement"?"Reimbursement":"Balance"} · ${trip.currency||"INR"}${trip.projectCode?" · "+trip.projectCode:""}`,ML,y);
-  y+=10;
-
-  // Summary box
-  const tripClaims=claims.filter(c=>c.tripId===trip.id&&c.status==="Approved");
-  const totalSpent=tripClaims.reduce((s,c)=>s+c.amount,0);
-  const budget=trip.budget||0;
-  const topups=trip.topupsTotal||0;
-  const openBal=trip.openingBalance||budget;
-  const isBalance=trip.tripMode!=="reimbursement";
-  const settlement=isBalance?(openBal+topups-totalSpent):totalSpent;
-  const recoverable=isBalance&&settlement>0;
-
-  // ── Trip details ──────────────────────────────────────────
-  doc.setFont("helvetica","bold");doc.setFontSize(13);doc.setTextColor(20,20,20);
-  doc.text((trip.name||"Trip").slice(0,50),ML,y);y+=6;
-  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(100,100,100);
-  doc.text(`${trip.startDate||""} → ${trip.endDate||""}  ·  ${trip.type||"Trip"}  ·  ${trip.currency||"INR"}${trip.projectCode?" · Proj: "+trip.projectCode:""}`,ML,y);y+=10;
-
-  // ── Summary box ───────────────────────────────────────────
-  doc.setFillColor(240,253,233);doc.roundedRect(ML,y,CW,30,2,2,"F");
-  doc.setDrawColor(200,235,200);doc.roundedRect(ML,y,CW,30,2,2,"S");
-  const cols=isBalance
-    ?[["Opening Bal","₹"+openBal.toLocaleString("en-IN")],["Top-ups","₹"+topups.toLocaleString("en-IN")],["Approved Exp","₹"+totalSpent.toLocaleString("en-IN")],["Settlement",`₹${Math.abs(settlement).toLocaleString("en-IN")} ${recoverable?"(Recover)":"(Pay)"}`]]
-    :[["Total Approved","₹"+totalSpent.toLocaleString("en-IN")],["Budget","₹"+budget.toLocaleString("en-IN")],["Variance",`₹${Math.abs(totalSpent-budget).toLocaleString("en-IN")}`],["Mode","Reimbursement"]];
-  const colW=CW/cols.length;
-  cols.forEach(([l,v],i)=>{
-    const cx=ML+i*colW+colW/2;
-    doc.setFontSize(7);doc.setTextColor(90,120,90);doc.setFont("helvetica","normal");doc.text(l,cx,y+8,{align:"center"});
-    doc.setFontSize(10);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);doc.text(v.slice(0,16),cx,y+20,{align:"center"});
-  });
-  y+=36;
-
-  // ── Per-employee breakdown ─────────────────────────────────
-  const assigned=(trip.assignedTo||[]);
-  if(assigned.length>0){
-    checkY(12);
-    doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(20,20,20);
-    doc.text("Employee Settlement Summary",ML,y);y+=5;
-    assigned.forEach(uid=>{
-      const u=getUser(uid);if(!u)return;
-      const empApproved=claims.filter(c=>c.tripId===trip.id&&c.empId===uid&&c.status==="Approved");
-      const empRejected=claims.filter(c=>c.tripId===trip.id&&c.empId===uid&&c.status==="Rejected");
-      const empSpent=empApproved.reduce((s,c)=>s+c.amount,0);
-      const empBudget=(trip.employeeBudgets?.[uid]?.allocated||0)+(trip.employeeBudgets?.[uid]?.topups||0)||Math.round(budget/Math.max(assigned.length,1));
-      const empBal=isBalance?(empBudget-empSpent):-empSpent;
-      checkY(8);
-      doc.setFillColor(248,252,248);doc.rect(ML,y,CW,7,"F");
-      doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(30,30,30);
-      doc.text((u.name||"").slice(0,20),ML+2,y+5);
-      doc.text(`Budget: ₹${empBudget.toLocaleString("en-IN")}`,ML+52,y+5);
-      doc.text(`Spent: ₹${empSpent.toLocaleString("en-IN")}`,ML+90,y+5);
-      doc.text(`Rejected: ${empRejected.length}`,ML+125,y+5);
-      doc.setFont("helvetica","bold");
-      doc.setTextColor(empBal>0?200:21,empBal>0?50:128,empBal>0?50:61);
-      const balTxt=empBal>0?`Recover ₹${empBal.toLocaleString("en-IN")}`:empBal<0?`Pay ₹${(-empBal).toLocaleString("en-IN")}`:"Settled";
-      doc.text(balTxt,W-MR,y+5,{align:"right"});
-      y+=8;
-    });
-    y+=4;
-  }
-
-  // ── Approved expenses table ────────────────────────────────
-  checkY(16);
-  doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(20,20,20);
-  doc.text(`Approved Expenses (${tripClaims.length})`,ML,y);y+=5;
-  doc.setFillColor(21,128,61);doc.rect(ML,y,CW,6,"F");
-  doc.setTextColor(255,255,255);doc.setFontSize(7);doc.setFont("helvetica","bold");
-  const th=["Date","Employee","Category","Description","Amount"];
-  const tw=[20,28,24,CW-92,20];
-  let tx=ML+2;th.forEach((h,i)=>{doc.text(h,tx,y+4.2);tx+=tw[i];});y+=7;
-
-  tripClaims.forEach((c,idx)=>{
-    checkY(7);
-    const emp2=getUser(c.empId);
-    doc.setFillColor(idx%2===0?252:247,idx%2===0?254:252,idx%2===0?248:244);
-    doc.rect(ML,y,CW,5.5,"F");
-    doc.setTextColor(40,40,40);doc.setFontSize(7);doc.setFont("helvetica","normal");
-    tx=ML+2;
-    [(c.date||"").slice(0,10),(emp2?.name||"—").slice(0,13),(c.category||"").slice(0,11),(c.desc||"").slice(0,22),"₹"+(c.amount).toLocaleString("en-IN")].forEach((v,i)=>{doc.text(v,tx,y+4);tx+=tw[i];});
-    y+=6;
-  });
-  y+=3;doc.setDrawColor(200,230,180);doc.line(ML,y,W-MR,y);y+=5;
-  doc.setFontSize(9);doc.setFont("helvetica","bold");doc.setTextColor(20,20,20);
-  doc.text(`Approved Total: ₹${totalSpent.toLocaleString("en-IN")}`,W-MR,y,{align:"right"});y+=10;
-
-  // ── Rejected expenses table ────────────────────────────────
-  const rejClaims=claims.filter(c=>c.tripId===trip.id&&c.status==="Rejected");
-  if(rejClaims.length>0){
-    checkY(16);
-    doc.setFont("helvetica","bold");doc.setFontSize(9);doc.setTextColor(220,50,50);
-    doc.text(`Rejected Expenses (${rejClaims.length}) — Not reimbursed`,ML,y);y+=5;
-    doc.setFillColor(220,50,50);doc.rect(ML,y,CW,6,"F");
-    doc.setTextColor(255,255,255);doc.setFontSize(7);doc.setFont("helvetica","bold");
-    tx=ML+2;th.forEach((h,i)=>{doc.text(h,tx,y+4.2);tx+=tw[i];});y+=7;
-    const rejTotal=rejClaims.reduce((s,c)=>s+c.amount,0);
-    rejClaims.forEach((c,idx)=>{
-      checkY(7);
-      const emp2=getUser(c.empId);
-      doc.setFillColor(255,248,248);doc.rect(ML,y,CW,5.5,"F");
-      doc.setTextColor(180,50,50);doc.setFontSize(7);doc.setFont("helvetica","normal");
-      tx=ML+2;
-      [(c.date||"").slice(0,10),(emp2?.name||"—").slice(0,13),(c.category||"").slice(0,11),(c.desc||"").slice(0,22),"₹"+(c.amount).toLocaleString("en-IN")].forEach((v,i)=>{doc.text(v,tx,y+4);tx+=tw[i];});
-      if(c.remarks){doc.setTextColor(180,100,50);doc.text("↳ "+c.remarks.slice(0,50),ML+4,y+8.5);}
-      y+=6;
-    });
-    y+=3;doc.setDrawColor(220,150,150);doc.line(ML,y,W-MR,y);y+=5;
-    doc.setFontSize(9);doc.setFont("helvetica","bold");doc.setTextColor(220,50,50);
-    doc.text(`Rejected Total: ₹${rejTotal.toLocaleString("en-IN")}`,W-MR,y,{align:"right"});y+=10;
-  }
-
-  // ── Settlement summary ─────────────────────────────────────
-  checkY(22);
-  doc.setFillColor(...(recoverable?[254,243,199]:[240,253,233]));
-  doc.roundedRect(ML,y,CW,16,2,2,"F");
-  doc.setFontSize(10);doc.setFont("helvetica","bold");
-  doc.setTextColor(recoverable?146:21,recoverable?64:128,recoverable?0:61);
-  doc.text(
-    isBalance
-      ?(recoverable?`₹${settlement.toLocaleString("en-IN")} recoverable from employees`:`₹${Math.abs(settlement).toLocaleString("en-IN")} payable to employees`)
-      :`Reimbursable: ₹${totalSpent.toLocaleString("en-IN")}`,
-    W/2,y+10,{align:"center"}
-  );
-  y+=22;
-
-  // Signature line
-  checkY(14);
-  doc.setFont("helvetica","normal");doc.setFontSize(8);doc.setTextColor(120,120,120);
-  doc.text("Authorised by: ________________________",ML,y);
-  doc.text(`Date: ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})}`,W-MR,y,{align:"right"});
-
-  // ── Page footer ────────────────────────────────────────────
-  const totalPages=doc.getNumberOfPages();
-  for(let p=1;p<=totalPages;p++){
-    doc.setPage(p);
-    doc.setFontSize(7);doc.setTextColor(170,170,170);doc.setFont("helvetica","normal");
-    doc.text(`XpensR by RB · ${companyName||""} · Generated ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})} · Page ${p}/${totalPages}`,W/2,290,{align:"center"});
-  }
-  return doc;
-};
 
 
 // ─── USER PREFERENCES (dark mode, font size) ─────────────────────────────────
@@ -1188,8 +1042,7 @@ class ErrorBoundary extends Component{
         <div style={{maxWidth:480,textAlign:"center"}}>
           <div style={{fontSize:48,marginBottom:16}}>⚠️</div>
           <h2 style={{fontFamily:FD,fontSize:22,color:DARK,marginBottom:8}}>Something went wrong</h2>
-          <p style={{color:MUTED,fontSize:14,marginBottom:6}}>{this.state.error?.message||"An unexpected error occurred."}</p>
-          <p style={{color:"#1f2937",fontSize:12,marginBottom:20,fontFamily:"monospace"}}>{this.state.error?.stack?.split('\n')[1]||""}</p>
+          <p style={{color:MUTED,fontSize:14,marginBottom:6}}>{"An unexpected error occurred. Please reload and try again."}</p>
           <button onClick={()=>{this.setState({error:null});window.location.reload();}} style={{padding:"10px 24px",background:G,border:"none",borderRadius:9,color:"#fff",fontFamily:FB,fontWeight:700,fontSize:14,cursor:"pointer"}}>↺ Reload</button>
         </div>
       </div>
@@ -2265,7 +2118,7 @@ function SaBilling({allCo,DB,userCounts}){
             {aiUsage.length===0&&<tr><td colSpan={7} style={{padding:20,textAlign:"center",color:MUTED,fontSize:12}}>No AI usage yet</td></tr>}
           </tbody>
         </table>
-      </div>}
+      </Card>}
     </div>
   );
 }
@@ -2586,7 +2439,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         if(data) setAiTokenBalance(data.balance||0);
         else setAiTokenBalance(0);
       });
-  },[cid]); (no live subscription that disrupts input) ──
+  },[cid]);
+  // ── Background refresh: every 5 minutes only (no live subscription that disrupts input) ──
   useEffect(()=>{
     if(!SB_ENABLED||!cid)return;
     const interval=setInterval(()=>{
@@ -2632,7 +2486,52 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const[showMobMore,setShowMobMore]=useState(false);
   const[showFab,setShowFab]=useState(false);
   const[showExportMenu,setShowExportMenu]=useState(false);
-  const[aiTokenBalance,setAiTokenBalance]=useState(null); // null = not yet loaded
+  const[aiTokenBalance,setAiTokenBalance]=useState(null);
+  const[pwaPrompt,setPwaPrompt]=useState(null);  // BeforeInstallPromptEvent
+  const[showInstallBanner,setShowInstallBanner]=useState(false);
+
+  // ── Session timeout: auto-logout after 8 hours of inactivity ──────────────
+  const lastActivityRef=useRef(Date.now());
+  useEffect(()=>{
+    const bump=()=>{lastActivityRef.current=Date.now();};
+    const check=setInterval(()=>{
+      if(Date.now()-lastActivityRef.current>8*60*60*1000){
+        saveSess(null);
+        window.location.replace("/");
+      }
+    },60*1000);
+    window.addEventListener("mousemove",bump,{passive:true});
+    window.addEventListener("keydown",bump,{passive:true});
+    window.addEventListener("touchstart",bump,{passive:true});
+    return()=>{clearInterval(check);window.removeEventListener("mousemove",bump);window.removeEventListener("keydown",bump);window.removeEventListener("touchstart",bump);};
+  },[]);
+
+  // Capture PWA install prompt — fires on Android Chrome / Edge when app is installable
+  useEffect(()=>{
+    const handler=(e)=>{
+      e.preventDefault();
+      setPwaPrompt(e);
+      // Only show banner if not already installed and user hasn't dismissed
+      if(!window.matchMedia('(display-mode: standalone)').matches&&!localStorage.getItem('xpensr_pwa_dismissed')){
+        setShowInstallBanner(true);
+      }
+    };
+    window.addEventListener('beforeinstallprompt',handler);
+    return()=>window.removeEventListener('beforeinstallprompt',handler);
+  },[]);
+
+  const installPWA=async()=>{
+    if(!pwaPrompt)return;
+    pwaPrompt.prompt();
+    const{outcome}=await pwaPrompt.userChoice;
+    if(outcome==='accepted') setShowInstallBanner(false);
+    setPwaPrompt(null);
+  };
+
+  const dismissInstallBanner=()=>{
+    setShowInstallBanner(false);
+    localStorage.setItem('xpensr_pwa_dismissed','1');
+  }; // null = not yet loaded
 
   // Keyboard shortcuts
   useEffect(()=>{
@@ -4113,6 +4012,16 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   return(
     <div className="xpensr-root" data-dark={String(isDark)} style={{display:"flex",minHeight:"100vh",fontFamily:FB,background:isDark?"#0f172a":"#f5faf3",color:isDark?"#f0f9ff":"#1a2e12",transition:"background .2s,color .2s"}}>
+      {/* PWA Install Banner — shown on Android Chrome when app is installable */}
+      {showInstallBanner&&<div style={{position:"fixed",bottom:76,left:"50%",transform:"translateX(-50%)",zIndex:9999,background:DARK,borderRadius:14,padding:"12px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 8px 32px #0008",maxWidth:340,width:"calc(100% - 32px)"}}>
+        <img src="/pwa-192.png" style={{width:32,height:32,borderRadius:7,flexShrink:0}} alt="XpensR"/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:700,fontSize:12,color:"#fff",marginBottom:1}}>Add to Home Screen</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,.5)"}}>Install XpensR for quick access</div>
+        </div>
+        <button onClick={installPWA} style={{background:G,border:"none",borderRadius:7,padding:"6px 11px",color:"#fff",fontWeight:700,fontSize:11,cursor:"pointer",flexShrink:0,fontFamily:FB}}>Install</button>
+        <button onClick={dismissInstallBanner} style={{background:"none",border:"none",color:"rgba(255,255,255,.35)",cursor:"pointer",fontSize:14,padding:2,flexShrink:0}}>✕</button>
+      </div>}
       <style>{GLSTYLE+`.login-inp::placeholder{color:rgba(255,255,255,0.28)!important;font-weight:300}.login-inp::-webkit-input-placeholder{color:rgba(255,255,255,0.28)!important}`}</style>
       <style>{`
         /* Font size scaling — zoom scales EVERYTHING including inline px styles */
@@ -5125,7 +5034,8 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
   const blankForm=()=>({id:uid(),date:today(),category:"",desc:"",amount:"",origAmount:"",currency:"INR",tripId:"",legId:"",city:"",cityTier:"D",notes:"",vendor:"",receipts:[],ocrState:"idle",ocrData:null,scanning:false,gstAmount:"",projectCode:"",manualEdits:{}});
   const [forms,setForms]=useState(()=>{
     try{
-      const d=localStorage.getItem("xpensr_draft_v1");
+      const _dr=localStorage.getItem("xpensr_draft_v1");
+      const d=_dr?(_dec(_dr)||_dr):null;
       if(d){const p=JSON.parse(d);return p.length>0?p:[blankForm()];}
     }catch{}
     return[blankForm()];
@@ -5133,13 +5043,13 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
   const [idx,setIdx]=useState(0);
   const [showTripModal,setShowTripModal]=useState(false);
   const saveDraft=useCallback((f)=>{
-    try{localStorage.setItem("xpensr_draft_v1",JSON.stringify(Array.isArray(f)?f:[f]));}catch{}
+    try{localStorage.setItem("xpensr_draft_v1",_enc(JSON.stringify(Array.isArray(f)?f:[f])));}catch{}
   },[]);
   const clearDraft=()=>{try{localStorage.removeItem("xpensr_draft_v1");}catch{}};
   // Auto-save draft on every form change
   useEffect(()=>{
     if(forms.some(f=>f.category||f.desc||f.amount||f.vendor))
-      try{localStorage.setItem("xpensr_draft_v1",JSON.stringify(forms));}catch{}
+      try{localStorage.setItem("xpensr_draft_v1",_enc(JSON.stringify(forms)));}catch{}
   },[forms]);
   const fileRefs=useRef({});
   const policy=co.policy;
@@ -5554,7 +5464,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
         {/* Draft save buttons */}
         <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:4}}>
           {(fm.category||fm.desc||fm.amount)&&<>
-            <button onClick={()=>{try{localStorage.setItem("xpensr_draft_v1",JSON.stringify(forms));alert("✓ Draft saved successfully");}catch(e){alert("Save failed: "+e.message);}}} style={{padding:"4px 10px",background:"none",border:`1px solid ${BDR}`,borderRadius:6,cursor:"pointer",fontSize:10,color:MUTED}}>💾 Save Draft</button>
+            <button onClick={()=>{try{localStorage.setItem("xpensr_draft_v1",_enc(JSON.stringify(forms)));alert("✓ Draft saved successfully");}catch(e){alert("Save failed: "+e.message);}}} style={{padding:"4px 10px",background:"none",border:`1px solid ${BDR}`,borderRadius:6,cursor:"pointer",fontSize:10,color:MUTED}}>💾 Save Draft</button>
             <button onClick={()=>{try{localStorage.removeItem("xpensr_draft_v1");setForms([blankForm()]);setIdx(0);}catch{}}} style={{padding:"4px 10px",background:"none",border:"1px solid #fee2e2",borderRadius:6,cursor:"pointer",fontSize:10,color:"#dc2626"}}>✕ Clear Draft</button>
           </>}
         </div>
@@ -7004,12 +6914,13 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
             <div style={{marginTop:8,padding:"7px 10px",background:GL,borderRadius:7,fontSize:11,color:GD}}>✓ {policy.scheduledReports?.frequency} reports → {policy.scheduledReports?.email||"(set email above)"}</div>
           </div>}
         </Card>
-        {/* AI Token Subscription */}
-        <Card style={{padding:18}}>
+        {/* AI Token Subscription — admin and CFO only */}
+        {(isAdmin||(co?.users?.find(u=>u.id===user?.id)?.role==="cfo"))&&<Card style={{padding:18}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>🤖 AI Features — Token Balance</div>
           <AiTokenWidget cid={cid} sbEnabled={sbEnabled}/>
-        </Card>
-        </Card><Card style={{padding:18}}>
+        </Card>}
+        {/* ── Auto-Approve & Dual Approval Rules ── */}
+        <Card style={{padding:18}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Auto-Approve & Dual Approval Rules</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:10}}>
             {[["Auto-Approve Limit (₹)","autoApproveLimit"],["Dual Approval Above (₹) — 0=off","dualApproveAbove"],["Auto-Approve Delay (minutes)","autoApproveMins"]].map(([l,k])=>(
@@ -7175,19 +7086,6 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
             </table>
           </div>
         </Card>}
-        {/* Subscription (continuation) */}
-        <Card style={{display:"none"}}>
-          <div style={{background:GL,border:`1px solid ${GM}`,borderRadius:9,padding:"10px 12px",marginBottom:12}}>
-            <div style={{fontSize:9,color:GD,fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>Current Bill</div>
-            <div style={{fontFamily:FD,fontSize:22,fontWeight:700,color:INK,marginTop:3}}>{fmt(emps*tier.ppu)}<span style={{fontSize:11,fontWeight:400,color:MUTED}}>/month</span></div>
-            <div style={{fontSize:10,color:MUTED,marginTop:1}}>{emps} employees × {fmt(tier.ppu)}/user</div>
-          </div>
-          <table style={{width:"100%"}}><thead><tr><th>Users</th><th>₹/user/mo</th></tr></thead>
-            <tbody>{TIERED.map(t=><tr key={t.min} style={{background:tier.min===t.min?GL:"transparent"}}><td style={{fontWeight:600,fontSize:12}}>{t.min}–{t.max===999?"50+":t.max}</td><td style={{color:INK,fontWeight:700,fontSize:12}}>{fmt(t.ppu)}</td></tr>)}</tbody>
-          </table>
-        </Card>
-      </div>
-
       {/* ── Expense Categories ── */}
       <Card style={{padding:18,marginTop:12}}>
         <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Expense Categories</div>
@@ -8495,7 +8393,7 @@ function ShortcutHelp({onClose}){
 function AIChatbot({user,co,onClose}){
   const CHAT_KEY="xpensr_chat_"+user?.id;
   const[msgs,setMsgs]=useState(()=>{
-    try{const s=localStorage.getItem(CHAT_KEY);if(s)return JSON.parse(s);}catch{}
+    try{const s=localStorage.getItem(CHAT_KEY);if(s)return JSON.parse(_dec(s)||s);}catch{}
     return[{role:"assistant",content:"Hi! I'm XpensR Assistant. Ask me anything about submitting expenses, approving claims, creating trips, or any other feature. How can I help?"}];
   });
   const[input,setInput]=useState("");
@@ -8507,7 +8405,7 @@ function AIChatbot({user,co,onClose}){
 
   // Save chat history whenever msgs changes
   useEffect(()=>{
-    try{localStorage.setItem(CHAT_KEY,JSON.stringify(msgs.slice(-50)));}catch{}
+    try{localStorage.setItem(CHAT_KEY,_enc(JSON.stringify(msgs.slice(-50))));}catch{}
   },[msgs]);
 
   const resetChat=()=>{
