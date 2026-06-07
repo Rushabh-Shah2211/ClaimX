@@ -7177,6 +7177,7 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
         <Btn onClick={async()=>{setParentPol(policy);if(sbEnabled&&savePolicy){try{await savePolicy(policy);toast("✓ Saved to database");}catch(e){toast(e.message,"error");}}else toast("✓ Saved");}} style={{background:policy.primaryColor||G}}>Save All Settings</Btn>
       </div>
     </div>
+    </div>
   );
 }
 
