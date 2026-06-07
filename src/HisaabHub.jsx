@@ -1851,6 +1851,10 @@ function SaUsers({DB,userCounts}){
   const[newRole,setNewRole]=useState("employee");
   const[busy,setBusy]=useState(false);
   const[msg,setMsg]=useState("");
+  const[resetUser,setResetUser]=useState(null);
+  const[newPassword,setNewPassword]=useState("");
+  const[resetMsg,setResetMsg]=useState("");
+  const[resetBusy,setResetBusy]=useState(false);
   useEffect(()=>{if(!SB_ENABLED)return;supabase.from("users").select("*,companies(name)").then(({data})=>{if(data)setSbUsers(data);});},[]);
   const rows=SB_ENABLED?sbUsers:allUsers;
 
@@ -1888,14 +1892,32 @@ function SaUsers({DB,userCounts}){
     }
   };
 
+  // Reset password — set new password directly in users table
+  const openReset=u=>{setResetUser(u);setNewPassword("");setResetMsg("");};
+  const doResetPassword=async()=>{
+    if(!newPassword||newPassword.length<4){setResetMsg("Password must be at least 4 characters.");return;}
+    if(!resetUser)return;
+    setResetBusy(true);setResetMsg("");
+    try{
+      if(SB_ENABLED){
+        // Update password_hash directly (plaintext — will be bcrypted on next login via RPC)
+        const{error}=await supabase.from("users").update({password_hash:newPassword}).eq("id",resetUser.id);
+        if(error)throw new Error(error.message);
+        setResetMsg("✓ Password reset successfully. Share the new password with "+resetUser.name+" securely.");
+        setTimeout(()=>{setResetUser(null);setNewPassword("");},2500);
+      }
+    }catch(e){setResetMsg("Error: "+e.message);}
+    finally{setResetBusy(false);}
+  };
+
   const inpS2={padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB,width:"100%"};
   return(<>
     <Card>
       <div style={{padding:"10px 14px",background:"#fef3c7",borderRadius:"8px 8px 0 0",fontSize:11,color:"#92400e",fontWeight:600}}>
-        ⚠ Super Admin can only change user roles, suspend, or delete users. Company data and financial details are private.
+        ⚠ Super Admin can change user roles, reset passwords, suspend, or delete users. Company financial data is private.
       </div>
       <div className="mob-scroll">
-      <table style={{width:"100%",minWidth:600}}>
+      <table style={{width:"100%",minWidth:700}}>
         <thead><tr><th>Name</th><th>Company</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>{rows.map(u=><tr key={u.id} className="rh" style={{opacity:u.is_suspended?0.6:1}}>
           <td><div style={{display:"flex",alignItems:"center",gap:7}}>
@@ -1905,8 +1927,9 @@ function SaUsers({DB,userCounts}){
           <td style={{fontSize:11}}>{u.coName||(u.companies?.name)||"—"}</td>
           <td><span style={{background:ROLES.find(r=>r.id===u.role)?.color+"20"||GL,color:ROLES.find(r=>r.id===u.role)?.color||GD,padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700,textTransform:"capitalize"}}>{u.role}</span></td>
           <td>{u.is_suspended?<span style={{background:"#fee2e2",color:"#dc2626",padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700}}>Suspended</span>:<span style={{background:"#dcfce7",color:"#16a34a",padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700}}>Active</span>}</td>
-          <td><div style={{display:"flex",gap:5}}>
+          <td><div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
             <Btn v="outline" onClick={()=>openEdit(u)} style={{padding:"3px 8px",fontSize:11}}>Role</Btn>
+            <Btn v="outline" onClick={()=>openReset(u)} style={{padding:"3px 8px",fontSize:11,borderColor:"#f59e0b",color:"#92400e"}}>🔑 Reset PW</Btn>
             <Btn v={u.is_suspended?"primary":"warning"} onClick={()=>suspendUser(u)} style={{padding:"3px 8px",fontSize:11}}>{u.is_suspended?"Activate":"Suspend"}</Btn>
             <Btn v="danger" onClick={()=>deleteUser(u)} style={{padding:"3px 8px",fontSize:11}}>✕</Btn>
           </div></td>
@@ -1914,6 +1937,39 @@ function SaUsers({DB,userCounts}){
       </table>
       </div>
     </Card>
+
+    {/* Reset Password Modal */}
+    {resetUser&&(
+      <div style={{position:"fixed",inset:0,background:"#00000060",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,backdropFilter:"blur(3px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)setResetUser(null);}}>
+        <div onMouseDown={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:28,width:"min(420px,94vw)",boxShadow:"0 24px 60px #0003"}}>
+          <h3 style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK,marginBottom:4}}>🔑 Reset Password</h3>
+          <p style={{color:MUTED,fontSize:12,marginBottom:6}}>{resetUser.name}</p>
+          <p style={{color:MUTED,fontSize:11,marginBottom:16}}>{resetUser.email||resetUser.username||"—"} · {resetUser.companies?.name||resetUser.company_id}</p>
+          <div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,padding:"10px 12px",marginBottom:14,fontSize:11,color:"#92400e"}}>
+            ⚠ Share the new password with the user via a secure channel (WhatsApp/phone call — not email). Ask them to change it after first login.
+          </div>
+          <div style={{marginBottom:14}}>
+            <label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:6,textTransform:"uppercase"}}>New Password</label>
+            <input
+              type="text"
+              value={newPassword}
+              onChange={e=>setNewPassword(e.target.value)}
+              placeholder="Enter new password (min 4 chars)"
+              style={inpS2}
+              autoComplete="new-password"
+            />
+          </div>
+          {resetMsg&&<div style={{fontSize:12,marginBottom:10,color:resetMsg.startsWith("✓")?"#16a34a":"#dc2626",padding:"8px 10px",background:resetMsg.startsWith("✓")?"#f0fde9":"#fee2e2",borderRadius:6}}>{resetMsg}</div>}
+          <div style={{display:"flex",gap:9}}>
+            <Btn onClick={doResetPassword} disabled={resetBusy||!newPassword} style={{flex:1,padding:11,background:"#f59e0b"}}>
+              {resetBusy?"Resetting…":"Set New Password"}
+            </Btn>
+            <Btn v="outline" onClick={()=>setResetUser(null)}>Cancel</Btn>
+          </div>
+        </div>
+      </div>
+    )}
+
     {editUser&&(
       <div style={{position:"fixed",inset:0,background:"#00000060",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,backdropFilter:"blur(3px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)setEditUser(null);}}>
         <div onMouseDown={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:28,width:"min(420px,94vw)",boxShadow:"0 24px 60px #0003"}}>
@@ -6711,6 +6767,147 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
     </div>
   );
 }
+// ─── COMPANY BYOK AI KEY CONFIG ───────────────────────────────────────────────
+function CompanyAiKeyConfig({cid,sbEnabled}){
+  const[existing,setExisting]=useState(null);  // current saved key row
+  const[provider,setProvider]=useState("claude");
+  const[apiKey,setApiKey]=useState("");
+  const[model,setModel]=useState("");
+  const[saving,setSaving]=useState(false);
+  const[msg,setMsg]=useState("");
+  const[loading,setLoading]=useState(true);
+  const[showKey,setShowKey]=useState(false);
+  const[removing,setRemoving]=useState(false);
+
+  const PROVIDERS=[
+    {id:"claude", label:"Anthropic Claude", icon:"🟠",
+     models:["claude-haiku-4-5-20251001","claude-sonnet-4-20250514","claude-opus-4-20250514"],
+     placeholder:"sk-ant-api03-...",
+     howTo:"console.anthropic.com → API Keys → Create Key"},
+    {id:"openai", label:"OpenAI / ChatGPT", icon:"🟢",
+     models:["gpt-4o-mini","gpt-4o","gpt-4-turbo"],
+     placeholder:"sk-proj-...",
+     howTo:"platform.openai.com → API Keys → Create new secret key"},
+    {id:"gemini", label:"Google Gemini", icon:"🔵",
+     models:["gemini-1.5-flash","gemini-1.5-pro","gemini-2.0-flash"],
+     placeholder:"AIzaSy...",
+     howTo:"aistudio.google.com → Get API Key"},
+  ];
+
+  useEffect(()=>{
+    if(!sbEnabled||!cid){setLoading(false);return;}
+    supabase.from("company_ai_keys").select("provider,model,is_active,created_at,api_key").eq("company_id",cid).maybeSingle()
+      .then(({data})=>{
+        if(data){
+          setExisting(data);
+          setProvider(data.provider||"claude");
+          setModel(data.model||"");
+          // Show masked key
+          setApiKey("••••••••••••••••••••");
+        }
+        setLoading(false);
+      });
+  },[cid,sbEnabled]);
+
+  const save=async()=>{
+    if(!apiKey||apiKey.startsWith("•")){setMsg("Enter a valid API key.");return;}
+    if(apiKey.length<10){setMsg("API key looks too short. Check and try again.");return;}
+    setSaving(true);setMsg("");
+    try{
+      const selectedModel=model||(PROVIDERS.find(p=>p.id===provider)?.models[0]||"");
+      const row={company_id:cid,provider,api_key:apiKey,model:selectedModel,is_active:true};
+      const{error}=await supabase.from("company_ai_keys").upsert(row,{onConflict:"company_id"});
+      if(error)throw new Error(error.message);
+      setExisting({...row,api_key:"••••"});
+      setApiKey("••••••••••••••••••••");
+      setMsg("✓ API key saved. AI features are now powered by your own key.");
+    }catch(e){setMsg("Error: "+e.message);}
+    setSaving(false);
+  };
+
+  const remove=async()=>{
+    if(!window.confirm("Remove your API key? AI OCR will stop working until you add a new key or purchase XpensR tokens."))return;
+    setRemoving(true);
+    await supabase.from("company_ai_keys").delete().eq("company_id",cid);
+    setExisting(null);setApiKey("");setModel("");setMsg("Key removed.");
+    setRemoving(false);
+  };
+
+  const inpS={padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,background:"var(--input-bg,#fafff8)",width:"100%",fontFamily:FB};
+  const curP=PROVIDERS.find(p=>p.id===provider)||PROVIDERS[0];
+
+  if(loading)return<div style={{color:MUTED,fontSize:12}}>Loading…</div>;
+
+  return(
+    <div>
+      {/* Status badge */}
+      {existing?.is_active
+        ?<div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:"#f0fde9",border:`1px solid ${GM}`,borderRadius:8,marginBottom:14}}>
+          <span style={{fontSize:16}}>{PROVIDERS.find(p=>p.id===existing.provider)?.icon||"🤖"}</span>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:700,fontSize:12,color:"#16a34a"}}>✓ Your own API key is active</div>
+            <div style={{fontSize:10,color:MUTED}}>Provider: {PROVIDERS.find(p=>p.id===existing.provider)?.label} · Model: {existing.model||"default"} · XpensR tokens not used</div>
+          </div>
+          <button onClick={remove} disabled={removing} style={{background:"none",border:"1px solid #fca5a5",borderRadius:6,padding:"3px 10px",color:"#dc2626",fontSize:11,cursor:"pointer"}}>
+            {removing?"Removing…":"Remove"}
+          </button>
+        </div>
+        :<div style={{padding:"8px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,marginBottom:14,fontSize:11,color:"#92400e"}}>
+          ⚠ No API key configured. AI invoice OCR and chat are disabled unless you have an XpensR token pack.
+        </div>
+      }
+
+      {/* Provider selector */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
+        {PROVIDERS.map(p=>(
+          <button key={p.id} onClick={()=>{setProvider(p.id);setModel(p.models[0]);}} style={{padding:"10px 6px",borderRadius:9,border:`2px solid ${provider===p.id?G:BDR}`,background:provider===p.id?"#f0fde9":"var(--card,#fff)",cursor:"pointer",textAlign:"center",transition:"all .15s"}}>
+            <div style={{fontSize:18,marginBottom:3}}>{p.icon}</div>
+            <div style={{fontSize:10,fontWeight:700,color:provider===p.id?GD:INK}}>{p.label}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Model selector */}
+      <div style={{marginBottom:10}}>
+        <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Model</label>
+        <select value={model||curP.models[0]} onChange={e=>setModel(e.target.value)} style={{...inpS,appearance:"none"}}>
+          {curP.models.map(m=><option key={m} value={m}>{m}</option>)}
+        </select>
+      </div>
+
+      {/* API Key input */}
+      <div style={{marginBottom:10}}>
+        <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>
+          API Key
+          <span style={{fontWeight:400,textTransform:"none",marginLeft:8,color:MUTED}}>— {curP.howTo}</span>
+        </label>
+        <div style={{position:"relative"}}>
+          <input
+            type={showKey?"text":"password"}
+            value={apiKey}
+            onChange={e=>setApiKey(e.target.value)}
+            onFocus={()=>{if(apiKey.startsWith("•"))setApiKey("");}}
+            placeholder={curP.placeholder}
+            style={inpS}
+            autoComplete="off"
+          />
+          <button onClick={()=>setShowKey(p=>!p)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:MUTED,fontSize:14}}>{showKey?"🙈":"👁"}</button>
+        </div>
+      </div>
+
+      <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:7,padding:"8px 12px",marginBottom:12,fontSize:11,color:"#1d4ed8"}}>
+        🔒 Your API key is stored securely in your private database. XpensR never reads or uses your key — it is sent directly from our server to the AI provider when you scan a receipt or use the chat assistant.
+      </div>
+
+      {msg&&<div style={{fontSize:12,padding:"7px 10px",borderRadius:6,marginBottom:10,background:msg.startsWith("✓")?"#f0fde9":"#fee2e2",color:msg.startsWith("✓")?"#16a34a":"#dc2626"}}>{msg}</div>}
+
+      <Btn onClick={save} disabled={saving||!apiKey||apiKey.startsWith("•")} style={{padding:"9px 22px"}}>
+        {saving?"Saving…":"Save API Key"}
+      </Btn>
+    </div>
+  );
+}
+
 // ─── AI TOKEN WIDGET — shown in Policy tab for company admin ─────────────────
 function AiTokenWidget({cid,sbEnabled}){
   const [tokenData,setTokenData]=useState(null);
@@ -6914,6 +7111,13 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
             <div style={{marginTop:8,padding:"7px 10px",background:GL,borderRadius:7,fontSize:11,color:GD}}>✓ {policy.scheduledReports?.frequency} reports → {policy.scheduledReports?.email||"(set email above)"}</div>
           </div>}
         </Card>
+        {/* ── AI Configuration (BYOK) ── */}
+        <Card style={{padding:18}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>🤖 AI Configuration — Your Own API Key</div>
+          <div style={{fontSize:11,color:MUTED,marginBottom:12}}>Add your own API key from Claude, ChatGPT, or Gemini. Your key is used directly — XpensR does not charge any tokens or see your usage.</div>
+          <CompanyAiKeyConfig cid={cid} sbEnabled={sbEnabled}/>
+        </Card>
+
         {/* AI Token Subscription — admin and CFO only */}
         {(isAdmin||(co?.users?.find(u=>u.id===user?.id)?.role==="cfo"))&&<Card style={{padding:18}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>🤖 AI Features — Token Balance</div>
