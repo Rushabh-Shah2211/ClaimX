@@ -738,6 +738,17 @@ const claimEmailHtml=(action,claim,remarks,companyName)=>{
 
 
 // ─── TRIP SETTLEMENT PDF ──────────────────────────────────────────────────────
+// Module-level diem calculator — used by PDF generators (no component scope needed)
+const calcEmpDiem=(trip,uid)=>{
+  let total=0;
+  for(const leg of (trip.legs||[])){
+    const rate=leg.diemRate||0;
+    const days=leg.days||1;
+    total+=rate*days;
+  }
+  return total;
+};
+
 const generateSettlementPDF=async(trip,allClaims,getUser,companyName,allUsers,policy)=>{
   const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
   const W=210,ML=15,MR=15,CW=W-ML-MR;
@@ -848,7 +859,7 @@ const generateSettlementPDF=async(trip,allClaims,getUser,companyName,allUsers,po
     let totalEff=0;
     assigned.forEach((uid,i)=>{
       const u=typeof getUser==="function"?getUser(uid):(allUsers||[]).find(x=>x.id===uid);
-      const diemEnt=empDiem?.(trip,uid)||0;
+      const diemEnt=calcEmpDiem(trip,uid);
       const mealApproved=approvedClaims.filter(c=>c.empId===uid&&["Meals","Food","Daily Allowance"].includes(c.category)).reduce((s,c)=>s+c.amount,0);
       const mealClaimed=tripClaims.filter(c=>c.empId===uid&&["Meals","Food","Daily Allowance"].includes(c.category)).reduce((s,c)=>s+c.amount,0);
       const effective=Math.max(diemEnt,mealApproved);
@@ -2878,6 +2889,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const approveTrip=async(trip)=>{
     if(SB_ENABLED){await supabase.from("trips").update({status:"active"}).eq("id",trip.id);await loadFromSB();}
     else setTrips(p=>p.map(t=>t.id===trip.id?{...t,status:"active"}:t));
+    await sbAddAudit("Trip Approved","",`"${trip.name}" activated`,trip.id);
     await sbPushNotif(trip.createdBy,`Your trip "${trip.name}" has been approved and is now active`,"success");
     toast(`✓ Trip "${trip.name}" approved`);
   };
@@ -2885,6 +2897,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const rejectTrip=async(trip)=>{
     if(SB_ENABLED){await supabase.from("trips").update({status:"declined"}).eq("id",trip.id);await loadFromSB();}
     else setTrips(p=>p.map(t=>t.id===trip.id?{...t,status:"declined"}:t));
+    await sbAddAudit("Trip Rejected","",`"${trip.name}" declined`,trip.id);
     await sbPushNotif(trip.createdBy,`Your trip "${trip.name}" was not approved`,"error");
     toast(`Trip "${trip.name}" rejected`,"warn");
   };
@@ -3034,12 +3047,13 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       setNotifs(p=>[{id:"N-"+uid(),userId:toUserId,text,type,read:false,time:new Date().toLocaleString()},...(p||[])]);
     }
   };
-  const sbAddAudit=async(action,claimId,remarks="")=>{
+  const sbAddAudit=async(action,claimId,remarks="",tripId="")=>{
+    const entry={id:"AL-"+uid(),action,claimId:claimId||"",tripId:tripId||"",by:user.id,byId:user.id,byName:user.name,at:new Date().toLocaleString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit",hour12:false}),remarks};
     if(SB_ENABLED){
-      await supabase.from("audit_log").insert({company_id:cid,action,claim_id:claimId,by_user_id:user.id,by_name:user.name,remarks});
-    } else {
-      setAudit(p=>[{id:"AL-"+uid(),action,claimId,by:user.id,byName:user.name,at:new Date().toLocaleString(),remarks},...(p||[])]);
+      try{await supabase.from("audit_log").insert({company_id:cid,action,claim_id:claimId||null,trip_id:tripId||null,by_user_id:user.id,by_name:user.name,at:entry.at,remarks});}
+      catch{}
     }
+    setAudit(p=>[entry,...(p||[]).slice(0,999)]);
   };
   const markRead=async()=>{
     if(SB_ENABLED){
@@ -3665,6 +3679,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     // Generate PDF settlement
     try{
       const doc=await generateSettlementPDF(trip,co.claims,getUser,activeMeta?.name,co.users,co.policy);
+      doc.save(`${trip.name||"Trip"}_Settlement.pdf`);
       const pdfBlob=doc.output("blob");
       const url=URL.createObjectURL(pdfBlob);
       const a=document.createElement("a");
@@ -3761,6 +3776,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
       // Update local state directly — no loadFromSB needed
       setCoData(p=>({...p,policy:newPolicy}));
+      // Audit log
+      await sbAddAudit("Policy Updated","","Settings saved by admin");
     }
   };
 
@@ -4333,7 +4350,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))}
           isManager={isManager} isAdmin={isAdmin} getUser={getUser} policy={co.policy} printSummary={printSummary} user={user}/>}
         {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
-        {tab==="audit"&&(isAdmin||isManager)&&<Audit auditLog={isAdmin?(co.auditLog||[]):(co.auditLog||[]).filter(e=>{const uid=e.userId||e.by;return uid===user.id||visibleUserIds.has(uid);})} claims={co.claims} getUser={getUser}/>}
+        {tab==="audit"&&(isAdmin||user?.role==="cfo")&&<Audit auditLog={isAdmin?(co.auditLog||[]):(co.auditLog||[])} claims={co.claims} getUser={getUser} users={co.users} trips={co.trips} policy={co.policy}/>}
         {tab==="my_history"&&!isManager&&!isAdmin&&<MyHistoryTab user={user} trips={co.trips} claims={co.claims} getUser={getUser} exportClaimsPDF={exportClaimsPDF}/>}
         {tab==="ledger"&&canApprove&&<TripLedgerTab trips={isAdmin?co.trips:visibleTrips} claims={isAdmin?co.claims:visibleClaims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} companyName={activeMeta?.name||""}/>}
         {tab==="balances"&&canApprove&&<BalancesTab trips={co.trips} claims={co.claims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept)} getUser={getUser} isAdmin={isAdmin} fmt={fmt} cid={cid} sbEnabled={SB_ENABLED} onReload={loadFromSB}/>}
@@ -5674,7 +5691,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
     const baseList=isManager||isAdmin
       ?(form.assignedTo.length>0?form.assignedTo:emps.map(e=>e.id))
       :[userId];
-    const assigned=[...new Set(isEmployee?[...baseList,userId]:baseList)];
+    const assigned=[...new Set(baseList)];
     // All trips go for approval regardless of role (item 3)
     // Admin trips auto-approve, manager trips go to next grade/admin
     const status=isAdmin?"active":"pending_approval";
@@ -5780,16 +5797,22 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
             <div style={{fontSize:10,color:MUTED,marginTop:6}}>💡 Expenses exceeding the category % limit will be flagged for manager approval, even if within auto-approve threshold.</div>
           </div>}
         </>}
-        {isManager&&emps.length>0&&<div style={{marginBottom:12}}>
-          <label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:7,textTransform:"uppercase"}}>Assign Employees (empty = all)</label>
+        {(isManager||isAdmin)&&<div style={{marginBottom:12}}>
+          <label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:7,textTransform:"uppercase"}}>Assign Travellers</label>
           <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
-            {emps.map(e=>{const sel=form.assignedTo.includes(e.id);return(
-              <div key={e.id} onClick={()=>toggle(e.id)} style={{display:"flex",alignItems:"center",gap:5,padding:"5px 11px",borderRadius:20,border:`1.5px solid ${sel?G:BDR}`,background:sel?G:"#fff",cursor:"pointer"}}>
-                <div style={{width:20,height:20,borderRadius:"50%",background:sel?"rgba(255,255,255,.3)":GL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,fontWeight:700,color:sel?"#fff":GD}}>{e.avatar}</div>
-                <span style={{fontSize:11,fontWeight:600,color:sel?"#fff":INK}}>{e.name.split(" ")[0]}</span>
-              </div>
-            );})}
+            {/* Manager/Admin can add themselves */}
+            {[...users.filter(u=>u.id===userId),...emps.filter(u=>u.id!==userId)].map(e=>{
+              const sel=form.assignedTo.includes(e.id);
+              const isSelf=e.id===userId;
+              return(
+                <div key={e.id} onClick={()=>toggle(e.id)} style={{display:"flex",alignItems:"center",gap:5,padding:"5px 11px",borderRadius:20,border:`1.5px solid ${sel?G:BDR}`,background:sel?G:"#fff",cursor:"pointer"}}>
+                  <div style={{width:20,height:20,borderRadius:"50%",background:sel?"rgba(255,255,255,.3)":GL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,fontWeight:700,color:sel?"#fff":GD}}>{e.avatar||inits(e.name)}</div>
+                  <span style={{fontSize:11,fontWeight:600,color:sel?"#fff":INK}}>{e.name.split(" ")[0]}{isSelf?" (me)":""}</span>
+                </div>
+              );
+            })}
           </div>
+          {form.assignedTo.length===0&&<div style={{fontSize:10,color:"#f59e0b",marginTop:5}}>⚠ No travellers selected — select at least one person for this trip.</div>}
         </div>}
         {/* ── Itinerary / Legs ── */}
         <div style={{marginBottom:12}}>
@@ -5908,9 +5931,9 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                 </>}
                 {(isAdmin||isManager)&&(t.status==="active"||t.status==="closed")&&(
                   <div style={{display:"flex",gap:5}}>
-                    <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"",users,policy);const pu=doc.output("bloburl");window.open(pu,"_blank");}catch(e){toast("PDF failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄 PDF</Btn>
-                    {(isManager||isAdmin)&&<Btn v="outline" onClick={()=>generateTAR(t,users.find(u=>u.id===t.createdBy)||{name:""},users,"")} style={{fontSize:10,padding:"5px 8px"}}>📋 TAR</Btn>}
-                    {(isManager||isAdmin)&&<Btn v="outline" onClick={()=>generateTERC(t,users.find(u=>u.id===t.createdBy)||{name:""},claims.filter(c=>c.tripId===t.id),policy,"")} style={{fontSize:10,padding:"5px 8px"}}>📑 TERC</Btn>}
+                    <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"",users,policy);doc.save(`${t.name||"Trip"}_Settlement.pdf`);}catch(e){toast("PDF failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄 PDF</Btn>
+                    {(isManager||isAdmin)&&<Btn v="outline" onClick={async()=>{try{const doc=await generateTAR(t,users.find(u=>u.id===t.createdBy)||{name:""},users,"");doc.save(`TAR_${t.name||"Trip"}.pdf`);}catch(e){toast("TAR failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📋 TAR</Btn>}
+                    {(isManager||isAdmin)&&<Btn v="outline" onClick={async()=>{try{const doc=await generateTERC(t,users.find(u=>u.id===t.createdBy)||{name:""},claims.filter(c=>c.tripId===t.id),policy,"");doc.save(`TERC_${t.name||"Trip"}.pdf`);}catch(e){toast("TERC failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📑 TERC</Btn>}
                     <Btn v="outline" onClick={()=>setConveyanceTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🚗 Conveyance</Btn>
                     <Btn v="outline" onClick={()=>setAretTrip(t)} style={{fontSize:10,padding:"5px 8px",borderColor:"#f59e0b",color:"#92400e"}}>⚠ ARET</Btn>
                     <Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Edit</Btn>
@@ -6388,24 +6411,153 @@ function Inbox({notifications,setNotifs,userId}){
 }
 
 // ─── AUDIT TAB ────────────────────────────────────────────────────────────────
-function Audit({auditLog,claims,getUser}){
+function Audit({auditLog,claims,getUser,users,trips,policy}){
+  const[filter,setFilter]=useState("all");
+  const[search,setSearch]=useState("");
+  const[dateFrom,setDateFrom]=useState("");
+  const[dateTo,setDateTo]=useState("");
+
+  // Enrich audit log with claim and user details
+  const enriched=(auditLog||[]).map(a=>{
+    const c=claims?.find(x=>x.id===a.claimId);
+    const t=trips?.find(x=>x.id===a.tripId);
+    return {...a, _claim:c, _trip:t};
+  });
+
+  const CATEGORIES=[
+    {id:"all",label:"All"},
+    {id:"claim",label:"Claims"},
+    {id:"approval",label:"Approvals"},
+    {id:"trip",label:"Trips"},
+    {id:"policy",label:"Policy"},
+    {id:"user",label:"Users"},
+    {id:"budget",label:"Budget"},
+  ];
+
+  const categoryOf=(action="")=>{
+    const a=action.toLowerCase();
+    if(a.includes("approved")||a.includes("rejected")||a.includes("submitted"))return "approval";
+    if(a.includes("claim"))return "claim";
+    if(a.includes("trip")||a.includes("period")||a.includes("itinerary"))return "trip";
+    if(a.includes("policy")||a.includes("setting"))return "policy";
+    if(a.includes("user")||a.includes("employee")||a.includes("password")||a.includes("role"))return "user";
+    if(a.includes("budget")||a.includes("topup")||a.includes("balance"))return "budget";
+    return "claim";
+  };
+
+  const colorOf=(action="")=>{
+    const a=action.toLowerCase();
+    if(a.includes("approved")||a.includes("activated")||a.includes("created"))return{bg:"#dcfce7",color:"#16a34a"};
+    if(a.includes("rejected")||a.includes("deleted")||a.includes("suspended"))return{bg:"#fee2e2",color:"#dc2626"};
+    if(a.includes("policy")||a.includes("setting")||a.includes("edit"))return{bg:"#ede9fe",color:"#7c3aed"};
+    if(a.includes("trip"))return{bg:"#dbeafe",color:"#2563eb"};
+    if(a.includes("budget")||a.includes("topup"))return{bg:"#fef3c7",color:"#92400e"};
+    if(a.includes("user")||a.includes("employee"))return{bg:"#e0f2fe",color:"#0369a1"};
+    return{bg:"#f3f4f6",color:"#374151"};
+  };
+
+  const filtered=enriched.filter(a=>{
+    if(filter!=="all"&&categoryOf(a.action)!==filter)return false;
+    if(search){
+      const q=search.toLowerCase();
+      if(!(a.action?.toLowerCase().includes(q)||a.byName?.toLowerCase().includes(q)||a.remarks?.toLowerCase().includes(q)||a.claimId?.toLowerCase().includes(q)||a._trip?.name?.toLowerCase().includes(q)))return false;
+    }
+    if(dateFrom&&a.at&&a.at<dateFrom)return false;
+    if(dateTo&&a.at&&a.at>dateTo+" 23:59")return false;
+    return true;
+  });
+
+  // Summary stats
+  const stats={
+    total:enriched.length,
+    today:enriched.filter(a=>a.at?.slice(0,10)===today()).length,
+    approvals:enriched.filter(a=>categoryOf(a.action)==="approval").length,
+    policy:enriched.filter(a=>categoryOf(a.action)==="policy").length,
+  };
+
   return(
     <div>
-      <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:12}}>Audit Log</h1>
-      <Card><table style={{width:"100%"}}>
-        <thead><tr><th>Time</th><th>Action</th><th>Claim ID</th><th>Amount</th><th>By</th><th>Remarks</th></tr></thead>
-        <tbody>{(auditLog||[]).length===0?<tr><td colSpan={6} style={{padding:36,textAlign:"center",color:MUTED}}>No audit entries yet</td></tr>:(auditLog||[]).map(a=>{
-          const c=claims.find(x=>x.id===a.claimId);
-          return(<tr key={a.id} className="rh">
-            <td style={{fontSize:10,color:MUTED,fontFamily:"monospace"}}>{a.at}</td>
-            <td><Badge s={a.action.includes("Approved")?"Approved":"Rejected"} sm/>{a.action==="Auto-Approved"&&<span style={{fontSize:9,color:MUTED,marginLeft:3}}>(auto)</span>}</td>
-            <td style={{fontFamily:"monospace",fontSize:10,color:GD,fontWeight:600}}>{a.claimId}</td>
-            <td style={{fontWeight:600,fontSize:12}}>{c?fmt(c.amount):"—"}</td>
-            <td><div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:20,height:20,borderRadius:"50%",background:a.by==="SYSTEM"?"#f3f4f6":GL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,fontWeight:700,color:GD}}>{a.by==="SYSTEM"?"⚡":getUser(a.by)?.avatar||"?"}</div><span style={{fontSize:11,fontWeight:600}}>{a.byName}</span></div></td>
-            <td style={{color:MUTED,fontSize:11}}>{a.remarks||"—"}</td>
-          </tr>);
-        })}</tbody>
-      </table></Card>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:10}}>
+        <div>
+          <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK,marginBottom:2}}>Activity Log</h1>
+          <p style={{color:MUTED,fontSize:11}}>Complete record of every action across the application</p>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{padding:"6px 8px",border:`1px solid ${BDR}`,borderRadius:7,fontSize:11,background:"var(--card,#fff)"}}/>
+          <span style={{color:MUTED,fontSize:11,alignSelf:"center"}}>to</span>
+          <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{padding:"6px 8px",border:`1px solid ${BDR}`,borderRadius:7,fontSize:11,background:"var(--card,#fff)"}}/>
+        </div>
+      </div>
+
+      {/* Stats row */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
+        {[["Total Entries",stats.total,"#1a2e12"],["Today",stats.today,G],["Approvals",stats.approvals,"#2563eb"],["Policy Changes",stats.policy,"#7c3aed"]].map(([l,v,c])=>(
+          <div key={l} style={{background:"var(--card,#fff)",border:`1px solid ${BDR}`,borderRadius:9,padding:"10px 14px"}}>
+            <div style={{fontSize:10,color:MUTED,textTransform:"uppercase",marginBottom:3}}>{l}</div>
+            <div style={{fontWeight:700,fontSize:20,color:c}}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+        <div style={{display:"flex",gap:6,flex:1,flexWrap:"wrap"}}>
+          {CATEGORIES.map(c=>(
+            <button key={c.id} onClick={()=>setFilter(c.id)} style={{padding:"4px 12px",borderRadius:20,border:`1.5px solid ${filter===c.id?G:BDR}`,background:filter===c.id?G:"transparent",color:filter===c.id?"#fff":MUTED,fontSize:11,fontWeight:600,cursor:"pointer"}}>
+              {c.label}
+            </button>
+          ))}
+        </div>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search by action, user, remark…" style={{padding:"6px 10px",border:`1px solid ${BDR}`,borderRadius:7,fontSize:11,background:"var(--card,#fff)",minWidth:220}}/>
+      </div>
+
+      <Card>
+        <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",minWidth:700}}>
+          <thead><tr>
+            <th style={{width:130}}>Time</th>
+            <th style={{width:160}}>Action</th>
+            <th>Details</th>
+            <th style={{width:130}}>By</th>
+            <th>Remarks</th>
+          </tr></thead>
+          <tbody>
+            {filtered.length===0
+              ?<tr><td colSpan={5} style={{padding:36,textAlign:"center",color:MUTED}}>No entries match your filters</td></tr>
+              :filtered.map((a,idx)=>{
+                const c=colorOf(a.action);
+                const cat=categoryOf(a.action);
+                return(<tr key={a.id||idx} className="rh">
+                  <td style={{fontSize:10,color:MUTED,fontFamily:"monospace",whiteSpace:"nowrap"}}>{a.at||a.created_at?.slice(0,16)||"—"}</td>
+                  <td>
+                    <span style={{background:c.bg,color:c.color,padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>{a.action}</span>
+                  </td>
+                  <td style={{fontSize:11}}>
+                    {a.claimId&&<span style={{fontFamily:"monospace",fontSize:10,color:GD,fontWeight:600,marginRight:6}}>{a.claimId}</span>}
+                    {a._claim&&<span style={{color:INK,fontSize:11}}>₹{a._claim.amount?.toLocaleString("en-IN")} · {a._claim.category}</span>}
+                    {a.tripId&&a._trip&&<span style={{color:"#2563eb",fontSize:11}}>Trip: {a._trip.name}</span>}
+                    {a.tripId&&!a._trip&&<span style={{fontFamily:"monospace",fontSize:10,color:MUTED}}>{a.tripId}</span>}
+                    {!a.claimId&&!a.tripId&&a.remarks&&<span style={{color:MUTED,fontSize:10}}>{a.remarks?.slice(0,60)}</span>}
+                  </td>
+                  <td>
+                    <div style={{display:"flex",alignItems:"center",gap:5}}>
+                      <div style={{width:22,height:22,borderRadius:"50%",background:a.byId==="SYSTEM"?"#f3f4f6":GL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,fontWeight:700,color:GD,flexShrink:0}}>
+                        {a.byId==="SYSTEM"?"⚡":(getUser?.(a.byId||a.by)?.avatar||inits(a.byName||"?"))}
+                      </div>
+                      <span style={{fontSize:11,fontWeight:600}}>{a.byName||"System"}</span>
+                    </div>
+                  </td>
+                  <td style={{color:MUTED,fontSize:10,maxWidth:200}}>{a.remarks||"—"}</td>
+                </tr>);
+              })
+            }
+          </tbody>
+        </table>
+        </div>
+        <div style={{padding:"8px 14px",borderTop:`1px solid ${BDR}`,fontSize:10,color:MUTED}}>
+          Showing {filtered.length} of {enriched.length} entries
+        </div>
+      </Card>
     </div>
   );
 }
