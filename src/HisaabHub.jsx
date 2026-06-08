@@ -92,11 +92,11 @@ const GLSTYLE=`@import url('https://fonts.googleapis.com/css2?family=Playfair+Di
 ::-webkit-scrollbar-thumb:hover{background:rgba(126,217,87,.6)}
 [data-dark="true"] ::-webkit-scrollbar-thumb{background:rgba(126,217,87,.25)}
 * {scrollbar-width:thin;scrollbar-color:rgba(126,217,87,.4) transparent}
-input::placeholder{color:var(--muted)}
+input::placeholder{color:#b0bec5!important;font-weight:400}textarea::placeholder{color:#b0bec5!important;font-weight:400}select::placeholder{color:#b0bec5!important}
 th{text-align:left;padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--th-border);color:var(--ink)}
 td{padding:11px 14px;font-size:13px;color:var(--td-color);border-bottom:1px solid var(--td-border)}
 .rh:hover{background:var(--hover-bg)!important;cursor:pointer}
-input,select,textarea{font-family:'DM Sans',sans-serif;outline:none;color:var(--ink)!important;background:var(--input-bg)}
+input,select,textarea{font-family:'DM Sans',sans-serif;outline:none;color:var(--ink)!important;background:var(--input-bg)}input::-webkit-input-placeholder,textarea::-webkit-input-placeholder{color:#b0bec5!important;font-weight:400}input::-moz-placeholder,textarea::-moz-placeholder{color:#b0bec5!important;font-weight:400}
 input:focus,select:focus,textarea:focus{border-color:#7ED957!important}
 select{appearance:none}
 /* Dark mode card/div backgrounds */
@@ -4748,13 +4748,15 @@ function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,subm
   );
 }
 
-// ─── TRIP EDIT MODAL ──────────────────────────────────────────────────────────
 // ─── TRIP LEGS MODAL ──────────────────────────────────────────────────────────
 function TripLegsModal({trip,policy,onClose,onSave}){
-  const MODES=["Air","Train","Bus","Car","Taxi","Own Vehicle","Other"];
-  const initLeg=()=>({id:uid(),legNum:Date.now(),fromCity:"",toCity:"",_toCityOther:false,_fromCityOther:false,departAt:"",arriveAt:"",mode:"",cityTier:"D",hotelLimit:0,diemRate:0,days:1});
-  const[legs,setLegs]=useState(trip.legs?.length>0?trip.legs.map(l=>({...l,_toCityOther:false,_fromCityOther:false})):[initLeg()]);
+  const DEFAULT_MODES=["Air","Train (AC)","Train (Non-AC)","Bus (Volvo)","Bus (Non-AC)","Taxi / Cab","Own Vehicle","Metro","Rental Car","Ferry","Other"];
+  const MODES=policy?.allowedTransportModes||DEFAULT_MODES;
+  const initLeg=()=>({id:uid(),legNum:Date.now(),fromCity:"",toCity:"",_toCityOther:"",_fromCityOther:"",_toOther:false,_fromOther:false,departAt:"",arriveAt:"",mode:"",cityTier:"D",hotelLimit:0,diemRate:0,days:1});
+  const[legs,setLegs]=useState(trip.legs?.length>0?trip.legs.map(l=>({...l,_toCityOther:"",_fromCityOther:"",_toOther:false,_fromOther:false})):[initLeg()]);
   const[busy,setBusy]=useState(false);
+  const tripStart=trip.startDate||trip.start_date||"";
+  const tripEnd=trip.endDate||trip.end_date||"";
 
   const cityTiers=policy?.cityTiers||[];
   const tierCities={A:cityTiers.filter(c=>c.tier==="A"),B:cityTiers.filter(c=>c.tier==="B"),C:cityTiers.filter(c=>c.tier==="C")};
@@ -4781,7 +4783,7 @@ function TripLegsModal({trip,policy,onClose,onSave}){
   };
 
   // City selector component (inline)
-  const CitySelect=({value,onChange,label,showOther,onToggleOther})=>(
+  const CitySelect=({value,onChange,label,showOther,onToggleOther,otherValue,onOtherChange})=>(
     <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>{label}</label>
       {hasCities&&!showOther?(
         <select value={cityTiers.some(ct=>ct.city===value)?value:"__other__"}
@@ -4798,9 +4800,18 @@ function TripLegsModal({trip,policy,onClose,onSave}){
         </select>
       ):(
         <div style={{display:"flex",gap:4}}>
-          <input value={value||""} onChange={e=>onChange(e.target.value)} placeholder="Enter city name (Tier D)"
-            style={{flex:1,padding:"7px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,fontFamily:FB,background:"var(--input-bg,#fafff8)"}}/>
-          {hasCities&&<button onClick={()=>{onToggleOther(false);onChange("");}} title="Back to list"
+          {/* Use local state via otherValue prop to prevent keystroke deselection */}
+          <input
+            value={onOtherChange?otherValue||"":value||""}
+            onChange={e=>{
+              if(onOtherChange) onOtherChange(e.target.value);
+              else onChange(e.target.value);
+            }}
+            placeholder="Type city name (Tier D)"
+            autoFocus
+            style={{flex:1,padding:"7px 10px",border:`1.5px solid ${G}`,borderRadius:7,fontSize:12,fontFamily:FB,background:"var(--input-bg,#fafff8)"}}/>
+          {hasCities&&<button onClick={()=>{onToggleOther(false);onChange("");}}
+            title="Back to city list"
             style={{padding:"4px 8px",border:`1px solid ${BDR}`,borderRadius:6,background:"none",cursor:"pointer",fontSize:11,color:MUTED}}>↩</button>}
         </div>
       )}
@@ -4842,14 +4853,35 @@ function TripLegsModal({trip,policy,onClose,onSave}){
               {legs.length>1&&<button onClick={()=>setLegs(prev=>prev.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",cursor:"pointer",color:"#dc2626",fontSize:14}}>✕ Remove</button>}
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,marginBottom:8}}>
-              <CitySelect value={leg.fromCity||""} label="FROM CITY" showOther={leg._fromCityOther}
+              <CitySelect value={leg.fromCity||""} label="FROM CITY" showOther={leg._fromOther||leg._fromCityOther}
+                otherValue={leg._fromCityOther||""}
+                onOtherChange={v=>updateLeg(idx,{_fromCityOther:v,fromCity:v})}
                 onChange={v=>updateLeg(idx,{fromCity:v})}
-                onToggleOther={v=>updateLeg(idx,{_fromCityOther:v})}/>
-              <CitySelect value={leg.toCity||""} label="TO CITY *" showOther={leg._toCityOther}
+                onToggleOther={v=>updateLeg(idx,{_fromOther:v,_fromCityOther:"",fromCity:""})}/>
+              <CitySelect value={leg.toCity||""} label="TO CITY *" showOther={leg._toOther||leg._toCityOther}
+                otherValue={leg._toCityOther||""}
+                onOtherChange={v=>updateLeg(idx,{_toCityOther:v,toCity:v})}
                 onChange={v=>updateLeg(idx,{toCity:v})}
-                onToggleOther={v=>updateLeg(idx,{_toCityOther:v})}/>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>DEPARTURE</label><input type="date" value={(leg.departAt||"").slice(0,10)} onChange={e=>updateLeg(idx,{departAt:e.target.value,arriveAt:leg.arriveAt||e.target.value})} style={inpS}/></div>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>RETURN DATE</label><input type="date" value={(leg.arriveAt||"").slice(0,10)} onChange={e=>updateLeg(idx,{arriveAt:e.target.value})} style={inpS}/></div>
+                onToggleOther={v=>updateLeg(idx,{_toOther:v,_toCityOther:"",toCity:""})}/>
+              <div>
+                <label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>DEPARTURE {tripStart&&<span style={{color:"#f59e0b",fontSize:9}}>min:{tripStart}</span>}</label>
+                <input type="date" value={(leg.departAt||"").slice(0,10)}
+                  min={tripStart||undefined} max={tripEnd||undefined}
+                  onChange={e=>{
+                    if(tripEnd&&e.target.value>tripEnd){return;}
+                    if(tripStart&&e.target.value<tripStart){return;}
+                    updateLeg(idx,{departAt:e.target.value,arriveAt:leg.arriveAt||e.target.value});
+                  }} style={inpS}/>
+              </div>
+              <div>
+                <label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>RETURN DATE {tripEnd&&<span style={{color:"#f59e0b",fontSize:9}}>max:{tripEnd}</span>}</label>
+                <input type="date" value={(leg.arriveAt||"").slice(0,10)}
+                  min={leg.departAt||tripStart||undefined} max={tripEnd||undefined}
+                  onChange={e=>{
+                    if(tripEnd&&e.target.value>tripEnd){return;}
+                    updateLeg(idx,{arriveAt:e.target.value});
+                  }} style={inpS}/>
+              </div>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8}}>
               <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>MODE</label>
@@ -4892,103 +4924,78 @@ function TripLegsModal({trip,policy,onClose,onSave}){
   );
 }
 
-function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin}){
+function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin,isEmployee,userId}){
+  const isClosed=trip.status==="closed"||trip.status==="settled";
   const[form,setForm]=useState({
-    name:trip.name,startDate:trip.startDate,endDate:trip.endDate,
-    projectCode:trip.projectCode||"",currency:trip.currency||"INR",
-    tripMode:trip.tripMode||"balance",
+    name:trip.name,
+    startDate:trip.startDate||trip.start_date||"",
+    endDate:trip.endDate||trip.end_date||"",
+    projectCode:trip.projectCode||trip.project_code||"",
+    currency:trip.currency||"INR",
+    tripMode:trip.tripMode||trip.trip_mode||"balance",
+    purpose:trip.purpose||"",
+    customerName:trip.customerName||trip.customer_name||"",
+    tripType:trip.tripType||trip.trip_type||"domestic",
     assignedTo:[...(trip.assignedTo||[])],
-    categoryLimits:trip.categoryLimits||{},
+    categoryLimits:trip.categoryLimits||trip.category_limits||{},
   });
   const[busy,setBusy]=useState(false);
   const inpS={width:"100%",padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB};
   const save=async()=>{
     if(!form.name?.trim()||!form.endDate){alert("Name and end date required");return;}
+    if(isClosed){alert("This trip is closed/settled and cannot be edited.");return;}
     setBusy(true);
     try{
-      await onSave(trip.id,{name:form.name,startDate:form.startDate,endDate:form.endDate,projectCode:form.projectCode,currency:form.currency,assignedTo:form.assignedTo,tripMode:form.tripMode,categoryLimits:form.categoryLimits});
+      await onSave(trip.id,{name:form.name,startDate:form.startDate,endDate:form.endDate,projectCode:form.projectCode,currency:form.currency,assignedTo:form.assignedTo,tripMode:form.tripMode,categoryLimits:form.categoryLimits,purpose:form.purpose,customerName:form.customerName,tripType:form.tripType});
       onClose();
     }catch(e){alert("Update failed: "+e.message);}
     finally{setBusy(false);}
   };
   return(
     <div data-modal="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:700,backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:26,width:"min(480px,96vw)",boxShadow:"0 24px 60px rgba(0,0,0,.2)"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:26,width:"min(520px,96vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 24px 60px rgba(0,0,0,.2)"}}>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
           <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK}}>Edit Trip</div>
           <button onClick={onClose} style={{background:"none",border:"none",fontSize:18,cursor:"pointer",color:MUTED}}>✕</button>
         </div>
-        {!isAdmin&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"7px 11px",marginBottom:12,fontSize:11,color:"#92400e"}}>Changes will be saved directly. Admin approval not required for managers.</div>}
-        <div style={{marginBottom:11}}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Trip Name</label><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} style={inpS}/></div>
-        {/* Trip Mode — critical for settlement calculations */}
-        <div style={{marginBottom:11}}>
-          <label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:6,textTransform:"uppercase"}}>Mode</label>
-          <div style={{display:"flex",gap:9}}>
-            {[{v:"balance",l:"💼 Balance Mode",d:"Employee uses pre-loaded wallet"},{v:"reimbursement",l:"💸 Reimbursement",d:"Company reimburses after trip"}].map(({v,l,d})=>(
-              <div key={v} onClick={()=>setForm({...form,tripMode:v})} style={{flex:1,padding:"10px",border:`2px solid ${form.tripMode===v?G:BDR}`,borderRadius:8,cursor:"pointer",textAlign:"center",background:form.tripMode===v?"#f0fde9":"var(--card)"}}>
-                <div style={{fontSize:12,fontWeight:700,color:INK}}>{l}</div>
-                <div style={{fontSize:9,color:MUTED,marginTop:2}}>{d}</div>
-              </div>
-            ))}
-          </div>
-        </div>
+        {isClosed&&<div style={{background:"#fee2e2",border:"1px solid #fca5a5",borderRadius:7,padding:"7px 11px",marginBottom:12,fontSize:11,color:"#dc2626"}}>⚠ This trip is {trip.status}. No edits allowed.</div>}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:11}}>
-          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Start Date</label><input type="date" value={form.startDate} onChange={e=>setForm({...form,startDate:e.target.value})} style={inpS}/></div>
-          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>End Date</label><input type="date" value={form.endDate} min={form.startDate} onChange={e=>setForm({...form,endDate:e.target.value})} style={inpS}/></div>
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:16}}>
-          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Project / Cost Centre</label><input value={form.projectCode} onChange={e=>setForm({...form,projectCode:e.target.value})} style={inpS}/></div>
-          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Currency</label>
-            <select value={form.currency} onChange={e=>setForm({...form,currency:e.target.value})} style={{...inpS,appearance:"none"}}>
-              {["INR","USD","EUR","GBP","AED","SGD","JPY","CHF","CAD","AUD"].map(c=><option key={c}>{c}</option>)}
-            </select></div>
-        </div>
-        <div style={{marginBottom:16}}>
-          <label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:6,textTransform:"uppercase"}}>Assigned Employees</label>
-          <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-            {users.filter(u=>["employee","finance"].includes(u.role)).map(u=>{
-              const isAssigned=(trip.assignedTo||[]).includes(u.id);
-              return(
-                <div key={u.id} onClick={()=>setForm(f=>{
-                  const cur=f.assignedTo||[...trip.assignedTo];
-                  return{...f,assignedTo:cur.includes(u.id)?cur.filter(x=>x!==u.id):[...cur,u.id]};
-                })} style={{padding:"5px 11px",borderRadius:14,border:`1.5px solid ${isAssigned?G:BDR}`,background:isAssigned?G:"transparent",color:isAssigned?"#fff":INK,fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
-                  <span style={{width:18,height:18,borderRadius:"50%",background:isAssigned?"rgba(255,255,255,.3)":GL,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700}}>{u.avatar||inits(u.name)}</span>
-                  {u.name.split(" ")[0]}
-                </div>
-              );
-            })}
+          <div style={{gridColumn:"1/-1"}}><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Trip Name *</label><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} disabled={isClosed} style={inpS}/></div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Start Date</label><input type="date" value={form.startDate} onChange={e=>setForm({...form,startDate:e.target.value})} disabled={isClosed} style={inpS}/></div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>End Date</label><input type="date" value={form.endDate} min={form.startDate} onChange={e=>setForm({...form,endDate:e.target.value})} disabled={isClosed} style={inpS}/></div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Purpose</label>
+            <input value={form.purpose} onChange={e=>setForm({...form,purpose:e.target.value})} placeholder="Purpose of visit" disabled={isClosed} style={inpS}/>
           </div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Customer / Supplier</label>
+            <input value={form.customerName} onChange={e=>setForm({...form,customerName:e.target.value})} placeholder="Name of customer/supplier" disabled={isClosed} style={inpS}/>
+          </div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Trip Type</label>
+            <select value={form.tripType} onChange={e=>setForm({...form,tripType:e.target.value})} disabled={isClosed} style={{...inpS,appearance:"none"}}>
+              <option value="domestic">🏠 Domestic</option>
+              <option value="overseas">✈ Overseas</option>
+            </select>
+          </div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Currency</label>
+            <select value={form.currency} onChange={e=>setForm({...form,currency:e.target.value})} disabled={isClosed} style={{...inpS,appearance:"none"}}>
+              {["INR","USD","EUR","GBP","AED","SGD","JPY","CHF","CAD","AUD"].map(c=><option key={c}>{c}</option>)}
+            </select>
+          </div>
+          <div><label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>Project / Cost Centre</label><input value={form.projectCode} onChange={e=>setForm({...form,projectCode:e.target.value})} disabled={isClosed} style={inpS}/></div>
         </div>
-        <div style={{marginBottom:11}}>
-          <label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:6,textTransform:"uppercase"}}>Category Limits (% of budget — 0 = no limit)</label>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
-            {DEFAULT_CATS.slice(0,8).map(cat=>(
-              <div key={cat} style={{display:"flex",alignItems:"center",gap:6}}>
-                <span style={{fontSize:11,color:INK,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cat}</span>
-                <input type="number" min={0} max={100}
-                  value={form.categoryLimits?.[cat]||""}
-                  onChange={e=>setForm(f=>({...f,categoryLimits:{...f.categoryLimits,[cat]:parseFloat(e.target.value)||0}}))}
-                  placeholder="%" style={{width:52,padding:"4px 6px",border:`1.5px solid ${BDR}`,borderRadius:5,fontSize:11}}/>
-                <span style={{fontSize:10,color:MUTED}}>%</span>
+        {/* Trip Mode — admin/manager only */}
+        {!isEmployee&&<div style={{marginBottom:11}}>
+          <label style={{fontSize:9,fontWeight:700,color:MUTED,display:"block",marginBottom:6,textTransform:"uppercase"}}>Expense Mode</label>
+          <div style={{display:"flex",gap:9}}>
+            {[{v:"balance",l:"💼 Balance Mode"},{v:"reimbursement",l:"💸 Reimbursement"}].map(({v,l})=>(
+              <div key={v} onClick={()=>!isClosed&&setForm({...form,tripMode:v})} style={{flex:1,padding:"9px",border:`2px solid ${form.tripMode===v?G:BDR}`,borderRadius:8,cursor:isClosed?"not-allowed":"pointer",textAlign:"center",background:form.tripMode===v?"#f0fde9":"var(--card)",opacity:isClosed?0.5:1}}>
+                <div style={{fontSize:11,fontWeight:700,color:INK}}>{l}</div>
               </div>
             ))}
           </div>
-        </div>
-        {trip.status==="closed"&&(
-          <div style={{marginBottom:10,padding:"8px 11px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7}}>
-            <div style={{fontSize:10,fontWeight:700,color:"#92400e",marginBottom:4}}>⚠ This trip is closed.</div>
-            <button onClick={async()=>{
-              if(!window.confirm(`Reopen "${trip.name}"? Status will return to active.`))return;
-              setBusy(true);
-              try{await onSave(trip.id,{...form,status:"active"});onClose();}
-              catch(e){alert("Failed: "+e.message);}finally{setBusy(false);}
-            }} style={{padding:"5px 12px",background:"#f59e0b",color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontWeight:700}}>↺ Reopen Trip</button>
-          </div>
-        )}
+        </div>}
         <div style={{display:"flex",gap:9,justifyContent:"flex-end"}}>
-          <button onClick={onClose} style={{padding:"9px 16px",borderRadius:8,border:`1px solid ${BDR}`,background:"transparent",color:MUTED,cursor:"pointer",fontSize:13}}>Cancel</button>
-          <Btn onClick={save} disabled={busy} style={{padding:"9px 22px",fontSize:13}}>{busy?"Saving…":"Save Changes"}</Btn>
+          <Btn v="outline" onClick={onClose}>Cancel</Btn>
+          {!isClosed&&<Btn onClick={save} disabled={busy}>{busy?"Saving…":"Save Changes"}</Btn>}
         </div>
       </div>
     </div>
@@ -5717,12 +5724,14 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
     const cityTiers=policy?.cityTiers||[];
     const tA=cityTiers.filter(c=>c.tier==="A"),tB=cityTiers.filter(c=>c.tier==="B"),tC=cityTiers.filter(c=>c.tier==="C");
     const inList=cityTiers.some(ct=>ct.city===value);
+    // Local state for the "Other" text input to prevent re-render losing focus
+    const [localVal,setLocalVal]=useState(showOther?value:"");
     return(
       <div><label style={{fontSize:9,color:MUTED,display:"block",marginBottom:2,textTransform:"uppercase"}}>{label}</label>
         {hasCities&&!showOther?(
           <select value={inList?value:(value?"__other__":"")}
             onChange={e=>{
-              if(e.target.value==="__other__"){updateNewLeg(idx,{[field]:"",["_"+field+"Other"]:true});}
+              if(e.target.value==="__other__"){setLocalVal("");updateNewLeg(idx,{[field]:"",["_"+field+"Other"]:true});}
               else updateNewLeg(idx,{[field]:e.target.value,["_"+field+"Other"]:false});
             }}
             style={{...inpS,fontSize:11,padding:"6px 9px",appearance:"none"}}>
@@ -5734,10 +5743,16 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
           </select>
         ):(
           <div style={{display:"flex",gap:4}}>
-            <input value={value} onChange={e=>updateNewLeg(idx,{[field]:e.target.value})}
-              placeholder="Enter city name (Tier D)"
-              style={{...inpS,fontSize:11,padding:"6px 9px",flex:1}}/>
-            {hasCities&&<button onClick={()=>updateNewLeg(idx,{[field]:"",["_"+field+"Other"]:false})}
+            <input
+              value={localVal}
+              onChange={e=>{
+                setLocalVal(e.target.value);
+                updateNewLeg(idx,{[field]:e.target.value});
+              }}
+              autoFocus
+              placeholder="Type city name (Tier D)"
+              style={{...inpS,fontSize:11,padding:"6px 9px",flex:1,border:`1.5px solid ${G}`}}/>
+            {hasCities&&<button onClick={()=>{setLocalVal("");updateNewLeg(idx,{[field]:"",["_"+field+"Other"]:false});}}
               style={{padding:"4px 8px",border:`1px solid ${BDR}`,borderRadius:6,background:"none",cursor:"pointer",fontSize:11,color:MUTED}} title="Back to list">↩</button>}
           </div>
         )}
@@ -5749,6 +5764,9 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
 
   const create=async()=>{
     if(!form.name?.trim()){toast("Please enter a trip name","error");return;}
+    if(!form.startDate){toast("Please enter a start date","error");return;}
+    if(!form.endDate){toast("Please enter an end date","error");return;}
+    if(form.endDate<form.startDate){toast("End date cannot be before start date","error");return;}
     // Notice period check
     if(co.policy?.noticePeriodDomestic>0&&form.tripType!=="overseas"){
       const daysUntil=(new Date(form.startDate)-new Date())/86400000;
@@ -5762,8 +5780,6 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
         if(!window.confirm(`⚠ Policy requires ${co.policy.noticePeriodOverseas} days notice for overseas travel. Trip starts in ${Math.ceil(daysUntil)} days. Submit anyway?`))return;
       }
     }
-    if(!form.endDate){toast("Please enter an end date","error");return;}
-    if(!form.startDate){toast("Please enter a start date","error");return;}
     const baseList=isManager||isAdmin
       ?(form.assignedTo.length>0?form.assignedTo:emps.map(e=>e.id))
       :[userId];
@@ -5921,7 +5937,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
         <div style={{display:"flex",gap:8}}><Btn onClick={create}>Create →</Btn><Btn v="outline" onClick={()=>setShowNew(false)}>Cancel</Btn></div>
       </Card>}
       {/* Edit trip modal */}
-      {editTrip&&<TripEditModal trip={editTrip} users={users} getUser={getUser} isAdmin={isAdmin}
+      {editTrip&&<TripEditModal trip={editTrip} users={users} getUser={getUser} isAdmin={isAdmin} isEmployee={!isManager&&!isAdmin} userId={userId}
         onClose={()=>setEditTrip(null)}
         onSave={async(id,patch)=>{
           if(sbUpdateTrip)await sbUpdateTrip(id,patch);
@@ -6011,7 +6027,6 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                     <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===(t.createdBy||userId))||{name:""};const doc=await generateTAR(t,creator,users,"");doc.save(`TAR_${t.name||"Trip"}.pdf`);}catch(e){toast("TAR failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📋 TAR</Btn>
                     <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===(t.createdBy||userId))||{name:""};const doc=await generateTERC(t,creator,claims.filter(c=>c.tripId===t.id),policy,"");doc.save(`TERC_${t.name||"Trip"}.pdf`);}catch(e){toast("TERC failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📑 TERC</Btn>
                     <Btn v="outline" onClick={()=>setConveyanceTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🚗 Conveyance</Btn>
-                    <Btn v="outline" onClick={()=>setAretTrip(t)} style={{fontSize:10,padding:"5px 8px",borderColor:"#f59e0b",color:"#92400e"}}>⚠ ARET</Btn>
                     <Btn v="outline" onClick={()=>setLegsTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>📍 Itinerary</Btn>
                     {(isAdmin||isManager)&&<>
                       <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"",users,policy);doc.save(`${t.name||"Trip"}_Settlement.pdf`);}catch(e){toast("PDF failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄 PDF</Btn>
@@ -6021,6 +6036,10 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                         <Btn v="danger" onClick={()=>deleteTrip&&deleteTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🗑 Delete</Btn>}
                       {t.status==="active"&&<Btn v="warning" onClick={()=>closeTrip(t.id)} style={{fontSize:10,padding:"5px 10px"}}>Close</Btn>}
                     </>}
+                    {/* Employee can also edit trip details on their own trips until closed */}
+                    {!isManager&&!isAdmin&&t.createdBy===userId&&t.status!=="closed"&&t.status!=="settled"&&(
+                      <Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Edit Trip</Btn>
+                    )}
                   </div>
                 )}
                 {/* Admin/Manager-only view for trips they're not assigned to */}
@@ -6030,7 +6049,6 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                     <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===t.createdBy)||{name:""};const doc=await generateTAR(t,creator,users,"");doc.save(`TAR_${t.name||"Trip"}.pdf`);}catch(e){toast("TAR failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📋 TAR</Btn>
                     <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===t.createdBy)||{name:""};const doc=await generateTERC(t,creator,claims.filter(c=>c.tripId===t.id),policy,"");doc.save(`TERC_${t.name||"Trip"}.pdf`);}catch(e){toast("TERC failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📑 TERC</Btn>
                     <Btn v="outline" onClick={()=>setConveyanceTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🚗 Conveyance</Btn>
-                    <Btn v="outline" onClick={()=>setAretTrip(t)} style={{fontSize:10,padding:"5px 8px",borderColor:"#f59e0b",color:"#92400e"}}>⚠ ARET</Btn>
                     <Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Edit</Btn>
                     <Btn v="outline" onClick={()=>setLegsTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>📍 Itinerary</Btn>
                     {(isAdmin||(t.status==="pending_approval"||t.status==="declined")&&t.createdBy===userId)&&
@@ -6156,14 +6174,24 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
         </div>}
       </div>
       {pendingTopups.length>0&&<div style={{marginBottom:16}}>
-        <div style={{fontSize:10,fontWeight:700,color:"#d97706",textTransform:"uppercase",letterSpacing:1,marginBottom:7}}>💰 Top-Up Requests</div>
-        {pendingTopups.map(req=>{const e=getUser(req.empId);const reqTrip=trips.find(t=>t.id===req.tripId);return(
-          <Card key={req.id} style={{padding:14,marginBottom:7,borderColor:"#fcd34d"}}>
+        <div style={{fontSize:10,fontWeight:700,color:"#d97706",textTransform:"uppercase",letterSpacing:1,marginBottom:7}}>💰 Top-Up & ARET Requests</div>
+        {pendingTopups.map(req=>{
+          const e=getUser(req.empId);
+          const reqTrip=trips.find(t=>t.id===req.tripId);
+          const isARET=req.reason?.startsWith("[ARET]")||req.requestType==="aret";
+          const displayReason=req.reason?.replace("[ARET] ","");
+          return(
+          <Card key={req.id} style={{padding:14,marginBottom:7,borderColor:isARET?"#f59e0b":"#fcd34d",borderLeft:`3px solid ${isARET?"#f59e0b":"#fcd34d"}`}}>
             <div style={{display:"flex",alignItems:"center",gap:9}}>
-              <div style={{width:30,height:30,borderRadius:"50%",background:"#fef3c7",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:"#d97706",fontSize:12}}>{e?.avatar}</div>
+              <div style={{width:30,height:30,borderRadius:"50%",background:isARET?"#fef3c7":"#fffbeb",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:"#d97706",fontSize:12}}>{e?.avatar}</div>
               <div style={{flex:1}}>
-                <div style={{fontWeight:600,color:INK,fontSize:13}}>{e?.name} — Top-Up Request</div>
-                <div style={{fontSize:11,color:MUTED}}>{req.reason} · {req.date}{reqTrip?` · Trip: ${reqTrip.name}`:""}</div>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontWeight:600,color:INK,fontSize:13}}>{e?.name}</span>
+                  <span style={{padding:"1px 7px",borderRadius:10,fontSize:9,fontWeight:700,background:isARET?"#fef3c7":"#f9fafb",color:isARET?"#92400e":"#6b7280",border:`1px solid ${isARET?"#fcd34d":"#e5e7eb"}`}}>
+                    {isARET?"⚠ ARET — Excess Expense":"💰 Top-Up Request"}
+                  </span>
+                </div>
+                <div style={{fontSize:11,color:MUTED}}>{displayReason} · {req.date}{reqTrip?` · Trip: ${reqTrip.name}`:""}</div>
               </div>
               <div style={{fontFamily:FD,fontSize:16,fontWeight:700,color:"#d97706",marginRight:7}}>{fmt(req.amount)}</div>
               <Btn onClick={()=>handleTopup(req,"Approved")} style={{padding:"5px 11px",fontSize:11}}>✓ Approve</Btn>
@@ -7431,11 +7459,6 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
         </Card>
 
         {/* ── Storage Status ── */}
-        <Card style={{padding:18}}>
-          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>📦 Receipt Storage</div>
-          <R2StatusWidget/>
-        </Card>
-
         {/* ── AI Configuration (BYOK) ── */}
         <Card style={{padding:18}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>🤖 AI — Bring Your Own API Key</div>
@@ -7444,11 +7467,6 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
         </Card>
 
         {/* AI Token Subscription — visible to admin (Policy tab is admin-only) */}
-        <Card style={{padding:18}}>
-          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>🤖 AI Features — Token Balance</div>
-          <AiTokenWidget cid={cid} sbEnabled={sbEnabled}/>
-        </Card>
-        {/* ── Auto-Approve & Dual Approval Rules ── */}
         <Card style={{padding:18}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Auto-Approve & Dual Approval Rules</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:10}}>
@@ -7567,6 +7585,27 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
           <div style={{display:"flex",gap:6}}>
             <input id="purpose-inp" placeholder="Add trip purpose…" onKeyDown={e=>{if(e.key==="Enter"&&e.target.value.trim()){setPolicy({...policy,tripPurposes:[...(policy.tripPurposes||[]),e.target.value.trim()]});e.target.value="";}}} style={{flex:1,padding:"6px 10px",border:`1.5px solid ${BDR}`,borderRadius:7,fontSize:12,fontFamily:FB}}/>
             <button onClick={()=>{const inp=document.getElementById("purpose-inp");if(inp?.value.trim()){setPolicy({...policy,tripPurposes:[...(policy.tripPurposes||[]),inp.value.trim()]});inp.value="";}}} style={{padding:"6px 12px",background:G,color:"#fff",border:"none",borderRadius:7,cursor:"pointer",fontSize:11}}>+</button>
+          </div>
+        </Card>
+
+        {/* ── Allowed Transport Modes ── */}
+        <Card style={{padding:18}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>Allowed Transport Modes</div>
+          <div style={{fontSize:11,color:MUTED,marginBottom:10}}>Select which modes employees can choose in trip itinerary</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:8}}>
+            {["Air","Train (AC)","Train (Non-AC)","Bus (Volvo)","Bus (Non-AC)","Taxi / Cab","Own Vehicle","Metro","Rental Car","Ferry","Other"].map(mode=>{
+              const allowed=policy.allowedTransportModes||["Air","Train (AC)","Train (Non-AC)","Bus (Volvo)","Taxi / Cab","Own Vehicle"];
+              const checked=allowed.includes(mode);
+              return(
+                <label key={mode} style={{display:"flex",alignItems:"center",gap:7,padding:"7px 10px",borderRadius:8,border:`1.5px solid ${checked?G:BDR}`,background:checked?"#f0fde9":"var(--card,#fff)",cursor:"pointer",fontSize:12,fontWeight:checked?600:400,color:checked?GD:INK}}>
+                  <input type="checkbox" checked={checked} onChange={e=>{
+                    const cur=policy.allowedTransportModes||["Air","Train (AC)","Train (Non-AC)","Bus (Volvo)","Taxi / Cab","Own Vehicle"];
+                    setPolicy({...policy,allowedTransportModes:e.target.checked?[...cur,mode]:cur.filter(m=>m!==mode)});
+                  }} style={{width:14,height:14,accentColor:G,cursor:"pointer"}}/>
+                  {mode}
+                </label>
+              );
+            })}
           </div>
         </Card>
         {policy.gradeBased&&(policy.approvalHierarchy||[]).length>0&&<Card style={{padding:18,gridColumn:"1/-1"}}>
