@@ -1033,20 +1033,29 @@ function useOffline(){
 
 // ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
 class ErrorBoundary extends Component{
-  constructor(p){super(p);this.state={error:null};}
+  constructor(p){super(p);this.state={error:null,info:null};}
   static getDerivedStateFromError(e){return{error:e};}
-  componentDidCatch(e,i){log.error("XpensR Error:",e,i);}
+  componentDidCatch(e,i){this.setState({info:i});log.error("XpensR Error:",e,i);}
   render(){
-    if(this.state.error){return(
-      <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f5faf3",fontFamily:FB,padding:24}}>
-        <div style={{maxWidth:480,textAlign:"center"}}>
-          <div style={{fontSize:48,marginBottom:16}}>⚠️</div>
-          <h2 style={{fontFamily:FD,fontSize:22,color:DARK,marginBottom:8}}>Something went wrong</h2>
-          <p style={{color:MUTED,fontSize:14,marginBottom:6}}>{"An unexpected error occurred. Please reload and try again."}</p>
-          <button onClick={()=>{this.setState({error:null});window.location.reload();}} style={{padding:"10px 24px",background:G,border:"none",borderRadius:9,color:"#fff",fontFamily:FB,fontWeight:700,fontSize:14,cursor:"pointer"}}>↺ Reload</button>
+    if(this.state.error){
+      const e=this.state.error;
+      const msg=e?.message||String(e)||"Unknown error";
+      const stack=(e?.stack||"").split("\n").slice(0,4).join("\n");
+      return(
+        <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f5faf3",fontFamily:FB,padding:24}}>
+          <div style={{maxWidth:560,textAlign:"center"}}>
+            <div style={{fontSize:48,marginBottom:16}}>⚠️</div>
+            <h2 style={{fontFamily:FD,fontSize:22,color:DARK,marginBottom:8}}>Something went wrong</h2>
+            <div style={{background:"#fee2e2",border:"1px solid #fca5a5",borderRadius:8,padding:"12px 16px",marginBottom:12,textAlign:"left"}}>
+              <div style={{fontWeight:700,color:"#dc2626",fontSize:13,marginBottom:6}}>Error: {msg}</div>
+              {stack&&<pre style={{fontSize:10,color:"#7f1d1d",whiteSpace:"pre-wrap",wordBreak:"break-all",margin:0}}>{stack}</pre>}
+            </div>
+            <p style={{color:MUTED,fontSize:12,marginBottom:16}}>Screenshot this error and share it for support.</p>
+            <button onClick={()=>{this.setState({error:null,info:null});window.location.reload();}} style={{padding:"10px 24px",background:G,border:"none",borderRadius:9,color:"#fff",fontFamily:FB,fontWeight:700,fontSize:14,cursor:"pointer"}}>↺ Reload</button>
+          </div>
         </div>
-      </div>
-    );}
+      );
+    }
     return this.props.children;
   }
 }
