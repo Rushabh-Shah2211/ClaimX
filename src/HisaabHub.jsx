@@ -2010,12 +2010,12 @@ function SaBilling({allCo,DB,userCounts}){
     if(!SB_ENABLED) return;
     // Load token balances for all companies
     supabase.from("ai_tokens").select("company_id,balance,used_total,plan_label,is_active,last_topup_at")
-      .then(({data})=>{
+      .then(({data,error})=>{if(error)return;
         if(data){const m={};data.forEach(r=>{m[r.company_id]=r;});setAiTokens(m);}
       });
     // Load recent usage
     supabase.from("ai_usage_log").select("*").order("created_at",{ascending:false}).limit(200)
-      .then(({data})=>{ if(data) setAiUsage(data); });
+      .then(({data,error})=>{ if(data&&!error) setAiUsage(data); }).catch(()=>{});
   },[]);
 
   const sellPack = async() => {
@@ -2491,10 +2491,10 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   useEffect(()=>{
     if(!SB_ENABLED||!cid) return;
     supabase.from("ai_tokens").select("balance,used_total,is_active,plan_label").eq("company_id",cid).maybeSingle()
-      .then(({data})=>{
-        if(data) setAiTokenBalance(data.balance||0);
-        else setAiTokenBalance(0);
-      });
+      .then(({data,error})=>{
+        if(error||!data) setAiTokenBalance(0);
+        else setAiTokenBalance(data.balance||0);
+      }).catch(()=>setAiTokenBalance(0));
   },[cid]);
   // ── Background refresh: every 5 minutes only (no live subscription that disrupts input) ──
   useEffect(()=>{
@@ -7035,14 +7035,16 @@ function AiTokenWidget({cid,sbEnabled}){
       supabase.from("ai_tokens").select("balance,used_total,plan_label,is_active,last_topup_at").eq("company_id",cid).maybeSingle(),
       supabase.from("ai_token_packs").select("pack_name,tokens_added,amount_inr,created_at").eq("company_id",cid).order("created_at",{ascending:false}).limit(10),
       supabase.from("ai_usage_log").select("tokens_used,feature,created_at").eq("company_id",cid).order("created_at",{ascending:false}).limit(50),
-    ]).then(([{data:td},{data:packs},{data:usage}])=>{
+    ]).then(([{data:td,error:e1},{data:packs},{data:usage}])=>{
+      if(e1){setTokenData("error");setLoading(false);return;}
       setTokenData(td||null);
       setHistory(packs||[]);
       setLoading(false);
-    });
+    }).catch(()=>{setTokenData("error");setLoading(false);});
   },[cid,sbEnabled]);
 
   if(loading) return<div style={{color:MUTED,fontSize:12}}>Loading AI subscription…</div>;
+  if(tokenData==="error") return<div style={{padding:"10px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,fontSize:11,color:"#92400e"}}>⚠ Run SQL steps 14 &amp; 15 in Supabase to enable AI token tracking.</div>;
 
   if(!tokenData||tokenData.balance==null){
     return(
