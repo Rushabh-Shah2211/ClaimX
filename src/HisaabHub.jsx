@@ -125,7 +125,13 @@ select{appearance:none}
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const fmt   = n  => "₹"+Number(n).toLocaleString("en-IN");
 const uid=()=>'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16);});
-const today = () => new Date().toISOString().slice(0,10);
+const today = () => {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
 const fmtDate = (d) => {
   // Format any date string (yyyy-mm-dd or ISO) as dd-mm-yyyy
   if(!d)return"—";
@@ -608,7 +614,6 @@ async function sbUploadReceipt(claimId,cid,b64,mimeType,fileName){
   const ext=mimeType.includes("pdf")?"pdf":"jpg";
   const key=`${cid}/${claimId}/${Date.now()}.${ext}`;
 
-  // ── Upload via Vercel → R2 (server-side, no CORS issues) ─────────────────
   const r2Resp=await fetch("/api/r2upload",{
     method:"POST",
     headers:{"Content-Type":"application/json","x-company-id":cid},
@@ -616,23 +621,28 @@ async function sbUploadReceipt(claimId,cid,b64,mimeType,fileName){
   });
 
   if(!r2Resp.ok){
-    let errMsg=`R2 HTTP ${r2Resp.status}`;
-    try{const d=await r2Resp.json();errMsg=d.error||errMsg;}catch{}
+    let errMsg=`Upload error ${r2Resp.status}`;
+    try{
+      const d=await r2Resp.json();
+      errMsg=d.error||errMsg;
+    }catch{
+      try{const t=await r2Resp.text();errMsg=`R2 ${r2Resp.status}: ${t.slice(0,120)}`;}catch{}
+    }
     throw new Error(errMsg);
   }
 
-  const{storagePath}=await r2Resp.json();
+  const result=await r2Resp.json();
+  if(!result.success) throw new Error(result.error||"Upload failed — please try again");
 
   const{error:dbErr}=await supabase.from("receipts").insert({
     claim_id:claimId,company_id:cid,
     file_name:fileName||`receipt.${ext}`,
-    storage_path:storagePath||key,
+    storage_path:result.storagePath||key,
     mime_type:mimeType,
     storage_provider:"r2",
   });
-  if(dbErr) throw new Error("Receipt DB save failed: "+dbErr.message);
-
-  return storagePath||key;
+  if(dbErr) throw new Error("DB save failed: "+dbErr.message);
+  return result.storagePath||key;
 }
 
 // ─── DEFAULT POLICY ───────────────────────────────────────────────────────────
@@ -1808,7 +1818,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
         <div style={{marginTop:"auto",paddingTop:12,borderTop:"1px solid rgba(255,255,255,0.08)"}}>
           <div style={{color:"#fff",fontSize:12,fontWeight:600,padding:"0 6px",marginBottom:8}}>Super Admin</div>
           <button onClick={onLogout} style={{width:"100%",padding:"7px",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:7,color:"rgba(255,255,255,0.4)",fontFamily:FB,fontSize:11,cursor:"pointer",marginBottom:6}}>Sign Out</button>
-          <button onClick={()=>{if(window.confirm("Reset ALL demo data? (Supabase data unaffected)")){localStorage.removeItem(STORAGE_KEY);localStorage.removeItem(SESSION_KEY);window.location.reload();}}} style={{width:"100%",padding:"6px",background:"rgba(239,68,68,0.12)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:7,color:"rgba(239,68,68,0.7)",fontFamily:FB,fontSize:10,cursor:"pointer"}}>🗑 Reset Demo Data</button>
+          <button onClick={()=>{if(window.confirm("Reset ALL demo data? (Cloud data unaffected)")){localStorage.removeItem(STORAGE_KEY);localStorage.removeItem(SESSION_KEY);window.location.reload();}}} style={{width:"100%",padding:"6px",background:"rgba(239,68,68,0.12)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:7,color:"rgba(239,68,68,0.7)",fontFamily:FB,fontSize:10,cursor:"pointer"}}>🗑 Reset Demo Data</button>
         </div>
       </div>
       {/* Content */}
@@ -1822,7 +1832,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
             <Card key={i} style={{padding:18}}><div style={{fontSize:22}}>{s.i}</div><div style={{fontFamily:FD,fontSize:22,fontWeight:700,color:s.c,marginTop:4}}>{s.v}</div><div style={{fontSize:11,color:MUTED,marginTop:2}}>{s.l}</div></Card>
           ))}
         </div>
-        {loading&&<div style={{textAlign:"center",padding:40,color:MUTED}}>Loading companies from Supabase…</div>}
+        {loading&&<div style={{textAlign:"center",padding:40,color:MUTED}}>Loading…</div>}
         {tab==="companies"&&!loading&&<Card><table style={{width:"100%"}}>
           <thead><tr><th>Company</th><th>Industry</th><th>Plan</th><th>Max Users</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
           <tbody>{allCo.map(co=>(
@@ -1859,7 +1869,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
         <div style={{position:"fixed",inset:0,background:"#00000060",display:"flex",alignItems:"center",justifyContent:"center",zIndex:500,backdropFilter:"blur(3px)"}} onClick={()=>setMdl(null)}>
           <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:18,padding:30,width:560,maxHeight:"85vh",overflow:"auto",boxShadow:"0 24px 60px #0003"}}>
             <h3 style={{fontFamily:FD,fontSize:18,fontWeight:700,color:INK,marginBottom:16}}>Create New Company</h3>
-            {SB_ENABLED&&<div style={{background:"#dbeafe",border:"1px solid #93c5fd",borderRadius:9,padding:"9px 13px",marginBottom:14,fontSize:12,color:"#1d4ed8"}}>ℹ️ The admin will receive a confirmation email from Supabase. They must verify their email before logging in.</div>}
+            {SB_ENABLED&&<div style={{background:"#dbeafe",border:"1px solid #93c5fd",borderRadius:9,padding:"9px 13px",marginBottom:14,fontSize:12,color:"#1d4ed8"}}>ℹ️ The admin will receive a confirmation email from the system. They must verify their email before logging in.</div>}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
               {[["Company Name *","name","text","Acme Corp"],["Industry","industry","text","Finance"],["Max Users *","maxUsers","number","5"]].map(([l,k,t,ph])=>(
                 <div key={k}><label style={{fontSize:10,color:MUTED,fontWeight:700,display:"block",marginBottom:4,textTransform:"uppercase"}}>{l}</label><input type={t} value={form[k]} onChange={e=>setForm({...form,[k]:e.target.value})} placeholder={ph} style={inpS}/></div>
@@ -2820,27 +2830,22 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
     if(!canApprove) return escalationClaims;
 
-    const regularClaims=pendingClaims.filter(c=>{
-      if(c.empId===user.id) return false;
-      if(!isAdmin&&!visibleUserIds.has(c.empId)) return false;
+    const myGrade=myUser?.grade||0;
+    const myApproveLimit=myUser?.approveLimit||co.policy?.autoApproveLimit||999999999;
 
-      if(co.policy?.gradeBased&&(co.policy?.approvalHierarchy?.length>0)){
-        const approvers=resolveApprover(c.empId,co.users,co.policy,c.amount);
-        if(approvers.includes(user.id)) return true;
-        if(c.status?.startsWith("Level ")&&canApproveFor(user.id,c.empId,co.users,co.policy,c.amount)) return true;
-        return false;
-      }
+    const regularClaims=co.claims.filter(c=>{
+      if(c.status!=="Pending"&&c.status!=="Budget-Escalation Approved") return false;
+      if(c.empId===user.id) return false; // can't approve own claims
 
-      if(isAdmin) return true;
       const emp=getUser(c.empId);
       if(!emp) return false;
-      const inMyDept=emp.dept===myUser?.dept;
-      const delegatedToMe=co.users.some(u=>
-        u.role==="manager"&&u.delegateTo===user.id&&
-        (!u.delegateUntil||u.delegateUntil>=today())&&
-        emp.dept===u.dept
-      );
-      return inMyDept||delegatedToMe;
+
+      if(isAdmin) return true; // admin sees all
+
+      // Manager sees claims from users with lower grade in their visibility scope
+      const empGrade=emp.grade||0;
+      if(myGrade===0) return emp.dept===myUser?.dept; // grade 0 manager sees own dept
+      return empGrade<myGrade&&visibleUserIds.has(c.empId);
     });
 
     // Deduplicate
@@ -3126,7 +3131,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       if(erErr){
         log.error("edit_requests insert error:",erErr.message);
         if(erErr.message?.includes("does not exist")||erErr.code==="42P01"){
-          toast("Edit requests table not set up — run xpensr_missing_tables.sql in Supabase","error");
+          toast("Edit requests table not set up — contact your administrator","error");
           return;
         }
         toast("Failed to submit: "+erErr.message,"error");
@@ -3402,14 +3407,14 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             await sbUploadReceipt(claimId,cid,r.b64,r.type,r.name);
             uploadedCount++;
           }catch(e){
-            toast(`⚠ Receipt upload failed: ${e.message}`,"error");
+            toast(`❌ Receipt upload failed: ${e.message}`,"error");
             log.warn("Receipt upload failed:",e.message);
           }
         }
       }
       if(totalReceipts>0){
-        if(uploadedCount===totalReceipts) toast(`✓ ${uploadedCount} receipt${uploadedCount>1?"s":""} saved to Cloudflare R2`);
-        else if(uploadedCount===0) toast(`❌ All receipt uploads failed — claim saved without receipts`,"error");
+        if(uploadedCount===totalReceipts) toast(`✓ ${uploadedCount} receipt${uploadedCount>1?"s":""} saved successfully`);
+        else if(uploadedCount===0) toast(`❌ All uploads failed — see error above`,"error");
         else toast(`⚠ ${uploadedCount}/${totalReceipts} receipts uploaded`,"warn");
       }
 
@@ -3681,6 +3686,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       }
     }
     setMdl(null);
+    setTab("approvals");
+    if(SB_ENABLED) loadFromSB();
   };
 
   // ── Hotel savings incentive (Phase 2) ───────────────────────────────────────
@@ -3811,8 +3818,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           departments:newPolicy.departments,
         };
         const{error:e2}=await supabase.from("policy").upsert(baseRow);
-        if(e2)throw new Error("Policy save failed: "+e2.message+"\n\n⚠ Run xpensr_policy_columns.sql in Supabase to add missing columns.");
-        toast("⚠ Saved basic settings only. Run xpensr_policy_columns.sql in Supabase to enable Grade/City features.","warn");
+        if(e2)throw new Error("Policy save failed: "+e2.message+"\n\n⚠ Contact your administrator to update settings.");
+        toast("⚠ Some settings require a system update. Contact support.","warn");
       } else if(error){
         throw new Error("Policy save failed: "+error.message);
       }
@@ -3888,7 +3895,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         grade_label:userData.gradeLabel||"",
         group_id:userData.groupId||null,
       });
-      if(insErr)throw new Error("RPC: "+rpcErr.message+". Direct insert: "+insErr.message+". Please check Supabase permissions.");
+      if(insErr)throw new Error("RPC: "+rpcErr.message+". Direct insert: "+insErr.message+". Please contact your administrator.");
       userId=newId;
     }
 
@@ -4385,7 +4392,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             }
           }}
         />}
-        {tab==="approvals"&&canApprove&&<ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} onReload={loadFromSB} onReloadEditRequests={loadEditRequests} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}}/>}
+        {tab==="approvals"&&canApprove&&<ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} onReload={loadFromSB} onReloadEditRequests={loadEditRequests} approveLimit={myUser?.approveLimit||co.policy?.autoApproveLimit||999999999} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}}/>}
         {tab==="topup"&&<TopupTab user={user} topups={canApprove?co.topups.filter(t=>t.status==="Pending"||t.empId===user.id):co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} trips={co.trips} isManager={isManager||isAdmin} managerUsers={isManager||isAdmin?co.users.filter(u=>visibleUserIds.has(u.id)&&u.id!==user.id):[]} sbCreateTopup={async(req)=>{if(SB_ENABLED){const{error:te}=await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:req.status||"Pending",trip_id:req.tripId});if(te){toast("Top-up request failed: "+te.message,"error");return;}if(req.status==="Approved"){await handleTopup({...req,id:req.id},false);}await loadFromSB();}else{setTopups(p=>[...p,req]);}}}/>}
         {tab==="analytics"&&<Analytics
           claims={isAdmin?co.claims:visibleClaims.filter(c=>isManager||c.empId===user.id)}
@@ -6024,7 +6031,13 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
 }
 
 // ─── APPROVALS TAB ────────────────────────────────────────────────────────────
-function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip,users,user,editRequests,approveEditRequest,rejectEditRequest,onReload,onReloadEditRequests,setClaims}){
+function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip,users,user,editRequests,approveEditRequest,rejectEditRequest,onReload,onReloadEditRequests,setClaims,approveLimit=999999999}){
+  // canAct: manager can approve/reject only if claim amount is within their approval limit
+  const canActOn=(claim)=>{
+    if(isAdmin) return true;
+    if(!approveLimit||approveLimit<=0) return true;
+    return claim.amount<=approveLimit;
+  };
   const [filter,setFilter]=useState("All");
   const [selected,setSelected]=useState(new Set());
   const pendingTrips=(trips||[]).filter(t=>t.status==="pending_approval");
@@ -6156,22 +6169,20 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
                 <div style={{textAlign:"right",flexShrink:0}}>
                   <div style={{fontFamily:FD,fontSize:17,fontWeight:700,color:INK,marginBottom:3}}>{fmt(c.amount)}</div>
                   {c.origCur&&c.origCur!=="INR"&&<div style={{fontSize:9,color:MUTED,marginBottom:5}}>{c.origCur} {c.origAmount}</div>}
-                  <div style={{display:"flex",gap:5}}>
-                    <Btn onClick={()=>setMdl({type:"approve",data:c})} style={{padding:"6px 11px",fontSize:11}}>✓ Approve</Btn>
-                    <Btn v="danger" onClick={()=>setMdl({type:"reject",data:c})} style={{padding:"6px 9px",fontSize:11}}>✗</Btn>
-                    {/* Admin override — visible for Pending (bypass manager) AND Manager Approved (final approval) */}
+                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                    {canActOn(c)
+                      ?<Btn onClick={()=>setMdl({type:"decision",data:c})} style={{padding:"6px 11px",fontSize:11}}>Review →</Btn>
+                      :<div style={{padding:"4px 9px",borderRadius:6,background:"#fef3c7",border:"1px solid #fcd34d",fontSize:10,color:"#92400e",fontWeight:600}} title={`Amount ₹${c.amount.toLocaleString("en-IN")} exceeds your approval limit of ₹${approveLimit.toLocaleString("en-IN")}`}>⚠ Above your limit</div>
+                    }
                     {isAdmin&&c.status==="Manager Approved"&&(
-                      <Btn onClick={()=>handleDecision(c.id,"Approved","Admin final approval")} style={{padding:"6px 9px",fontSize:10,background:"#7c3aed",color:"#fff"}}>⚡ Final Approve</Btn>
-                    )}
-                    {isAdmin&&c.status==="Pending"&&(
-                      <Btn onClick={()=>handleDecision(c.id,"Approved","Admin override — direct approval")} style={{padding:"6px 9px",fontSize:10,background:"#0369a1",color:"#fff"}}>↯ Override</Btn>
+                      <Btn onClick={()=>handleDecision(c.id,"Approved","Admin final approval")} style={{padding:"6px 9px",fontSize:10,background:"#7c3aed",color:"#fff"}}>⚡ Final</Btn>
                     )}
                     <button onClick={async()=>{
-                      const note=c.anomaly?"":prompt("Enter anomaly note (what to check):")?.trim()||"Manager flagged as anomaly";
+                      const note=c.anomaly?"":prompt("Enter anomaly note:")?.trim()||"Manager flagged";
                       const newAnomaly=!c.anomaly;
-                      if(SB_ENABLED){await supabase.from("claims").update({anomaly:newAnomaly,anomaly_reasons:newAnomaly?[...((c.anomalyReasons||[]).filter(r=>!r.includes("Manager flagged"))),note]:[]}).eq("id",c.id);if(onReload)await onReload();}
+                      if(SB_ENABLED){await supabase.from("claims").update({anomaly:newAnomaly,anomaly_reasons:newAnomaly?[note]:[]}).eq("id",c.id);if(onReload)await onReload();}
                       else if(setClaims)setClaims(p=>p.map(x=>x.id===c.id?{...x,anomaly:newAnomaly,anomalyReasons:newAnomaly?[note]:[]}:x));
-                    }} title={c.anomaly?"Remove anomaly flag":"Flag as anomaly — enter note"} style={{padding:"5px 8px",background:c.anomaly?"#ede9fe":"#f3f4f6",border:c.anomaly?"1px solid #c4b5fd":"none",borderRadius:6,cursor:"pointer",fontSize:12}}>🔍</button>
+                    }} title={c.anomaly?"Remove flag":"Flag as anomaly"} style={{padding:"5px 8px",background:c.anomaly?"#ede9fe":"#f3f4f6",border:c.anomaly?"1px solid #c4b5fd":"none",borderRadius:6,cursor:"pointer",fontSize:12}}>🔍</button>
                   </div>
                 </div>
               </div>
@@ -6999,7 +7010,7 @@ function R2StatusWidget(){
           <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"#f0fde9",border:`1px solid ${GM}`,borderRadius:9,marginBottom:10}}>
             <span style={{fontSize:20}}>🟠</span>
             <div>
-              <div style={{fontWeight:700,fontSize:12,color:"#16a34a"}}>✓ Cloudflare R2 active — all receipts go to your R2 bucket</div>
+              <div style={{fontWeight:700,fontSize:12,color:"#16a34a"}}>✓ Secure cloud storage active</div>
               <div style={{fontSize:10,color:MUTED}}>Bucket: <code style={{background:"#f0fde9",padding:"0 3px",borderRadius:3}}>{status.bucket}</code> · Files never stored on XpensR servers</div>
             </div>
           </div>
@@ -7017,7 +7028,7 @@ function R2StatusWidget(){
           </div>}
         </>
         :<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:9,padding:"10px 14px"}}>
-          <div style={{fontWeight:700,fontSize:12,color:"#92400e",marginBottom:6}}>⚠ R2 not configured — receipts going to Supabase</div>
+          <div style={{fontWeight:700,fontSize:12,color:"#92400e",marginBottom:6}}>⚠ Storage not configured — contact administrator</div>
           {(status?.missing||[]).map(m=><div key={m} style={{fontFamily:"monospace",fontSize:11,color:"#dc2626",marginBottom:2}}>✗ {m}</div>)}
           <div style={{fontSize:10,color:MUTED,marginTop:6}}>Add missing vars in Vercel → Settings → Environment Variables, then redeploy.</div>
         </div>
@@ -7094,7 +7105,7 @@ function CompanyAiKeyConfig({cid}){
   };
 
   if(loading)return<div style={{color:MUTED,fontSize:12}}>Loading AI config…</div>;
-  if(status?.apiNotDeployed)return<div style={{padding:"10px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,fontSize:11,color:"#92400e"}}>⚠ Awaiting deployment: add <code>api/aikey.js</code> to your project and redeploy to Vercel.</div>;
+  if(status?.apiNotDeployed)return<div style={{padding:"10px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,fontSize:11,color:"#92400e"}}>⚠ AI key management not available. Contact support.</div>;
 
   const inpS={padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,background:"var(--input-bg,#fafff8)",width:"100%",fontFamily:FB};
   const curP=PROVIDERS.find(p=>p.id===provider)||PROVIDERS[0];
@@ -7182,7 +7193,7 @@ function AiTokenWidget({cid,sbEnabled}){
   },[cid,sbEnabled]);
 
   if(loading) return<div style={{color:MUTED,fontSize:12}}>Loading AI subscription…</div>;
-  if(tokenData==="error") return<div style={{padding:"10px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,fontSize:11,color:"#92400e"}}>⚠ Run SQL steps 14 &amp; 15 in Supabase to enable AI token tracking.</div>;
+  if(tokenData==="error") return<div style={{padding:"10px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,fontSize:11,color:"#92400e"}}>⚠ AI token tracking not set up. Contact support.</div>;
 
   if(!tokenData||tokenData.balance==null){
     return(
@@ -10069,7 +10080,7 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
     <div style={{position:"fixed",inset:0,background:"#00000055",display:"flex",alignItems:"center",justifyContent:"center",zIndex:500,backdropFilter:"blur(3px)"}} onMouseDown={e=>{if(e.target===e.currentTarget)setMdl(null);}}>
       <div onMouseDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} style={{background:"var(--card,#fff)",borderRadius:16,padding:24,width:"min(540px,96vw)",maxHeight:"90vh",overflow:"auto",boxShadow:"0 20px 60px #0003"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:13}}>
-          <span style={{fontFamily:FD,fontSize:16,fontWeight:700,color:INK}}>{type==="detail"?"Claim Details":type==="approve"?"Approve Claim":type==="editClaim"?"Edit Claim":"Reject Claim"}</span>
+          <span style={{fontFamily:FD,fontSize:16,fontWeight:700,color:INK}}>{type==="detail"?"Claim Details":type==="decision"?"Review Claim":type==="editClaim"?"Edit Claim":"Claim"}</span>
           <button onClick={()=>setMdl(null)} style={{background:"none",border:"none",fontSize:15,cursor:"pointer",color:MUTED}}>✕</button>
         </div>
         {type==="editClaim"?<EditClaimInline claim={c} trips={trips} cid={cid} sbEnabled={sbEnabled} onClose={()=>setMdl(null)}/>:(<>
@@ -10114,12 +10125,7 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
                 ):(
                   <div style={{width:80,height:80,background:"#f3f4f6",borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${BDR}`}}><span style={{fontSize:24}}>⏳</span></div>
                 )}
-                {/* Storage provider badge */}
-                {(()=>{
-                  const p=r.storageProvider||"xpensr_supabase";
-                  const isR2=p==="r2";
-                  return<span style={{fontSize:8,color:isR2?"#2563eb":"#9ca3af",fontWeight:700,background:isR2?"#eff6ff":"#f3f4f6",padding:"1px 5px",borderRadius:4,border:`1px solid ${isR2?"#bfdbfe":"#e5e7eb"}`}}>{isR2?"☁ R2":"🔒 Supabase"}</span>;
-                })()}
+
                 {r.url&&<a href={r.url} download={r.name||`receipt_${i+1}`} style={{fontSize:9,color:GD,textDecoration:"none",background:GL,padding:"1px 6px",borderRadius:4,fontWeight:600}}>⬇ Download</a>}
               </div>
             ))}
@@ -10140,13 +10146,13 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
             <Btn onClick={addComment} v="outline" style={{padding:"7px 11px",fontSize:11}}>Send</Btn>
           </div>
         </div>
-        {/* Approve/Reject actions */}
-        {(type==="approve"||type==="reject")&&<div style={{marginTop:12}}>
-          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Remarks (optional)</label>
-          <textarea value={remarks} onChange={e=>setRemarks(e.target.value)} rows={2} placeholder="Add a note…" style={{width:"100%",padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontFamily:FB,fontSize:12,resize:"vertical",outline:"none",display:"block",boxSizing:"border-box"}}/>
-          <div style={{display:"flex",gap:8,marginTop:10}}>
-            {type==="approve"&&<Btn onClick={async()=>{await handleDecision(c.id,"Approved",remarks);setMdl(null);}} style={{flex:1}}>✓ Confirm Approval</Btn>}
-            {type==="reject"&&<Btn v="danger" onClick={async()=>{await handleDecision(c.id,"Rejected",remarks);setMdl(null);}} style={{flex:1}}>✗ Confirm Rejection</Btn>}
+        {/* Approve/Reject — merged decision panel */}
+        {(type==="approve"||type==="reject"||type==="decision")&&<div style={{marginTop:14,background:"#f8fafc",borderRadius:10,padding:14,border:`1px solid ${BDR}`}}>
+          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:5,textTransform:"uppercase"}}>Remarks (optional)</label>
+          <textarea value={remarks} onChange={e=>setRemarks(e.target.value)} rows={2} placeholder="Add a note for the employee…" style={{width:"100%",padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontFamily:FB,fontSize:12,resize:"vertical",outline:"none",display:"block",boxSizing:"border-box",marginBottom:10}}/>
+          <div style={{display:"flex",gap:8}}>
+            <Btn onClick={async()=>{await handleDecision(c.id,"Approved",remarks);}} style={{flex:1,background:"#16a34a"}}>✓ Approve</Btn>
+            <Btn v="danger" onClick={async()=>{await handleDecision(c.id,"Rejected",remarks);}} style={{flex:1}}>✗ Reject</Btn>
             <Btn v="outline" onClick={()=>setMdl(null)}>Cancel</Btn>
           </div>
         </div>}
