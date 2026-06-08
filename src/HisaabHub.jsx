@@ -233,13 +233,11 @@ const mapTrip=r=>r?({
   })),
 }):null;
 const mapClaim=r=>r?({id:r.id,companyId:r.company_id,tripId:r.trip_id,empId:r.emp_id,date:r.date,category:r.category,desc:r.description,vendor:r.vendor,amount:parseFloat(r.amount)||0,origAmount:parseFloat(r.orig_amount)||0,origCur:r.orig_currency,status:r.status,autoApproved:r.auto_approved,rawStatus:r.status,remarks:r.remarks,flagged:r.flagged,anomaly:r.anomaly,anomalyReasons:r.anomaly_reasons||[],weekendFlag:r.weekend_flag,notes:r.notes,
-  // Phase 1: Itinerary linkage
-  legId:r.leg_id||null,                        // FK to trip_legs
-  city:r.city||"",                             // City where expense occurred
-  cityTier:r.city_tier||"D",                   // A/B/C/D
-  transportClass:r.transport_class||"",        // Economy/2AC/3AC/Sleeper etc.
-  overLimitReason:r.over_limit_reason||"",     // Reason when exceeds tier limit
-  receipts:(r.receipts||[]).map(rc=>({id:rc.id,name:rc.file_name,storagePath:rc.storage_path,type:rc.mime_type,url:null})),comments:(r.claim_comments||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at)).map(c=>({id:c.id,userId:c.user_id,name:c.user_name,text:c.text,time:new Date(c.created_at).toLocaleString()}))}):null;
+  legId:r.leg_id||null,city:r.city||"",cityTier:r.city_tier||"D",
+  transportClass:r.transport_class||"",overLimitReason:r.over_limit_reason||"",
+  managerRemarks:r.manager_remarks||"",  // entitlement/routing notes for manager
+  entitlementCap:r.entitlement_cap||0,   // max allowed by grade for partial approval
+  receipts:(r.receipts||[]).map(rc=>({id:rc.id,name:rc.file_name,storagePath:rc.storage_path,type:rc.mime_type,storageProvider:rc.storage_provider||"xpensr_supabase",url:null})),comments:(r.claim_comments||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at)).map(c=>({id:c.id,userId:c.user_id,name:c.user_name,text:c.text,time:new Date(c.created_at).toLocaleString()}))}):null;
 const mapPolicy=r=>r?({autoApproveLimit:parseFloat(r.auto_approve_limit)||5000,reimbursementMode:r.reimbursement_mode||false,receiptMandatoryAbove:parseFloat(r.receipt_mandatory_above)||0,weekendRequiresApproval:r.weekend_requires_approval||false,multiLevelApproval:r.multi_level_approval||false,approvalLevels:r.approval_levels||[],vendorWhitelist:r.vendor_whitelist||[],vendorBlacklist:r.vendor_blacklist||[],departmentBudgets:r.department_budgets||{},categoryPct:r.category_pct||{},scheduledReports:r.scheduled_reports||[],primaryColor:r.primary_color||"#7ED957",departments:r.departments||DEFAULT_DEPTS,categories:r.categories||DEFAULT_CATS,dualApproveAbove:parseFloat(r.dual_approve_above)||0,
   // Phase 1: Grade & city policy
   // Use null-safe defaults — if column missing from DB, preserve [] not reset
@@ -2585,7 +2583,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   // Persist tab changes so reloads/re-renders don't lose position
   const setTabP=t=>{
     try{sessionStorage.setItem(`xpensr_tab_${user.id}`,t);}catch{}
-    setTabP(t);
+    setTab(t);
   };
   const[sidebar,setSB]   =useState(true);
   const[notif,setNtf]    =useState(null);
@@ -3256,6 +3254,13 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const tripId=form.tripId||co.trips.find(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(user.id)))?.id;
     if(!tripId){const msg="No active trip assigned to you. Please create or join a trip first.";toast(msg,"error");throw new Error(msg);}
     const claimDate=form.date||today();
+    // Check per-user trip end date (set via "End My Trip" button)
+    const userTripEndKey=`trip_ended_${tripId}_${user.id}`;
+    const userTripEndDate=localStorage.getItem(userTripEndKey);
+    if(userTripEndDate&&claimDate>userTripEndDate){
+      const msg=`You ended your participation in this trip on ${userTripEndDate}. Claims dated after this are not allowed.`;
+      toast(msg,"error");throw new Error(msg);
+    }
     // Resolve the trip object once — used throughout
     const selectedTrip=co.trips.find(t=>t.id===tripId);
     // Block future dates
@@ -3367,27 +3372,41 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
     // Check if accommodation/hotel exceeds grade entitlement
     const isAccommodation=["Accommodation","Hotel","Lodging"].some(k=>form.category?.toLowerCase().includes(k.toLowerCase()));
+    const isMeal=["Meals","Meal","Food","Diem","Per Diem"].some(k=>form.category?.toLowerCase().includes(k.toLowerCase()));
     const empGrade=co.users.find(u=>u.id===user.id)?.grade||0;
-    const gradeEntitlement=policy.gradeEntitlements?.find(e=>e.grade===empGrade);
+    // Get entitlement for the trip city tier
+    const tripCity=form.city||"";
+    const cityTier=form.cityTier||"D";
+    const gradeEntitlement=policy.gradeEntitlements?.find(e=>e.grade===empGrade&&(e.tier===cityTier||!e.tier))||
+                           policy.gradeEntitlements?.find(e=>e.grade===empGrade);
     const hotelEntitlement=gradeEntitlement?.hotelLimit||0;
+    const diemEntitlement=gradeEntitlement?.diemRate||0;
     const exceedsHotelEntitlement=isAccommodation&&hotelEntitlement>0&&amount>hotelEntitlement;
+    const exceedsDiemEntitlement=isMeal&&diemEntitlement>0&&amount>diemEntitlement;
+    const exceedsEntitlement=exceedsHotelEntitlement||exceedsDiemEntitlement;
+
+    // Build entitlement remarks for manager visibility
+    const entitlementRemark=exceedsHotelEntitlement
+      ?`⚠ Exceeds hotel entitlement: Grade ${empGrade} limit ₹${hotelEntitlement.toLocaleString("en-IN")} (Tier ${cityTier}), claimed ₹${amount.toLocaleString("en-IN")} — excess ₹${(amount-hotelEntitlement).toLocaleString("en-IN")}`
+      :exceedsDiemEntitlement
+      ?`⚠ Exceeds meal/diem entitlement: Grade ${empGrade} limit ₹${diemEntitlement.toLocaleString("en-IN")}/day, claimed ₹${amount.toLocaleString("en-IN")} — excess ₹${(amount-diemEntitlement).toLocaleString("en-IN")}`
+      :"";
+    const entitlementCap=exceedsHotelEntitlement?hotelEntitlement:exceedsDiemEntitlement?diemEntitlement:0;
 
     // Core routing decision
-    // 1. Within auto-approve limit AND no flags AND hotel within entitlement → schedule auto-approve
-    const canAutoApprove=autoLimit>0&&amount<=autoLimit&&!catEx&&!weekend&&!noRcpt&&!tripBudgetExceeded&&!budgetBreached&&!exceedsHotelEntitlement;
+    // 1. Within auto-approve limit AND no flags AND within entitlements → schedule auto-approve
+    const canAutoApprove=autoLimit>0&&amount<=autoLimit&&!catEx&&!weekend&&!noRcpt&&!tripBudgetExceeded&&!budgetBreached&&!exceedsEntitlement;
     // 2. Within auto-approve but category exceeded → pending with warning
     const pendingCatEx=autoLimit>0&&amount<=autoLimit&&catEx;
-    // 3. Within auto-approve but trip budget exceeded → pending with warning (already hard-blocked above)
     // 4. Above dual approval threshold → needs manager + admin
     const needsDual=dualLimit>0&&amount>=dualLimit;
-    // 5. Budget breached → admin-only regardless of amount
-    // 6. Default: route via grade hierarchy
     const auto=canAutoApprove;
-    // Routing remark for pending claims
+    // Routing remark visible to managers (not employees)
     const routingRemark=budgetBreached?`⚠ Budget breach: ${budgetBreachReason}. Admin approval required.`:
-                        catEx?"⚠ Category budget exceeded — manager review required":
+                        entitlementRemark||
+                        (catEx?"⚠ Category budget exceeded — manager review required":
                         needsDual?"Dual approval required (above ₹"+dualLimit.toLocaleString("en-IN")+")":
-                        "Pending approval";
+                        "Pending approval");
     const{isAnomaly,reasons}=detectAnomaly(form,amount);
     const claimId="EXP-"+uid();
 
@@ -3395,6 +3414,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       status:auto?"Approved":"Pending",autoApproved:auto,
       receipts:form.receipts||[],
       remarks:auto?"Approved":"Pending approval",  // employee never sees routing details
+      managerRemarks:routingRemark,  // visible to manager only
+      entitlementCap,  // max allowed by grade — for partial approval
       budgetBreached,
       flagged:catEx,anomaly:isAnomaly,anomalyReasons:[...reasons,...(Object.keys(form.manualEdits||{}).length>0?[`Fields manually edited after OCR scan: ${Object.keys(form.manualEdits||{}).join(", ")}`]:[])],manualEdits:form.manualEdits||{},comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||"",projectCode:form.projectCode||selectedTrip?.projectCode||"",
       gstAmount:parseFloat(form.gstAmount)||0,gstItc:null,
@@ -3421,6 +3442,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         auto_approved:auto,remarks:"",flagged:catEx,
         anomaly:isAnomaly,anomaly_reasons:reasons,weekend_flag:weekend,notes:form.notes||"",
         leg_id:form.legId||null,city:form.city||"",city_tier:form.cityTier||"D",
+        manager_remarks:routingRemark||null,
+        entitlement_cap:entitlementCap||null,
       });
       if(claimErr){toast(claimErr.message,"error");return;}
 
@@ -4153,9 +4176,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       doc.setFont("helvetica","normal");doc.setFontSize(7.5);doc.setTextColor(150,150,150);
       doc.text(`XpensR by RB · ${activeMeta?.name||""} · Generated ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})}`,W/2,200,{align:"center"});
 
-      // Open PDF in new tab instead of forcing download
-      const pdfUrl=doc.output("bloburl");
-      window.open(pdfUrl,"_blank");
+      doc.save(`${(title||"Expense_Report").replace(/[^a-z0-9_\-]/gi,"_")}.pdf`);
       toast("✓ PDF downloaded");
     }catch(e){
       log.error("PDF error:",e);
@@ -4494,7 +4515,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       </div>
 
       {modal?.type==="editRequest"&&<EditRequestModal claim={modal.data} userId={user.id} userName={user.name} cid={cid} onClose={()=>setMdl(null)} onSubmit={submitEditRequest} sbEnabled={SB_ENABLED}/>}
-      {modal&&modal.type!=="editRequest"&&<ClaimModal modal={modal} setMdl={setMdl} handleDecision={handleDecision} getUser={getUser} trips={co.trips} claims={co.claims} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}} userId={user.id} userName={user.name} addCommentToSB={addCommentToSB} sbEnabled={SB_ENABLED} cid={cid} editRequests={editRequests} onEditRequest={submitEditRequest} onApproveEditRequest={approveEditRequest} onRejectEditRequest={rejectEditRequest} isAdmin={isAdmin} isManager={isManager} hasEditWindow={hasEditWindow} deleteClaim={deleteClaim}/>}
+      {modal&&modal.type!=="editRequest"&&<ClaimModal modal={modal} setMdl={setMdl} handleDecision={handleDecision} getUser={getUser} trips={co.trips} claims={co.claims} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}} userId={user.id} userName={user.name} addCommentToSB={addCommentToSB} sbEnabled={SB_ENABLED} cid={cid} editRequests={editRequests} onEditRequest={submitEditRequest} onApproveEditRequest={approveEditRequest} onRejectEditRequest={rejectEditRequest} isAdmin={isAdmin} isManager={isManager} hasEditWindow={hasEditWindow} deleteClaim={deleteClaim} auditLog={co.auditLog||[]} onReload={loadFromSB}/>}
 
       {/* MOBILE BOTTOM NAV */}
       {/* ── MOBILE BOTTOM NAV ─────────────────────────────────────────────── */}
@@ -6180,6 +6201,20 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                     <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===(t.createdBy||userId))||{name:""};const doc=await generateTAR(t,creator,users,"");doc.save(`TAR_${t.name||"Trip"}.pdf`);}catch(e){toast("TAR failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📋 TAR</Btn>
                     <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===(t.createdBy||userId))||{name:""};const doc=await generateTERC(t,creator,claims.filter(c=>c.tripId===t.id),policy,"");doc.save(`TERC_${t.name||"Trip"}.pdf`);}catch(e){toast("TERC failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📑 TERC</Btn>
                     <Btn v="outline" onClick={()=>setLegsTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>📍 Itinerary</Btn>
+                    {/* End Trip — per user, stored in localStorage */}
+                    {t.status==="active"&&!isManager&&!isAdmin&&(()=>{
+                      const endKey=`trip_ended_${t.id}_${userId}`;
+                      const endedAt=localStorage.getItem(endKey);
+                      if(endedAt){
+                        return<div style={{padding:"4px 9px",borderRadius:6,background:"#f0fde9",border:`1px solid ${GM}`,fontSize:10,color:GD,fontWeight:600}}>✓ Ended {endedAt}</div>;
+                      }
+                      return<Btn v="warning" onClick={()=>{
+                        if(window.confirm(`End your participation in "${t.name}"? You won't be able to add claims after today.`)){
+                          localStorage.setItem(endKey,today());
+                          toast(`✓ Trip ended for you as of ${today()}`);
+                        }
+                      }} style={{fontSize:10,padding:"5px 9px"}}>🔴 End My Trip</Btn>;
+                    })()}
                     {(isAdmin||isManager)&&<>
                       <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"",users,policy);doc.save(`${t.name||"Trip"}_Settlement.pdf`);}catch(e){toast("PDF failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄 PDF</Btn>
                       <Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Edit</Btn>
@@ -6188,7 +6223,6 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                         <Btn v="danger" onClick={()=>deleteTrip&&deleteTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🗑 Delete</Btn>}
                       {t.status==="active"&&<Btn v="warning" onClick={()=>closeTrip(t.id)} style={{fontSize:10,padding:"5px 10px"}}>Close</Btn>}
                     </>}
-                    {/* Employee can also edit trip details on their own trips until closed */}
                     {!isManager&&!isAdmin&&t.createdBy===userId&&t.status!=="closed"&&t.status!=="settled"&&(
                       <Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Edit Trip</Btn>
                     )}
@@ -10278,7 +10312,7 @@ async function generateTERC(trip,user,tripClaims,policy,companyName){
   return doc;
 }
 
-function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled,cid,editRequests,onEditRequest,onApproveEditRequest,onRejectEditRequest,isAdmin=false,isManager=false,hasEditWindow,deleteClaim}){
+function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled,cid,editRequests,onEditRequest,onApproveEditRequest,onRejectEditRequest,isAdmin=false,isManager=false,hasEditWindow,deleteClaim,auditLog=[],onReload}){
   const [remarks,setRemarks]=useState("");
   const [comment,setComment]=useState("");
   const [receiptsWithUrls,setRWU]=useState(null);
@@ -10383,6 +10417,35 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
             ))}
           </div>
         </div>}
+        {/* Fix 3: Claim Activity Log */}
+        {(()=>{
+          const claimLog=auditLog.filter(a=>a.claimId===c.id||(a.action&&["Approved","Rejected","Pending","Manager Approved","Auto-Approved"].includes(a.action)&&a.claimId===c.id));
+          // Also build from claim's own history (status changes implied)
+          const logEntries=[
+            {at:c.date||"",action:"Submitted",by:getUser(c.empId)?.name||"Employee",remarks:"Claim submitted"},
+            ...claimLog.map(a=>({at:a.at||a.atISO||"",action:a.action,by:a.byName||getUser(a.by)?.name||"—",remarks:a.remarks||""})),
+          ];
+          if(logEntries.length<=1&&!claimLog.length)return null;
+          return(
+            <div style={{marginTop:10,marginBottom:2}}>
+              <div style={{fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>📋 Activity Log</div>
+              <div style={{border:`1px solid ${BDR}`,borderRadius:8,overflow:"hidden"}}>
+                {logEntries.map((e,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"8px 11px",borderBottom:i<logEntries.length-1?`1px solid #f3f4f6`:"none",background:i===0?"#f8faf6":"var(--card,#fff)"}}>
+                    <div style={{width:7,height:7,borderRadius:"50%",background:e.action==="Approved"||e.action==="Auto-Approved"?"#16a34a":e.action==="Rejected"?"#dc2626":e.action==="Submitted"?G:"#f59e0b",marginTop:4,flexShrink:0}}/>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
+                        <span style={{fontSize:11,fontWeight:700,color:INK}}>{e.action}</span>
+                        <span style={{fontSize:9,color:MUTED}}>{e.at}</span>
+                      </div>
+                      <div style={{fontSize:10,color:MUTED}}>by {e.by}{e.remarks&&e.remarks!=="Pending approval"?` — ${e.remarks}`:""}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
         {/* Comments */}
         <div style={{marginTop:11}}>
           <div style={{fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",letterSpacing:.5,marginBottom:7}}>💬 Comments</div>
@@ -10400,13 +10463,20 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
         </div>
         {/* Approve/Reject — merged decision panel */}
         {(type==="approve"||type==="reject"||type==="decision")&&<div style={{marginTop:14,background:"#f8fafc",borderRadius:10,padding:14,border:`1px solid ${BDR}`}}>
+          {c.managerRemarks&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"8px 11px",marginBottom:10,fontSize:11,color:"#92400e"}}>📋 {c.managerRemarks}</div>}
           <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:5,textTransform:"uppercase"}}>Remarks (optional)</label>
           <textarea value={remarks} onChange={e=>setRemarks(e.target.value)} rows={2} placeholder="Add a note for the employee…" style={{width:"100%",padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontFamily:FB,fontSize:12,resize:"vertical",outline:"none",display:"block",boxSizing:"border-box",marginBottom:10}}/>
-          <div style={{display:"flex",gap:8}}>
-            <Btn onClick={async()=>{await handleDecision(c.id,"Approved",remarks);}} style={{flex:1,background:"#16a34a"}}>✓ Approve</Btn>
-            <Btn v="danger" onClick={async()=>{await handleDecision(c.id,"Rejected",remarks);}} style={{flex:1}}>✗ Reject</Btn>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <Btn onClick={async()=>{await handleDecision(c.id,"Approved",remarks);}} style={{flex:1,background:"#16a34a",minWidth:100}}>✓ Approve {fmt(c.amount)}</Btn>
+            {c.entitlementCap>0&&c.amount>c.entitlementCap&&<Btn onClick={async()=>{
+              const capRemark=`Approved up to grade entitlement ₹${c.entitlementCap.toLocaleString("en-IN")}. Claim reduced from ₹${c.amount.toLocaleString("en-IN")}.${remarks?" "+remarks:""}`;
+              if(SB_ENABLED){await supabase.from("claims").update({amount:c.entitlementCap,status:"Approved",remarks:capRemark}).eq("id",c.id);if(onReload)await onReload();}
+              setMdl(null);
+            }} style={{flex:1,background:"#f59e0b",color:"#fff",minWidth:100}}>⚡ Cap at {fmt(c.entitlementCap)}</Btn>}
+            <Btn v="danger" onClick={async()=>{await handleDecision(c.id,"Rejected",remarks);}} style={{flex:1,minWidth:80}}>✗ Reject</Btn>
             <Btn v="outline" onClick={()=>setMdl(null)}>Cancel</Btn>
           </div>
+          {c.entitlementCap>0&&c.amount>c.entitlementCap&&<div style={{fontSize:10,color:MUTED,marginTop:5}}>⚡ "Cap" approves at grade limit ₹{c.entitlementCap.toLocaleString("en-IN")} instead of claimed ₹{c.amount.toLocaleString("en-IN")}</div>}
         </div>}
         {type==="detail"&&<div style={{marginTop:11}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
@@ -10427,15 +10497,32 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
               <Btn v="outline" onClick={()=>setMdl(null)} style={{fontSize:11}}>Close</Btn>
             </div>
           </div>
-          {/* Fix 3: Show approve/reject directly in detail modal when claim is pending */}
+          {/* Fix 1 & 2: Show entitlement remark + partial approval option */}
           {(c.status==="Pending"||c.status==="Manager Approved"||c.status==="Budget-Escalation Approved")&&handleDecision&&(isManager||isAdmin)&&c.empId!==userId&&(
             <div style={{marginTop:10,background:"#f8fafc",borderRadius:10,padding:14,border:`1px solid ${BDR}`}}>
+              {/* Entitlement warning for manager */}
+              {c.managerRemarks&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"8px 11px",marginBottom:10,fontSize:11,color:"#92400e"}}>
+                📋 {c.managerRemarks}
+              </div>}
               <div style={{fontSize:10,fontWeight:700,color:MUTED,marginBottom:8,textTransform:"uppercase",letterSpacing:.5}}>Review Claim</div>
               <textarea value={remarks} onChange={e=>setRemarks(e.target.value)} rows={2} placeholder="Remarks (optional)…" style={{width:"100%",padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontFamily:FB,fontSize:12,resize:"vertical",outline:"none",display:"block",boxSizing:"border-box",marginBottom:10}}/>
-              <div style={{display:"flex",gap:8}}>
-                <Btn onClick={async()=>{await handleDecision(c.id,"Approved",remarks);}} style={{flex:1,background:"#16a34a"}}>✓ Approve</Btn>
-                <Btn v="danger" onClick={async()=>{await handleDecision(c.id,"Rejected",remarks);}} style={{flex:1}}>✗ Reject</Btn>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <Btn onClick={async()=>{await handleDecision(c.id,"Approved",remarks);}} style={{flex:1,background:"#16a34a",minWidth:100}}>✓ Approve Full {fmt(c.amount)}</Btn>
+                {/* Partial approval — approve up to entitlement cap */}
+                {c.entitlementCap>0&&c.amount>c.entitlementCap&&<Btn onClick={async()=>{
+                  const capRemark=`Approved up to grade entitlement limit ₹${c.entitlementCap.toLocaleString("en-IN")}. Original claim ₹${c.amount.toLocaleString("en-IN")} reduced to limit.${remarks?" Remarks: "+remarks:""}`;
+                  // Update amount to entitlement cap
+                  if(SB_ENABLED){
+                    await supabase.from("claims").update({amount:c.entitlementCap,status:"Approved",remarks:capRemark}).eq("id",c.id);
+                    if(onReload)await onReload();
+                  }
+                  setMdl(null);
+                }} style={{flex:1,background:"#f59e0b",color:"#fff",minWidth:100}}>⚡ Approve Cap {fmt(c.entitlementCap)}</Btn>}
+                <Btn v="danger" onClick={async()=>{await handleDecision(c.id,"Rejected",remarks||"Exceeds entitlement — rejected");}} style={{flex:1,minWidth:80}}>✗ Reject</Btn>
               </div>
+              {c.entitlementCap>0&&c.amount>c.entitlementCap&&<div style={{fontSize:10,color:MUTED,marginTop:6}}>
+                ⚡ "Approve Cap" will approve claim at ₹{c.entitlementCap.toLocaleString("en-IN")} (grade limit) instead of ₹{c.amount.toLocaleString("en-IN")}
+              </div>}
             </div>
           )}
           {isAdmin&&handleDecision&&(c.status==="Approved"||c.status==="Auto-Approved"||c.status==="Rejected"||c.status==="Manager Approved")&&(
