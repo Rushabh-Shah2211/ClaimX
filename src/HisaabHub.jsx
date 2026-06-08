@@ -558,11 +558,27 @@ async function sbLoadCompany(cid){
       let url = null;
       if(rc.storage_path){
         try{
-          const{data}=await supabase.storage.from("receipts").createSignedUrl(rc.storage_path, 3600);
-          url = data?.signedUrl||null;
-        }catch(e){ log.warn("Failed to get signed URL for",rc.storage_path); }
+          if(rc.storage_provider==="r2"){
+            // R2 public URL via custom domain or direct R2 URL
+            const r2Public=import.meta.env.VITE_R2_PUBLIC_URL;
+            if(r2Public){
+              url=`${r2Public.replace(/\/$/,"")}/${rc.storage_path}`;
+            } else {
+              // No public domain — fetch signed URL from serverless
+              const r=await fetch("/api/r2upload?action=view-url",{
+                method:"POST",
+                headers:{"Content-Type":"application/json","x-company-id":rc.company_id||""},
+                body:JSON.stringify({key:rc.storage_path}),
+              });
+              if(r.ok){const d=await r.json();url=d.viewUrl||null;}
+            }
+          } else {
+            const{data}=await supabase.storage.from("receipts").createSignedUrl(rc.storage_path, 3600);
+            url = data?.signedUrl||null;
+          }
+        }catch(e){ log.warn("Failed to get URL for",rc.storage_path); }
       }
-      return{id:rc.id,name:rc.file_name,storagePath:rc.storage_path,type:rc.mime_type,url};
+      return{id:rc.id,name:rc.file_name,storagePath:rc.storage_path,type:rc.mime_type,storageProvider:rc.storage_provider||"xpensr_supabase",url};
     }));
     return{...mapClaim(claim), receipts: mappedReceipts};
   }));
@@ -598,11 +614,39 @@ async function sbUploadReceipt(claimId,cid,b64,mimeType,fileName){
   for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
   const blob=new Blob([bytes],{type:mimeType});
   const ext=mimeType.includes("pdf")?"pdf":"jpg";
-  const path=`${cid}/${claimId}/${Date.now()}.${ext}`;
-  const{error:upErr}=await supabase.storage.from("receipts").upload(path,blob,{contentType:mimeType});
-  if(upErr)throw upErr;
-  await supabase.from("receipts").insert({claim_id:claimId,company_id:cid,file_name:fileName||`receipt.${ext}`,storage_path:path,mime_type:mimeType});
-  return path;
+  const key=`${cid}/${claimId}/${Date.now()}.${ext}`;
+
+  // ── Upload to Cloudflare R2 via serverless proxy ──────────────────────────
+  try{
+    const r=await fetch("/api/r2upload",{
+      method:"POST",
+      headers:{"Content-Type":"application/json","x-company-id":cid},
+      body:JSON.stringify({key,mimeType,dataBase64:b64}),
+    });
+    if(!r.ok)throw new Error("R2 upload failed: "+r.status);
+    const{storagePath}=await r.json();
+    // Record in Supabase metadata table (just the path — file is in R2)
+    await supabase.from("receipts").insert({
+      claim_id:claimId,company_id:cid,
+      file_name:fileName||`receipt.${ext}`,
+      storage_path:storagePath||key,
+      mime_type:mimeType,
+      storage_provider:"r2",
+    });
+    return storagePath||key;
+  }catch(r2Err){
+    log.warn("R2 upload failed, falling back to Supabase storage:",r2Err.message);
+    // Fallback to Supabase storage if R2 not configured
+    const{error:upErr}=await supabase.storage.from("receipts").upload(key,blob,{contentType:mimeType});
+    if(upErr)throw upErr;
+    await supabase.from("receipts").insert({
+      claim_id:claimId,company_id:cid,
+      file_name:fileName||`receipt.${ext}`,
+      storage_path:key,mime_type:mimeType,
+      storage_provider:"xpensr_supabase",
+    });
+    return key;
+  }
 }
 
 // ─── DEFAULT POLICY ───────────────────────────────────────────────────────────
@@ -5605,7 +5649,18 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
   const [aretTrip,setAretTrip]=useState(null);
   const [conveyanceTrip,setConveyanceTrip]=useState(null); // Local conveyance log
   const isEmployee=!isManager&&!isAdmin;
-  const emps=users?.filter(u=>u.role==="employee")||[];
+  // For trip assignment: admin sees everyone except other admins.
+  // Manager sees everyone strictly below their grade (any role).
+  // This allows assigning other managers as travellers on a trip.
+  const emps=users?.filter(u=>{
+    if(u.id===userId) return false;          // self is handled separately as "(me)"
+    if(u.role==="admin"&&!isAdmin) return false; // non-admins can't see admins
+    if(u.isSuspended) return false;
+    if(isAdmin) return true;                 // admin sees all non-admin users
+    const myGrade=users.find(x=>x.id===userId)?.grade||0;
+    if(myGrade===0) return u.dept===(users.find(x=>x.id===userId)?.dept);
+    return (u.grade||0)<myGrade;             // manager sees lower grades only
+  })||[];
   const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",width:"100%"};
   const toggle=id=>setForm(f=>({...f,assignedTo:f.assignedTo.includes(id)?f.assignedTo.filter(x=>x!==id):[...f.assignedTo,id]}));
 
@@ -7062,128 +7117,8 @@ function CompanyAiKeyConfig({cid}){
   );
 }
 
-// ─── COMPANY BYOS STORAGE CONFIG ──────────────────────────────────────────────
-// Receipts upload DIRECTLY from browser to company's own storage bucket.
 // Storage credentials stored server-side only via /api/storage.
 // Company pays their storage provider directly — XpensR never handles files.
-function CompanyStorageConfig({cid}){
-  const[status,setStatus]=useState(null);
-  const[form,setForm]=useState({provider:"r2",bucket:"",endpoint:"",accessKeyId:"",secretAccessKey:"",region:"auto"});
-  const[saving,setSaving]=useState(false);
-  const[msg,setMsg]=useState("");
-  const[loading,setLoading]=useState(true);
-  const[showSecret,setShowSecret]=useState(false);
-
-  const PROVIDERS=[
-    {id:"r2",label:"Cloudflare R2",icon:"🟠",desc:"No egress fees · Cheapest",endpointHelp:"https://ACCOUNT_ID.r2.cloudflarestorage.com"},
-    {id:"b2",label:"Backblaze B2",icon:"🔴",desc:"Very cheap · 10GB free",endpointHelp:"https://s3.REGION.backblazeb2.com"},
-    {id:"s3",label:"AWS S3",icon:"🟡",desc:"Most reliable",endpointHelp:"Leave blank for standard AWS"},
-    {id:"supabase",label:"Your Supabase",icon:"🟢",desc:"Your own Supabase project",endpointHelp:"Your Supabase project URL"},
-  ];
-
-  useEffect(()=>{
-    if(!cid){setLoading(false);return;}
-    fetch("/api/storage",{headers:{"x-company-id":cid}})
-      .then(r=>{if(!r.ok)throw new Error("not deployed");return r.json();})
-      .then(d=>{setStatus(d);setLoading(false);})
-      .catch(()=>{setStatus({hasConfig:false,apiNotDeployed:true});setLoading(false);});
-  },[cid]);
-
-  const save=async()=>{
-    if(!form.bucket){setMsg("Bucket name is required.");return;}
-    setSaving(true);setMsg("");
-    try{
-      const r=await fetch("/api/storage?action=configure",{
-        method:"POST",
-        headers:{"Content-Type":"application/json","x-company-id":cid},
-        body:JSON.stringify(form),
-      });
-      const d=await r.json();
-      if(!r.ok)throw new Error(d.error||"Failed");
-      setMsg(d.message||"✓ Storage configured");
-      setForm(f=>({...f,secretAccessKey:"",accessKeyId:""}));
-      const st=await fetch("/api/storage",{headers:{"x-company-id":cid}}).then(r=>r.json());
-      setStatus(st);
-    }catch(e){setMsg("Error: "+e.message);}
-    setSaving(false);
-  };
-
-  const remove=async()=>{
-    if(!window.confirm("Remove custom storage? New receipts will use XpensR default storage."))return;
-    await fetch("/api/storage",{method:"DELETE",headers:{"x-company-id":cid}});
-    setStatus({hasConfig:false});setMsg("Custom storage removed.");
-  };
-
-  const inpS={padding:"8px 10px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,background:"var(--input-bg,#fafff8)",width:"100%",fontFamily:FB};
-  const curP=PROVIDERS.find(p=>p.id===form.provider)||PROVIDERS[0];
-
-  if(loading)return<div style={{color:MUTED,fontSize:12}}>Loading storage config…</div>;
-  if(status?.apiNotDeployed)return<div style={{padding:"10px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,fontSize:11,color:"#92400e"}}>⚠ Awaiting deployment: add <code>api/storage.js</code> to your project and redeploy to Vercel.</div>;
-
-  return(
-    <div>
-      {status?.hasConfig
-        ?<div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"#f0fde9",border:`1px solid ${GM}`,borderRadius:9,marginBottom:14}}>
-          <span style={{fontSize:18}}>{PROVIDERS.find(p=>p.id===status.provider)?.icon||"📦"}</span>
-          <div style={{flex:1}}>
-            <div style={{fontWeight:700,fontSize:12,color:"#16a34a"}}>✓ Custom storage active</div>
-            <div style={{fontSize:10,color:MUTED}}>{PROVIDERS.find(p=>p.id===status.provider)?.label||status.provider} · Bucket: {status.bucket}</div>
-          </div>
-          <button onClick={remove} style={{padding:"4px 10px",borderRadius:6,border:"1px solid #fca5a5",background:"none",color:"#dc2626",fontSize:11,cursor:"pointer"}}>Remove</button>
-        </div>
-        :<div style={{padding:"8px 12px",background:"#f8fafc",border:`1px solid ${BDR}`,borderRadius:9,marginBottom:14,fontSize:11,color:MUTED}}>Using XpensR default storage. Configure your own below to control costs directly.</div>
-      }
-
-      <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:12}}>
-        {PROVIDERS.map(p=>(
-          <button key={p.id} onClick={()=>setForm(f=>({...f,provider:p.id,endpoint:"",region:"auto"}))} style={{padding:"8px 10px",borderRadius:9,border:`2px solid ${form.provider===p.id?G:BDR}`,background:form.provider===p.id?"#f0fde9":"var(--card,#fff)",cursor:"pointer",textAlign:"left"}}>
-            <div style={{display:"flex",alignItems:"center",gap:7}}>
-              <span style={{fontSize:16}}>{p.icon}</span>
-              <div><div style={{fontWeight:700,fontSize:11,color:form.provider===p.id?GD:INK}}>{p.label}</div><div style={{fontSize:9,color:MUTED}}>{p.desc}</div></div>
-            </div>
-          </button>
-        ))}
-      </div>
-
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-        <div>
-          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Bucket Name *</label>
-          <input value={form.bucket} onChange={e=>setForm(f=>({...f,bucket:e.target.value}))} placeholder="xpensr-receipts" style={inpS}/>
-        </div>
-        <div>
-          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Region</label>
-          <input value={form.region} onChange={e=>setForm(f=>({...f,region:e.target.value}))} placeholder="auto" style={inpS}/>
-        </div>
-        <div style={{gridColumn:"1/-1"}}>
-          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Endpoint <span style={{fontWeight:400,fontSize:9}}>{curP.endpointHelp}</span></label>
-          <input value={form.endpoint} onChange={e=>setForm(f=>({...f,endpoint:e.target.value}))} placeholder={curP.endpointHelp} style={inpS}/>
-        </div>
-        <div>
-          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Access Key ID</label>
-          <input value={form.accessKeyId} onChange={e=>setForm(f=>({...f,accessKeyId:e.target.value}))} autoComplete="off" style={inpS}/>
-        </div>
-        <div>
-          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Secret Access Key</label>
-          <div style={{position:"relative"}}>
-            <input type={showSecret?"text":"password"} value={form.secretAccessKey} onChange={e=>setForm(f=>({...f,secretAccessKey:e.target.value}))} autoComplete="new-password" style={inpS}/>
-            <button onClick={()=>setShowSecret(p=>!p)} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:MUTED,fontSize:13}}>{showSecret?"🙈":"👁"}</button>
-          </div>
-        </div>
-      </div>
-
-      <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:7,padding:"8px 12px",marginBottom:12,fontSize:11,color:"#1d4ed8"}}>
-        🔒 Credentials are sent to our secure server and stored encrypted. Receipts upload directly from your employees' browsers to your bucket — XpensR never receives or stores the files. You pay your storage provider directly.
-      </div>
-      <div style={{background:"#f0fde9",border:`1px solid ${GM}`,borderRadius:7,padding:"8px 12px",marginBottom:12,fontSize:11,color:GD}}>
-        💡 Create a private bucket named <code>xpensr-receipts</code>. XpensR generates signed URLs so only authorised users can view receipts.
-      </div>
-
-      {msg&&<div style={{fontSize:12,padding:"7px 10px",borderRadius:6,marginBottom:10,background:msg.startsWith("✓")?"#f0fde9":"#fee2e2",color:msg.startsWith("✓")?"#16a34a":"#dc2626"}}>{msg}</div>}
-      <Btn onClick={save} disabled={saving||!form.bucket} style={{padding:"9px 22px"}}>{saving?"Saving…":"Save Storage Config"}</Btn>
-    </div>
-  );
-}
-
 // ─── AI TOKEN WIDGET — shown in Policy tab for company admin ─────────────────
 function AiTokenWidget({cid,sbEnabled}){
   const [tokenData,setTokenData]=useState(null);
@@ -7395,13 +7330,6 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>🤖 AI — Bring Your Own API Key</div>
           <div style={{fontSize:11,color:MUTED,marginBottom:12}}>Connect your own Claude, ChatGPT, or Gemini key. XpensR never charges for AI usage when you use your own key.</div>
           <CompanyAiKeyConfig cid={cid}/>
-        </Card>
-
-        {/* ── Storage Configuration (BYOS) ── */}
-        <Card style={{padding:18}}>
-          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>📦 Storage — Bring Your Own Storage</div>
-          <div style={{fontSize:11,color:MUTED,marginBottom:12}}>Connect S3, Cloudflare R2, or Backblaze B2. Receipts go directly to your bucket — you pay your storage provider, not XpensR.</div>
-          <CompanyStorageConfig cid={cid}/>
         </Card>
 
         {/* AI Token Subscription — visible to admin (Policy tab is admin-only) */}
@@ -10128,6 +10056,12 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
                 ):(
                   <div style={{width:80,height:80,background:"#f3f4f6",borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${BDR}`}}><span style={{fontSize:24}}>⏳</span></div>
                 )}
+                {/* Storage provider badge */}
+                {(()=>{
+                  const p=r.storageProvider||"xpensr_supabase";
+                  const isR2=p==="r2";
+                  return<span style={{fontSize:8,color:isR2?"#2563eb":"#9ca3af",fontWeight:700,background:isR2?"#eff6ff":"#f3f4f6",padding:"1px 5px",borderRadius:4,border:`1px solid ${isR2?"#bfdbfe":"#e5e7eb"}`}}>{isR2?"☁ R2":"🔒 Supabase"}</span>;
+                })()}
                 {r.url&&<a href={r.url} download={r.name||`receipt_${i+1}`} style={{fontSize:9,color:GD,textDecoration:"none",background:GL,padding:"1px 6px",borderRadius:4,fontWeight:600}}>⬇ Download</a>}
               </div>
             ))}
