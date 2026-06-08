@@ -3083,10 +3083,22 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     }
   };
   const sbAddAudit=async(action,claimId,remarks="",tripId="")=>{
-    const entry={id:"AL-"+uid(),action,claimId:claimId||"",tripId:tripId||"",by:user.id,byId:user.id,byName:user.name,at:new Date().toLocaleString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit",hour12:false}),remarks};
+    const now=new Date();
+    const atLocal=now.toLocaleString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit",hour12:false});
+    const atISO=now.toISOString();
+    const entry={id:"AL-"+uid(),action,claimId:claimId||"",tripId:tripId||"",by:user.id,byId:user.id,byName:user.name,at:atLocal,atISO,remarks};
     if(SB_ENABLED){
-      try{await supabase.from("audit_log").insert({company_id:cid,action,claim_id:claimId||null,trip_id:tripId||null,by_user_id:user.id,by_name:user.name,at:entry.at,remarks});}
-      catch{}
+      try{
+        await supabase.from("audit_log").insert({
+          company_id:cid,action,
+          claim_id:claimId||null,
+          by_user_id:user.id,
+          by_name:user.name,
+          at:atLocal,
+          remarks,
+          created_at:atISO,
+        });
+      }catch(e){log.warn("Audit log insert failed:",e.message);}
     }
     setAudit(p=>[entry,...(p||[]).slice(0,999)]);
   };
@@ -3686,8 +3698,12 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       }
     }
     setMdl(null);
-    setTab("approvals");
-    if(SB_ENABLED) loadFromSB();
+    if(SB_ENABLED){
+      await loadFromSB();
+      setTab("approvals");
+    } else {
+      setTab("approvals");
+    }
   };
 
   // ── Hotel savings incentive (Phase 2) ───────────────────────────────────────
@@ -5989,16 +6005,34 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                   <Btn onClick={()=>approveTrip(t)} style={{fontSize:10,padding:"5px 10px"}}>✓ Approve</Btn>
                   <Btn v="danger" onClick={()=>rejectTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>✗</Btn>
                 </>}
-                {(isAdmin||isManager)&&(t.status==="active"||t.status==="closed")&&(
-                  <div style={{display:"flex",gap:5}}>
+                {/* Employee actions on their own trips — TAR, TERC, Itinerary, Conveyance, ARET */}
+                {(t.assignedTo||[]).includes(userId)&&(t.status==="active"||t.status==="closed"||t.status==="pending_approval")&&(
+                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                    <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===(t.createdBy||userId))||{name:""};const doc=await generateTAR(t,creator,users,"");doc.save(`TAR_${t.name||"Trip"}.pdf`);}catch(e){toast("TAR failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📋 TAR</Btn>
+                    <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===(t.createdBy||userId))||{name:""};const doc=await generateTERC(t,creator,claims.filter(c=>c.tripId===t.id),policy,"");doc.save(`TERC_${t.name||"Trip"}.pdf`);}catch(e){toast("TERC failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📑 TERC</Btn>
+                    <Btn v="outline" onClick={()=>setConveyanceTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🚗 Conveyance</Btn>
+                    <Btn v="outline" onClick={()=>setAretTrip(t)} style={{fontSize:10,padding:"5px 8px",borderColor:"#f59e0b",color:"#92400e"}}>⚠ ARET</Btn>
+                    <Btn v="outline" onClick={()=>setLegsTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>📍 Itinerary</Btn>
+                    {(isAdmin||isManager)&&<>
+                      <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"",users,policy);doc.save(`${t.name||"Trip"}_Settlement.pdf`);}catch(e){toast("PDF failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄 PDF</Btn>
+                      <Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Edit</Btn>
+                      <Btn v="outline" onClick={()=>setBudgetTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Budget</Btn>
+                      {(isAdmin||(t.status==="pending_approval"||t.status==="declined")&&t.createdBy===userId)&&
+                        <Btn v="danger" onClick={()=>deleteTrip&&deleteTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🗑 Delete</Btn>}
+                      {t.status==="active"&&<Btn v="warning" onClick={()=>closeTrip(t.id)} style={{fontSize:10,padding:"5px 10px"}}>Close</Btn>}
+                    </>}
+                  </div>
+                )}
+                {/* Admin/Manager-only view for trips they're not assigned to */}
+                {!(t.assignedTo||[]).includes(userId)&&(isAdmin||isManager)&&(t.status==="active"||t.status==="closed")&&(
+                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
                     <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"",users,policy);doc.save(`${t.name||"Trip"}_Settlement.pdf`);}catch(e){toast("PDF failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄 PDF</Btn>
-                    {(isManager||isAdmin)&&<Btn v="outline" onClick={async()=>{try{const doc=await generateTAR(t,users.find(u=>u.id===t.createdBy)||{name:""},users,"");doc.save(`TAR_${t.name||"Trip"}.pdf`);}catch(e){toast("TAR failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📋 TAR</Btn>}
-                    {(isManager||isAdmin)&&<Btn v="outline" onClick={async()=>{try{const doc=await generateTERC(t,users.find(u=>u.id===t.createdBy)||{name:""},claims.filter(c=>c.tripId===t.id),policy,"");doc.save(`TERC_${t.name||"Trip"}.pdf`);}catch(e){toast("TERC failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📑 TERC</Btn>}
+                    <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===t.createdBy)||{name:""};const doc=await generateTAR(t,creator,users,"");doc.save(`TAR_${t.name||"Trip"}.pdf`);}catch(e){toast("TAR failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📋 TAR</Btn>
+                    <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===t.createdBy)||{name:""};const doc=await generateTERC(t,creator,claims.filter(c=>c.tripId===t.id),policy,"");doc.save(`TERC_${t.name||"Trip"}.pdf`);}catch(e){toast("TERC failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📑 TERC</Btn>
                     <Btn v="outline" onClick={()=>setConveyanceTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🚗 Conveyance</Btn>
                     <Btn v="outline" onClick={()=>setAretTrip(t)} style={{fontSize:10,padding:"5px 8px",borderColor:"#f59e0b",color:"#92400e"}}>⚠ ARET</Btn>
                     <Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Edit</Btn>
                     <Btn v="outline" onClick={()=>setLegsTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>📍 Itinerary</Btn>
-                    {/* Delete: pending/declined for all, any status for admin */}
                     {(isAdmin||(t.status==="pending_approval"||t.status==="declined")&&t.createdBy===userId)&&
                       <Btn v="danger" onClick={()=>deleteTrip&&deleteTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🗑 Delete</Btn>}
                     <Btn v="outline" onClick={()=>setBudgetTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Budget</Btn>
@@ -6199,18 +6233,25 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
 // ─── TOPUP TAB ────────────────────────────────────────────────────────────────
 function TopupTab({user,topups,setTopups,toast,sbCreateTopup,trips,isManager,managerUsers}){
   const myTrips=(trips||[]).filter(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(user.id)));
-  const [form,setForm]=useState({amount:"",reason:"",tripId:""});
+  const [form,setForm]=useState({amount:"",reason:"",tripId:"",requestType:"topup"});
   const [mgrForm,setMgrForm]=useState({empId:"",amount:"",reason:"",tripId:""});
-  const [mgrTab,setMgrTab]=useState("own"); // "own" | "team"
+  const [mgrTab,setMgrTab]=useState("own");
   const inpS={width:"100%",padding:"10px 12px",border:`1.5px solid ${BDR}`,borderRadius:9,fontSize:13,background:"var(--input-bg,#fafff8)"};
+
+  const REQUEST_TYPES=[
+    {id:"topup",label:"💰 Balance Top-Up",desc:"Request additional travel advance/balance from manager"},
+    {id:"aret",label:"⚠ Excess Expense (ARET)",desc:"Authorised Request for Excess Travel — expenses exceeded entitlement"},
+  ];
+
   const submit=async()=>{
     if(!form.amount||!form.reason){toast("Fill amount and reason","error");return;}
     const tripId=form.tripId||myTrips[0]?.id;
-    if(!tripId){toast("Please select a trip for this top-up request","error");return;}
-    const req={id:uid(),empId:user.id,amount:parseFloat(form.amount),reason:form.reason,date:today(),status:"Pending",tripId};
+    if(!tripId){toast("Please select a trip","error");return;}
+    const prefix=form.requestType==="aret"?"[ARET] ":"";
+    const req={id:uid(),empId:user.id,amount:parseFloat(form.amount),reason:prefix+form.reason,date:today(),status:"Pending",tripId,requestType:form.requestType||"topup"};
     if(sbCreateTopup){await sbCreateTopup(req);}else{setTopups(p=>[...p,req]);}
-    setForm({amount:"",reason:"",tripId:""});
-    toast("✓ Top-up request sent to manager");
+    setForm({amount:"",reason:"",tripId:"",requestType:"topup"});
+    toast(form.requestType==="aret"?"✓ ARET request sent to manager for approval":"✓ Top-up request sent to manager");
   };
   const submitMgr=async()=>{
     if(!mgrForm.empId||!mgrForm.amount||!mgrForm.reason){toast("Fill employee, amount and reason","error");return;}
@@ -6234,7 +6275,16 @@ function TopupTab({user,topups,setTopups,toast,sbCreateTopup,trips,isManager,man
         ))}
       </div>}
       {(!isManager||mgrTab==="own")&&<>
-        <p style={{color:MUTED,fontSize:12,marginBottom:16}}>Request additional funds from your manager for a specific trip</p>
+        <p style={{color:MUTED,fontSize:12,marginBottom:12}}>Request additional funds or submit an excess expense (ARET) for manager approval</p>
+        {/* Request type selector */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+          {REQUEST_TYPES.map(rt=>(
+            <button key={rt.id} onClick={()=>setForm(f=>({...f,requestType:rt.id}))} style={{padding:"10px 10px",borderRadius:9,border:`2px solid ${form.requestType===rt.id?G:BDR}`,background:form.requestType===rt.id?"#f0fde9":"var(--card,#fff)",cursor:"pointer",textAlign:"left"}}>
+              <div style={{fontWeight:700,fontSize:12,color:form.requestType===rt.id?GD:INK}}>{rt.label}</div>
+              <div style={{fontSize:10,color:MUTED,marginTop:2}}>{rt.desc}</div>
+            </button>
+          ))}
+        </div>
         <Card style={{padding:20,marginBottom:12}}>
           <div style={{marginBottom:12}}>
             <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Trip *</label>
@@ -6248,7 +6298,9 @@ function TopupTab({user,topups,setTopups,toast,sbCreateTopup,trips,isManager,man
           </div>
           <div style={{marginBottom:12}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Amount (₹) *</label><input type="number" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} placeholder="e.g. 10000" style={inpS}/></div>
           <div style={{marginBottom:16}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Reason *</label><textarea value={form.reason} onChange={e=>setForm({...form,reason:e.target.value})} rows={3} placeholder="Why do you need additional funds?" style={{...inpS,resize:"vertical"}}/></div>
-          <Btn onClick={submit} disabled={myTrips.length===0} style={{width:"100%",padding:11}}>Send Request</Btn>
+          <Btn onClick={submit} disabled={myTrips.length===0} style={{width:"100%",padding:11,background:form.requestType==="aret"?"#f59e0b":G}}>
+            {form.requestType==="aret"?"Submit ARET Request":"Send Top-Up Request"}
+          </Btn>
         </Card>
       </>}
       {isManager&&mgrTab==="team"&&<>
@@ -7967,7 +8019,7 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
     // Footer
     doc.setFont("helvetica","normal");doc.setFontSize(6.5);doc.setTextColor(150,150,150);
     doc.text(`XpensR by RB · ${companyName||""} · Ledger as of ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})}`,W/2,200,{align:"center"});
-    doc.output("dataurlnewwindow");
+    return doc;
   };
 
   // Item 5: Full Trip Summary PDF
@@ -8049,7 +8101,7 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
     // Footer
     doc.setFont("helvetica","normal");doc.setFontSize(6.5);doc.setTextColor(150,150,150);
     doc.text(`XpensR by RB — Full Trip Summary — ${t.name} — ${new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"2-digit",year:"numeric"})}`,W/2,202,{align:"center"});
-    doc.output("dataurlnewwindow");
+    return doc;
   };
 
   // Compute diem summary for all assignees on a trip
@@ -9953,7 +10005,7 @@ async function generateTAR(trip,user,users,companyName){
   doc.line(ML,y,ML+60,y);doc.line(W-MR-60,y,W-MR,y);
   doc.setFontSize(7);doc.setTextColor(120,120,120);
   doc.text("Signature of Employee",ML,y+4);doc.text("Date",W-MR,y+4,{align:"right"});
-  doc.output("dataurlnewwindow");
+  return doc;
 }
 
 // ─── TERC PDF Generator ───────────────────────────────────────────────────────
@@ -10023,7 +10075,7 @@ async function generateTERC(trip,user,tripClaims,policy,companyName){
   doc.line(ML,y,ML+60,y);doc.line(W/2+10,y,W/2+70,y);
   doc.setFontSize(7);doc.setTextColor(120,120,120);
   doc.text("Travelling Employee",ML,y+4);doc.text("Name & Signature of HOD",W/2+10,y+4);
-  doc.output("dataurlnewwindow");
+  return doc;
 }
 
 function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,userId,userName,addCommentToSB,sbEnabled,cid,editRequests,onEditRequest,onApproveEditRequest,onRejectEditRequest,isAdmin=false,isManager=false,hasEditWindow,deleteClaim}){
