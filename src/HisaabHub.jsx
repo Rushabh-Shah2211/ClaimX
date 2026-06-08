@@ -1713,7 +1713,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
   const[form,setForm]=useState({name:"",industry:"",plan:"Starter",maxUsers:5,adminName:"",adminEmail:"",adminPw:""});
   const[userCounts,setUserCounts]=useState({});
 
-  const toast=(msg,t="success")=>{setNtf({msg,t});setTimeout(()=>setNtf(null),3000);};
+  const toast=(msg,t="success")=>{setNtf({msg,t});setTimeout(()=>setNtf(null),t==="error"?7000:3000);};
   const allCo=SB_ENABLED?(sbCoList||[]):Object.values(DB);
   const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB,width:"100%"};
 
@@ -2678,7 +2678,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   // Resolve the effective approver (handles delegation)
 
   // toast must be defined before any useEffect that calls it
-  const toast=(msg,t="success")=>{setNtf({msg,t});setTimeout(()=>setNtf(null),3200);};
+  const toast=(msg,t="success")=>{setNtf({msg,t});setTimeout(()=>setNtf(null),t==="error"?7000:3200);};
 
   useEffect(()=>{if(typeof Notification!=="undefined"&&Notification.permission==="default")askPush();},[]);
   useEffect(()=>{
@@ -3394,6 +3394,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
       // Upload receipts to Cloudflare R2 (with visible status)
       let uploadedCount=0;
+      const totalReceipts=(form.receipts||[]).filter(r=>r.b64).length;
+      if(totalReceipts>0) toast(`⏳ Uploading ${totalReceipts} receipt${totalReceipts>1?"s":""}…`);
       for(const r of(form.receipts||[])){
         if(r.b64){
           try{
@@ -3405,7 +3407,11 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           }
         }
       }
-      if(uploadedCount>0) toast(`✓ ${uploadedCount} receipt${uploadedCount>1?"s":""} uploaded to storage`);
+      if(totalReceipts>0){
+        if(uploadedCount===totalReceipts) toast(`✓ ${uploadedCount} receipt${uploadedCount>1?"s":""} saved to Cloudflare R2`);
+        else if(uploadedCount===0) toast(`❌ All receipt uploads failed — claim saved without receipts`,"error");
+        else toast(`⚠ ${uploadedCount}/${totalReceipts} receipts uploaded`,"warn");
+      }
 
       // Update trip spent + user balance via Supabase
       if(auto){
