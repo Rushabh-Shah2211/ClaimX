@@ -1,5 +1,6 @@
-// /api/r2upload — Cloudflare R2 storage via presigned URLs (AWS Sig V4)
-// Browser uploads DIRECTLY to R2 — Vercel never touches the file bytes.
+// /api/r2upload — Server-side upload to Cloudflare R2
+// Browser sends base64 file to Vercel → Vercel uploads to R2
+// No CORS issues since Vercel→R2 is server-to-server
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGIN || 'https://xpensr.in').split(',').map(s => s.trim());
 
@@ -22,124 +23,171 @@ function cfg() {
   };
 }
 
-async function presign(method, key) {
+async function uploadToR2(key, mimeType, bodyBytes) {
   const { accountId, accessKey, secretKey, bucket } = cfg();
-  if (!accountId || !accessKey || !secretKey || !bucket) {
-    throw new Error(`Missing R2 env vars. Have: accountId=${!!accountId} accessKey=${!!accessKey} secretKey=${!!secretKey} bucket=${!!bucket}`);
-  }
 
-  // Correct R2 endpoint format: https://<accountId>.r2.cloudflarestorage.com
-  // Object path:  /<bucket>/<key>
-  const host      = `${accountId}.r2.cloudflarestorage.com`;
-  const objectPath= `/${bucket}/${key}`;
-  const region    = 'auto';
-  const service   = 's3';
+  const host       = `${accountId}.r2.cloudflarestorage.com`;
+  const objectPath = `/${bucket}/${key}`;
+  const region     = 'auto';
+  const service    = 's3';
 
-  const now        = new Date();
-  const dateStr    = now.toISOString().slice(0,10).replace(/-/g,'');         // YYYYMMDD
-  const datetimeStr= now.toISOString().replace(/[-:]/g,'').replace(/\.\d+/,''); // YYYYMMDDTHHmmssZ
-
+  const now     = new Date();
+  const dateStr = now.toISOString().slice(0,10).replace(/-/g,'');
+  const dtStr   = now.toISOString().replace(/[-:]/g,'').replace(/\.\d+/,'');
   const credScope  = `${dateStr}/${region}/${service}/aws4_request`;
-  const credential = `${accessKey}/${credScope}`;
-
-  // Query string params for presigned URL (alphabetical order required)
-  const qp = new URLSearchParams([
-    ['X-Amz-Algorithm',     'AWS4-HMAC-SHA256'],
-    ['X-Amz-Credential',    credential],
-    ['X-Amz-Date',          datetimeStr],
-    ['X-Amz-Expires',       '3600'],
-    ['X-Amz-SignedHeaders', 'host'],
-  ]);
-  const queryString = qp.toString();
 
   const enc  = new TextEncoder();
-  const sig  = async (k, m) => {
-    const ck = await crypto.subtle.importKey('raw', k, {name:'HMAC',hash:'SHA-256'}, false, ['sign']);
-    return new Uint8Array(await crypto.subtle.sign('HMAC', ck, enc.encode(m)));
+  const sign = async (k,m) => {
+    const ck = await crypto.subtle.importKey('raw',k,{name:'HMAC',hash:'SHA-256'},false,['sign']);
+    return new Uint8Array(await crypto.subtle.sign('HMAC',ck,enc.encode(m)));
   };
-  const hex  = b => Array.from(b).map(x => x.toString(16).padStart(2,'0')).join('');
-  const sha  = async s => hex(new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(s))));
+  const hex  = b => Array.from(b).map(x=>x.toString(16).padStart(2,'0')).join('');
+  const sha  = async s => hex(new Uint8Array(await crypto.subtle.digest('SHA-256',enc.encode(s))));
+  const shaB = async b => hex(new Uint8Array(await crypto.subtle.digest('SHA-256',b)));
+
+  // For actual upload we sign with the real content hash
+  const contentHash = await shaB(bodyBytes);
+
+  const headers = {
+    'Content-Type'        : mimeType,
+    'Content-Length'      : String(bodyBytes.length),
+    'Host'                : host,
+    'X-Amz-Content-Sha256': contentHash,
+    'X-Amz-Date'          : dtStr,
+  };
+
+  const signedHeaderNames = ['content-length','content-type','host','x-amz-content-sha256','x-amz-date'];
+  const canonicalHeaders  = signedHeaderNames.map(h => `${h}:${headers[Object.keys(headers).find(k=>k.toLowerCase()===h)]}\n`).join('');
+  const signedHeadersStr  = signedHeaderNames.join(';');
 
   const canonical = [
-    method,
+    'PUT',
     objectPath,
-    queryString,
-    `host:${host}\n`,   // canonical headers (must end with \n)
-    'host',              // signed headers
-    'UNSIGNED-PAYLOAD',
+    '',   // no query string for direct upload
+    canonicalHeaders,
+    signedHeadersStr,
+    contentHash,
   ].join('\n');
 
-  const stringToSign = [
-    'AWS4-HMAC-SHA256',
-    datetimeStr,
-    credScope,
-    await sha(canonical),
-  ].join('\n');
+  const stringToSign = ['AWS4-HMAC-SHA256', dtStr, credScope, await sha(canonical)].join('\n');
 
-  const kDate    = await sig(enc.encode(`AWS4${secretKey}`), dateStr);
-  const kRegion  = await sig(kDate, region);
-  const kService = await sig(kRegion, service);
-  const kSigning = await sig(kService, 'aws4_request');
-  const signature = hex(await sig(kSigning, stringToSign));
+  const kDate = await sign(enc.encode(`AWS4${secretKey}`), dateStr);
+  const kReg  = await sign(kDate, region);
+  const kSvc  = await sign(kReg, service);
+  const kSign = await sign(kSvc, 'aws4_request');
+  const signature = hex(await sign(kSign, stringToSign));
 
-  return `https://${host}${objectPath}?${queryString}&X-Amz-Signature=${signature}`;
+  const authHeader = `AWS4-HMAC-SHA256 Credential=${accessKey}/${credScope}, SignedHeaders=${signedHeadersStr}, Signature=${signature}`;
+
+  const resp = await fetch(`https://${host}${objectPath}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type'        : mimeType,
+      'Content-Length'      : String(bodyBytes.length),
+      'Host'                : host,
+      'X-Amz-Content-Sha256': contentHash,
+      'X-Amz-Date'          : dtStr,
+      'Authorization'       : authHeader,
+    },
+    body: bodyBytes,
+    duplex: 'half',
+  });
+
+  if (!resp.ok) {
+    const txt = await resp.text().catch(() => resp.status);
+    throw new Error(`R2 PUT ${resp.status}: ${txt}`);
+  }
+
+  return true;
 }
+
+export const config = { api: { bodyParser: { sizeLimit: '15mb' } } };
 
 export default async function handler(req, res) {
   setCORS(req, res);
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
 
-  // ── GET ────────────────────────────────────────────────────────────────────
+  // GET: diagnostic
   if (req.method === 'GET') {
     const { action, key } = req.query || {};
 
+    // Signed GET URL for viewing
     if (action === 'view' && key) {
-      try {
-        const viewUrl = await presign('GET', decodeURIComponent(key));
-        return res.status(200).json({ viewUrl });
-      } catch (e) {
-        return res.status(500).json({ error: e.message });
+      const { accountId, accessKey, secretKey, bucket, pubUrl } = cfg();
+      // If public URL is set, just return that directly
+      if (pubUrl) {
+        return res.status(200).json({ viewUrl: `${pubUrl.replace(/\/$/,'')}/${decodeURIComponent(key)}` });
       }
+      // Otherwise generate presigned GET
+      try {
+        const host       = `${accountId}.r2.cloudflarestorage.com`;
+        const objectPath = `/${bucket}/${decodeURIComponent(key)}`;
+        const region='auto', service='s3';
+        const now=new Date();
+        const dateStr=now.toISOString().slice(0,10).replace(/-/g,'');
+        const dtStr=now.toISOString().replace(/[-:]/g,'').replace(/\.\d+/,'');
+        const credScope=`${dateStr}/${region}/${service}/aws4_request`;
+        const credential=`${accessKey}/${credScope}`;
+        const qp=new URLSearchParams([['X-Amz-Algorithm','AWS4-HMAC-SHA256'],['X-Amz-Credential',credential],['X-Amz-Date',dtStr],['X-Amz-Expires','3600'],['X-Amz-SignedHeaders','host']]);
+        const enc=new TextEncoder();
+        const sign=async(k,m)=>{const ck=await crypto.subtle.importKey('raw',k,{name:'HMAC',hash:'SHA-256'},false,['sign']);return new Uint8Array(await crypto.subtle.sign('HMAC',ck,enc.encode(m)));};
+        const hex=b=>Array.from(b).map(x=>x.toString(16).padStart(2,'0')).join('');
+        const sha=async s=>hex(new Uint8Array(await crypto.subtle.digest('SHA-256',enc.encode(s))));
+        const canonical=['GET',objectPath,qp.toString(),`host:${host}\n`,'host','UNSIGNED-PAYLOAD'].join('\n');
+        const sts=['AWS4-HMAC-SHA256',dtStr,credScope,await sha(canonical)].join('\n');
+        const kDate=await sign(enc.encode(`AWS4${secretKey}`),dateStr);
+        const kReg=await sign(kDate,region);const kSvc=await sign(kReg,service);const kSign=await sign(kSvc,'aws4_request');
+        const sig=hex(await sign(kSign,sts));
+        return res.status(200).json({ viewUrl:`https://${host}${objectPath}?${qp}&X-Amz-Signature=${sig}` });
+      } catch(e){ return res.status(500).json({error:e.message}); }
     }
 
-    // Diagnostic
+    // Status check
     const { accountId, accessKey, secretKey, bucket, pubUrl } = cfg();
-    const missing = [];
-    if (!accountId) missing.push('R2_ACCOUNT_ID');
-    if (!accessKey) missing.push('R2_ACCESS_KEY_ID');
-    if (!secretKey) missing.push('R2_SECRET_ACCESS_KEY');
-    if (!bucket)    missing.push('R2_BUCKET_NAME');
+    const missing=[];
+    if(!accountId)missing.push('R2_ACCOUNT_ID');
+    if(!accessKey)missing.push('R2_ACCESS_KEY_ID');
+    if(!secretKey)missing.push('R2_SECRET_ACCESS_KEY');
+    if(!bucket)missing.push('R2_BUCKET_NAME');
     return res.status(200).json({
-      configured : missing.length === 0,
-      missing,
-      bucket     : bucket || null,
-      publicUrl  : pubUrl  || null,
-      endpoint   : accountId ? `https://${accountId}.r2.cloudflarestorage.com` : null,
-      hint       : missing.length > 0
-        ? `Add to Vercel env vars: ${missing.join(', ')}`
-        : 'R2 configured. CORS must also be set on the bucket — see instructions.',
+      configured: missing.length===0, missing,
+      bucket: bucket||null, publicUrl: pubUrl||null,
+      hint: missing.length>0?`Add to Vercel env: ${missing.join(', ')}`:'R2 configured.',
     });
   }
 
-  // ── POST ───────────────────────────────────────────────────────────────────
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const cid = req.headers['x-company-id'] || '';
   if (!cid) return res.status(400).json({ error: 'Missing x-company-id header.' });
 
-  const { action, key, mimeType } = req.body || {};
+  const { key, mimeType, dataBase64 } = req.body || {};
+  if (!key || !mimeType || !dataBase64)
+    return res.status(400).json({ error: 'key, mimeType and dataBase64 required.' });
 
-  if (action === 'presign') {
-    if (!key || !mimeType) return res.status(400).json({ error: 'key and mimeType required.' });
-    const allowed = ['image/jpeg','image/png','image/webp','application/pdf'];
-    if (!allowed.includes(mimeType)) return res.status(400).json({ error: 'File type not allowed.' });
-    try {
-      const putUrl = await presign('PUT', key);
-      return res.status(200).json({ putUrl, key });
-    } catch (e) {
-      return res.status(500).json({ error: e.message });
-    }
+  const allowed = ['image/jpeg','image/png','image/webp','application/pdf'];
+  if (!allowed.includes(mimeType))
+    return res.status(400).json({ error: 'File type not allowed.' });
+
+  const { accountId, accessKey, secretKey, bucket } = cfg();
+  if (!accountId || !accessKey || !secretKey || !bucket)
+    return res.status(500).json({ error: 'R2 not configured on server.' });
+
+  try {
+    // Convert base64 to bytes
+    const binary = atob(dataBase64);
+    const bytes  = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+    await uploadToR2(key, mimeType, bytes);
+
+    const { pubUrl } = cfg();
+    const viewUrl = pubUrl
+      ? `${pubUrl.replace(/\/$/,'')}/${key}`
+      : null;
+
+    return res.status(200).json({ success: true, storagePath: key, viewUrl });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
   }
-
-  return res.status(400).json({ error: 'Unknown action. Use action=presign.' });
 }

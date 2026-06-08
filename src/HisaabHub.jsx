@@ -612,38 +612,27 @@ async function sbUploadReceipt(claimId,cid,b64,mimeType,fileName){
   const ext=mimeType.includes("pdf")?"pdf":"jpg";
   const key=`${cid}/${claimId}/${Date.now()}.${ext}`;
 
-  // ── Two-step R2 upload: presign → browser PUTs directly to R2 ─────────────
-  // Avoids Vercel 4.5MB body limit — file goes browser → R2 directly
+  // ── Server-side R2 upload: browser sends base64 → Vercel → R2 ──────────────
+  // No CORS needed — Vercel uploads to R2 server-to-server using AWS Sig V4
   try{
-    // Step 1: Get presigned PUT URL from server
-    const presignResp=await fetch("/api/r2upload",{
+    const r2Resp=await fetch("/api/r2upload",{
       method:"POST",
       headers:{"Content-Type":"application/json","x-company-id":cid},
-      body:JSON.stringify({action:"presign",key,mimeType}),
+      body:JSON.stringify({key,mimeType,dataBase64:b64}),
     });
-    if(!presignResp.ok){
-      const e=await presignResp.json().catch(()=>({error:"presign HTTP "+presignResp.status}));
-      throw new Error(e.error||"Presign failed");
+    if(!r2Resp.ok){
+      const errData=await r2Resp.json().catch(()=>({error:"HTTP "+r2Resp.status}));
+      throw new Error(errData.error||"R2 upload failed: "+r2Resp.status);
     }
-    const{putUrl}=await presignResp.json();
-
-    // Step 2: PUT file directly to R2 (no Vercel in the loop)
-    const r2Resp=await fetch(putUrl,{
-      method:"PUT",
-      headers:{"Content-Type":mimeType},
-      body:blob,
-    });
-    if(!r2Resp.ok)throw new Error("R2 PUT failed: "+r2Resp.status+" "+r2Resp.statusText);
-
-    // Record path in Supabase (metadata only — file lives in R2)
+    const{storagePath}=await r2Resp.json();
     await supabase.from("receipts").insert({
       claim_id:claimId,company_id:cid,
       file_name:fileName||`receipt.${ext}`,
-      storage_path:key,
+      storage_path:storagePath||key,
       mime_type:mimeType,
       storage_provider:"r2",
     });
-    return key;
+    return storagePath||key;
 
   }catch(r2Err){
     log.error("R2 upload failed — falling back to Supabase:",r2Err.message);
