@@ -7252,11 +7252,11 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
           <CompanyStorageConfig cid={cid}/>
         </Card>
 
-        {/* AI Token Subscription — admin and CFO only */}
-        {(isAdmin||(co?.users?.find(u=>u.id===user?.id)?.role==="cfo"))&&<Card style={{padding:18}}>
+        {/* AI Token Subscription — visible to admin (Policy tab is admin-only) */}
+        <Card style={{padding:18}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>🤖 AI Features — Token Balance</div>
           <AiTokenWidget cid={cid} sbEnabled={sbEnabled}/>
-        </Card>}
+        </Card>
         {/* ── Auto-Approve & Dual Approval Rules ── */}
         <Card style={{padding:18}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>Auto-Approve & Dual Approval Rules</div>
