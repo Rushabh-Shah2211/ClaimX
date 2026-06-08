@@ -86,6 +86,32 @@ async function signedPutUrl(key, mimeType) {
 export default async function handler(req, res) {
   setCORS(req, res);
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
+
+  // GET: diagnostic — check if R2 is configured (returns status, never exposes keys)
+  if (req.method === 'GET') {
+    const accountId = process.env.R2_ACCOUNT_ID || '';
+    const accessKey = process.env.R2_ACCESS_KEY_ID || '';
+    const secretKey = process.env.R2_SECRET_ACCESS_KEY || '';
+    const bucket    = process.env.R2_BUCKET_NAME || '';
+    const pubUrl    = process.env.VITE_R2_PUBLIC_URL || '';
+
+    const missing = [];
+    if (!accountId) missing.push('R2_ACCOUNT_ID');
+    if (!accessKey) missing.push('R2_ACCESS_KEY_ID');
+    if (!secretKey) missing.push('R2_SECRET_ACCESS_KEY');
+    if (!bucket)    missing.push('R2_BUCKET_NAME');
+
+    return res.status(200).json({
+      configured: missing.length === 0,
+      missing,
+      bucket: bucket || null,
+      publicUrl: pubUrl || null,
+      hint: missing.length > 0
+        ? `Add these to Vercel Environment Variables: ${missing.join(', ')}`
+        : 'R2 is configured. Test by uploading a receipt.'
+    });
+  }
+
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
   const contentLength = parseInt(req.headers['content-length'] || '0');

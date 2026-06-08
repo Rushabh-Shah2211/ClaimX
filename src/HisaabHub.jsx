@@ -623,7 +623,10 @@ async function sbUploadReceipt(claimId,cid,b64,mimeType,fileName){
       headers:{"Content-Type":"application/json","x-company-id":cid},
       body:JSON.stringify({key,mimeType,dataBase64:b64}),
     });
-    if(!r.ok)throw new Error("R2 upload failed: "+r.status);
+    if(!r.ok){
+      const errData=await r.json().catch(()=>({error:"HTTP "+r.status}));
+      throw new Error(errData.error||"R2 upload failed: "+r.status);
+    }
     const{storagePath}=await r.json();
     // Record in Supabase metadata table (just the path — file is in R2)
     await supabase.from("receipts").insert({
@@ -635,7 +638,13 @@ async function sbUploadReceipt(claimId,cid,b64,mimeType,fileName){
     });
     return storagePath||key;
   }catch(r2Err){
-    log.warn("R2 upload failed, falling back to Supabase storage:",r2Err.message);
+    // Log to console AND show in UI so admin knows R2 is not working
+    log.error("R2 upload failed — falling back to Supabase:",r2Err.message);
+    // Show a visible warning in the browser console (production)
+    if(typeof window!=="undefined"){
+      window.__r2LastError=r2Err.message;
+      console.warn("%c⚠ XpensR: Receipt stored in Supabase (R2 unavailable): "+r2Err.message,"color:#f59e0b;font-weight:bold");
+    }
     // Fallback to Supabase storage if R2 not configured
     const{error:upErr}=await supabase.storage.from("receipts").upload(key,blob,{contentType:mimeType});
     if(upErr)throw upErr;
