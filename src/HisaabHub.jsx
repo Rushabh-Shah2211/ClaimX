@@ -156,7 +156,7 @@ const SC={
   Suspended:{c:"#dc2626",bg:"#fee2e2",icon:"⊘"},
 };
 const DEFAULT_DEPTS=["Sales","Marketing","Accounts","Procurement","Operations","HR","IT","Management"];
-const DEFAULT_CATS=["Travel","Meals","Accommodation","Office Supplies","Client Entertainment","Software","Training","Miscellaneous"];
+const DEFAULT_CATS=["Travel","Meals","Accommodation","Local Conveyance","Office Supplies","Client Entertainment","Software","Training","Miscellaneous"];
 const CATS=DEFAULT_CATS; // backward compat — actual list comes from policy
 const CI={Travel:"✈️",Meals:"🍽️",Accommodation:"🏨","Office Supplies":"📦","Client Entertainment":"🥂",Software:"💻",Training:"📚",Miscellaneous:"🗂️",Other:"📋"};
 // DEPTS is now dynamic — comes from company policy. Use DEFAULT_DEPTS as fallback.
@@ -258,7 +258,8 @@ const mapPolicy=r=>r?({autoApproveLimit:parseFloat(r.auto_approve_limit)||5000,r
   yearlyDeptBudgets:r.yearly_dept_budgets||{},      // legacy — keep for compat
   teamBudgets:r.team_budgets||{},                   // {groupId:{monthly:N,yearly:N}}
   autoApproveMins:parseInt(r.auto_approve_mins)||10,
-  conveyanceRatePerKm:parseFloat(r.conveyance_rate_per_km)||4, // Item 6: delay before auto-approve fires
+  conveyanceRatePerKm:parseFloat(r.conveyance_rate_per_km)||4,
+  gradeTransportModes:r.grade_transport_modes||{},
 }):null;
 const mapNotif=r=>r?({id:r.id,userId:r.user_id,text:r.text,type:r.type,read:r.read,time:new Date(r.created_at).toLocaleString()}):null;
 const mapAudit=r=>r?({id:r.id,action:r.action,claimId:r.claim_id,by:r.by_user_id,byName:r.by_name,at:new Date(r.created_at).toLocaleString(),remarks:r.remarks}):null;
@@ -2578,7 +2579,14 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   const setNotifs =fn=>{set("notifications",fn);};
   const setPolicy =fn=>setDB(p=>({...p,[cid]:{...p[cid],policy:typeof fn==="function"?fn(p[cid].policy):fn}}));
 
-  const[tab,setTab]      =useState("dashboard");
+  const[tab,setTab]=useState(()=>{
+    try{return sessionStorage.getItem(`xpensr_tab_${user.id}`)||"dashboard";}catch{return"dashboard";}
+  });
+  // Persist tab changes so reloads/re-renders don't lose position
+  const setTabP=t=>{
+    try{sessionStorage.setItem(`xpensr_tab_${user.id}`,t);}catch{}
+    setTabP(t);
+  };
   const[sidebar,setSB]   =useState(true);
   const[notif,setNtf]    =useState(null);
   const[modal,setMdl]    =useState(null);
@@ -2665,7 +2673,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       if(e.key==="Escape"){setMdl(null);setSSC(false);setSFR(false);return;}
       if(e.ctrlKey||e.metaKey||e.altKey)return;
       const map={n:"submit",a:"approvals",c:"claims",t:"trips",d:"dashboard",f:"finance_view",i:"inbox",b:"balances",l:"ledger",s:"settlements",u:"topup",y:"analytics",h:"help"};
-      if(map[e.key.toLowerCase()]){e.preventDefault();setTab(map[e.key.toLowerCase()]);}
+      if(map[e.key.toLowerCase()]){e.preventDefault();setTabP(map[e.key.toLowerCase()]);}
     };
     window.addEventListener("keydown",handler);
     return()=>window.removeEventListener("keydown",handler);
@@ -3357,9 +3365,16 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const budgetBreachReason=monthlyDeptBreached?`Monthly dept budget (₹${monthlyDeptBudget.toLocaleString("en-IN")}) exceeded`:
                              yearlyDeptBreached?`Annual dept budget (₹${yearlyDeptBudget.toLocaleString("en-IN")}) exceeded`:"";
 
+    // Check if accommodation/hotel exceeds grade entitlement
+    const isAccommodation=["Accommodation","Hotel","Lodging"].some(k=>form.category?.toLowerCase().includes(k.toLowerCase()));
+    const empGrade=co.users.find(u=>u.id===user.id)?.grade||0;
+    const gradeEntitlement=policy.gradeEntitlements?.find(e=>e.grade===empGrade);
+    const hotelEntitlement=gradeEntitlement?.hotelLimit||0;
+    const exceedsHotelEntitlement=isAccommodation&&hotelEntitlement>0&&amount>hotelEntitlement;
+
     // Core routing decision
-    // 1. Within auto-approve limit AND no flags → schedule auto-approve after delay
-    const canAutoApprove=autoLimit>0&&amount<=autoLimit&&!catEx&&!weekend&&!noRcpt&&!tripBudgetExceeded&&!budgetBreached;
+    // 1. Within auto-approve limit AND no flags AND hotel within entitlement → schedule auto-approve
+    const canAutoApprove=autoLimit>0&&amount<=autoLimit&&!catEx&&!weekend&&!noRcpt&&!tripBudgetExceeded&&!budgetBreached&&!exceedsHotelEntitlement;
     // 2. Within auto-approve but category exceeded → pending with warning
     const pendingCatEx=autoLimit>0&&amount<=autoLimit&&catEx;
     // 3. Within auto-approve but trip budget exceeded → pending with warning (already hard-blocked above)
@@ -3379,7 +3394,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const claimData={id:claimId,tripId,empId:user.id,date:claimDate,category:form.category,desc:form.desc,amount,origAmount:parseFloat(form.origAmount||amount),origCur:form.currency||"INR",
       status:auto?"Approved":"Pending",autoApproved:auto,
       receipts:form.receipts||[],
-      remarks:auto?"Approved":routingRemark,
+      remarks:auto?"Approved":"Pending approval",  // employee never sees routing details
       budgetBreached,
       flagged:catEx,anomaly:isAnomaly,anomalyReasons:[...reasons,...(Object.keys(form.manualEdits||{}).length>0?[`Fields manually edited after OCR scan: ${Object.keys(form.manualEdits||{}).join(", ")}`]:[])],manualEdits:form.manualEdits||{},comments:[],vendor:form.vendor||"",weekendFlag:weekend,notes:form.notes||"",projectCode:form.projectCode||selectedTrip?.projectCode||"",
       gstAmount:parseFloat(form.gstAmount)||0,gstItc:null,
@@ -3387,7 +3402,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
     if(!online){
       if(SB_ENABLED){
-        const sbRow={id:claimId,company_id:cid,trip_id:tripId,emp_id:user.id,date:claimDate,category:form.category,description:form.desc,vendor:form.vendor||"",amount,orig_amount:parseFloat(form.origAmount||amount),orig_currency:form.currency||"INR",status:auto?"Approved":"Pending",auto_approved:auto,remarks:auto?"Auto-approved":"",flagged:catEx,anomaly:isAnomaly,anomaly_reasons:reasons,weekend_flag:weekend,notes:form.notes||"",leg_id:form.legId||null,city:form.city||"",city_tier:form.cityTier||"D"};
+        const sbRow={id:claimId,company_id:cid,trip_id:tripId,emp_id:user.id,date:claimDate,category:form.category,description:form.desc,vendor:form.vendor||"",amount,orig_amount:parseFloat(form.origAmount||amount),orig_currency:form.currency||"INR",status:auto?"Approved":"Pending",auto_approved:auto,remarks:"",flagged:catEx,anomaly:isAnomaly,anomaly_reasons:reasons,weekend_flag:weekend,notes:form.notes||"",leg_id:form.legId||null,city:form.city||"",city_tier:form.cityTier||"D"};
         enqueue({type:"claim",data:claimData,sbRow});
       } else {
         enqueue({type:"claim",data:claimData});
@@ -3403,11 +3418,23 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         date:claimDate,category:form.category,description:form.desc,
         vendor:form.vendor||"",amount,orig_amount:parseFloat(form.origAmount||amount),
         orig_currency:form.currency||"INR",status:auto?"Approved":"Pending",
-        auto_approved:auto,remarks:auto?"Auto-approved":"",flagged:catEx,
+        auto_approved:auto,remarks:"",flagged:catEx,
         anomaly:isAnomaly,anomaly_reasons:reasons,weekend_flag:weekend,notes:form.notes||"",
         leg_id:form.legId||null,city:form.city||"",city_tier:form.cityTier||"D",
       });
       if(claimErr){toast(claimErr.message,"error");return;}
+
+      // Auto-create top-up request if trip budget exceeded
+      if(tripBudgetExceeded&&selectedTrip){
+        const tripSpent=(co.claims||[]).filter(c=>c.tripId===tripId&&c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
+        const tripBudget=selectedTrip.budget||0;
+        const overBy=Math.max(0,(tripSpent+amount)-tripBudget);
+        if(overBy>0){
+          const topupReq={id:uid(),empId:user.id,amount:overBy,reason:`Auto-generated: Trip budget exceeded by ₹${overBy.toLocaleString("en-IN")} due to claim ${claimId} (${form.category} ₹${amount.toLocaleString("en-IN")})`,date:claimDate,status:"Pending",tripId,requestType:"topup"};
+          await supabase.from("topups").insert({id:topupReq.id,company_id:cid,emp_id:user.id,amount:overBy,reason:topupReq.reason,date:claimDate,status:"Pending",trip_id:tripId});
+          toast(`⚠ Trip budget exceeded by ${fmt(overBy)} — top-up request auto-created for manager approval`,"warn");
+        }
+      }
 
       // Upload receipts to Cloudflare R2 (with visible status)
       let uploadedCount=0;
@@ -3434,7 +3461,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       if(auto){
         // Item 6: Auto-approve after configured delay (default 10 min)
         const delayMins=co.policy.autoApproveMins||10;
-        toast(`⚡ Submitted — will auto-approve in ${delayMins} min${delayMins!==1?"s":""}!`);
+        toast("✓ Claim submitted successfully");
         setTimeout(async()=>{
           try{
             await supabase.from("claims").update({status:"Approved",auto_approved:true,remarks:"Auto-approved"}).eq("id",claimId);
@@ -3700,9 +3727,9 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     setMdl(null);
     if(SB_ENABLED){
       await loadFromSB();
-      setTab("approvals");
+      setTabP("approvals");
     } else {
-      setTab("approvals");
+      setTabP("approvals");
     }
   };
 
@@ -3809,6 +3836,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         team_budgets:newPolicy.teamBudgets||{},
         auto_approve_mins:newPolicy.autoApproveMins||10,
         conveyance_rate_per_km:newPolicy.conveyanceRatePerKm||4,
+        grade_transport_modes:newPolicy.gradeTransportModes||{},
       };
 
       let{error}=await supabase.from("policy").upsert(fullRow);
@@ -4148,6 +4176,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     ...(!isCFO||isAdmin?(!isHR?[{id:"trips",icon:"🗂️",label:"Trips / Periods"}]:[]):[]),
     ...(canApprove?[{id:"approvals",icon:"✓",label:"Approvals",badge:myPendingClaims.length+pendingTopups.length}]:[]),
     ...(!isCFO||isAdmin?(!isHR?[{id:"topup",icon:"💰",label:"Top-up"}]:[]):[]),
+    ...(!canApprove&&!isCFO&&!isHR?[{id:"wallet",icon:"👛",label:"My Wallet"}]:[]),
     {id:"analytics", icon:"📊", label:"Analytics"},
     ...(canApprove?[{id:"ledger",icon:"📒",label:"Trip Ledger"},{id:"balances",icon:"⚖️",label:"Balances & Settlement"}]:[]),
     ...(canApprove||isFinance||isHR?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
@@ -4182,7 +4211,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       {notif&&<div style={{position:"fixed",top:20,right:20,zIndex:2000,padding:"14px 18px 14px 16px",borderRadius:12,fontWeight:600,fontSize:13,background:notif.t==="error"?"#fee2e2":notif.t==="warn"?"#fef3c7":"#dcfce7",color:notif.t==="error"?"#dc2626":notif.t==="warn"?"#92400e":"#15803d",boxShadow:"0 4px 24px #0003",maxWidth:400,display:"flex",alignItems:"flex-start",gap:10,wordBreak:"break-word"}}><span style={{flex:1,lineHeight:1.5}}>{notif.msg}</span><button onClick={()=>setNtf(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,color:"inherit",opacity:0.6,flexShrink:0,padding:0,lineHeight:1}}>✕</button></div>}
       {!online&&<div style={{position:"fixed",bottom:0,left:0,right:0,background:"#92400e",color:"#fef3c7",textAlign:"center",padding:"7px",fontSize:12,fontWeight:600,zIndex:999}}>📴 Offline — claims queued ({queue.length}) · will sync when connected</div>}
       {showHelp&&<HelpManual userRole={user.role} onClose={()=>setSHelp(false)}/>}
-      {showCam&&<CameraModal onCapture={f=>{setCamF(f);setSCam(false);setTab("submit");}} onClose={()=>setSCam(false)}/>}
+      {showCam&&<CameraModal onCapture={f=>{setCamF(f);setSCam(false);setTabP("submit");}} onClose={()=>setSCam(false)}/>}
       {showShortcuts&&<ShortcutHelp onClose={()=>setSSC(false)}/>}
       {showPrefs&&<PrefsModal onClose={()=>setSPrefs(false)} policy={co.policy} savePolicy={savePolicyToSB}/>}
       {showFundReq&&hasPerm("submit")&&<FundRequestModal trips={co.trips} user={user} cid={cid} onClose={()=>setSFR(false)} onSubmit={handleFundRequest} sbEnabled={SB_ENABLED}/>}
@@ -4196,15 +4225,15 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       {showFab&&<div style={{position:"fixed",bottom:254,right:22,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:10,zIndex:798}}>
         {hasPerm("submit")&&<div style={{display:"flex",alignItems:"center",gap:8}}>
           <span style={{background:"rgba(0,0,0,.7)",color:"#fff",fontSize:11,padding:"4px 10px",borderRadius:6,whiteSpace:"nowrap"}}>New Expense</span>
-          <button onClick={()=>{setShowFab(false);setTab("submit");}} style={{width:42,height:42,borderRadius:"50%",background:G,color:"#fff",border:"none",fontSize:18,cursor:"pointer",boxShadow:"0 3px 12px rgba(126,217,87,.4)"}}>📤</button>
+          <button onClick={()=>{setShowFab(false);setTabP("submit");}} style={{width:42,height:42,borderRadius:"50%",background:G,color:"#fff",border:"none",fontSize:18,cursor:"pointer",boxShadow:"0 3px 12px rgba(126,217,87,.4)"}}>📤</button>
         </div>}
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <span style={{background:"rgba(0,0,0,.7)",color:"#fff",fontSize:11,padding:"4px 10px",borderRadius:6,whiteSpace:"nowrap"}}>New Trip</span>
-          <button onClick={()=>{setShowFab(false);setTab("trips");}} style={{width:42,height:42,borderRadius:"50%",background:"#7c3aed",color:"#fff",border:"none",fontSize:18,cursor:"pointer",boxShadow:"0 3px 12px rgba(124,58,237,.4)"}}>🗂</button>
+          <button onClick={()=>{setShowFab(false);setTabP("trips");}} style={{width:42,height:42,borderRadius:"50%",background:"#7c3aed",color:"#fff",border:"none",fontSize:18,cursor:"pointer",boxShadow:"0 3px 12px rgba(124,58,237,.4)"}}>🗂</button>
         </div>
         {!canApprove&&<div style={{display:"flex",alignItems:"center",gap:8}}>
           <span style={{background:"rgba(0,0,0,.7)",color:"#fff",fontSize:11,padding:"4px 10px",borderRadius:6,whiteSpace:"nowrap"}}>Request Top-up</span>
-          <button onClick={()=>{setShowFab(false);setTab("topup");}} style={{width:42,height:42,borderRadius:"50%",background:"#f59e0b",color:"#fff",border:"none",fontSize:18,cursor:"pointer",boxShadow:"0 3px 12px rgba(245,158,11,.4)"}}>💰</button>
+          <button onClick={()=>{setShowFab(false);setTabP("topup");}} style={{width:42,height:42,borderRadius:"50%",background:"#f59e0b",color:"#fff",border:"none",fontSize:18,cursor:"pointer",boxShadow:"0 3px 12px rgba(245,158,11,.4)"}}>💰</button>
         </div>}
       </div>}
       <button onClick={()=>setShowFab(p=>!p)} style={{position:"fixed",bottom:200,right:20,width:44,height:44,borderRadius:"50%",background:showFab?"#dc2626":INK,color:"#fff",border:"none",fontSize:20,cursor:"pointer",boxShadow:"0 4px 14px rgba(0,0,0,.3)",zIndex:798,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s"}}>
@@ -4233,7 +4262,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         
         <nav style={{display:"flex",flexDirection:"column",gap:2,overflow:"auto",flex:1}}>
           {navItems.map(item=>(
-            <button key={item.id} onClick={()=>setTab(item.id)} title={!sidebar?item.label:""}
+            <button key={item.id} onClick={()=>setTabP(item.id)} title={!sidebar?item.label:""}
               style={{display:"flex",alignItems:"center",gap:sidebar?8:0,padding:sidebar?"9px 11px":"9px 0",justifyContent:sidebar?"flex-start":"center",borderRadius:8,cursor:"pointer",border:"none",fontFamily:FB,fontSize:12,fontWeight:tab===item.id?600:400,background:tab===item.id?primaryColor:"transparent",color:tab===item.id?"#fff":"rgba(255,255,255,.5)",transition:"all .15s",width:"100%",position:"relative"}}>
               <span style={{fontSize:14,width:17,textAlign:"center",flexShrink:0}}>{item.icon}</span>
               {sidebar&&<span style={{flex:1,whiteSpace:"nowrap",overflow:"hidden"}}>{item.label}</span>}
@@ -4318,7 +4347,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               }} style={{fontSize:10,padding:"5px 8px"}} className="mob-hide">📊 Digest</Btn>}
             {isEmployee&&<button onClick={()=>setSFR(true)} title="Request Funds" style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>💰</button>}
             <button onClick={()=>setSCam(true)} title="Camera" style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>📷</button>
-            <button onClick={()=>{setTab("inbox");markRead();}} style={{position:"relative",background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>🔔{myNotifs.length>0&&<span style={{position:"absolute",top:-4,right:-4,width:16,height:16,background:"#ef4444",borderRadius:"50%",color:"#fff",fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{myNotifs.length}</span>}</button>
+            <button onClick={()=>{setTabP("inbox");markRead();}} style={{position:"relative",background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>🔔{myNotifs.length>0&&<span style={{position:"absolute",top:-4,right:-4,width:16,height:16,background:"#ef4444",borderRadius:"50%",color:"#fff",fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{myNotifs.length}</span>}</button>
             <button onClick={()=>setSPrefs(true)} title="Display Settings (font size, dark mode)" style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>{isDark?"☀":"🌙"}</button>
             <button onClick={()=>setSSC(true)} title="Keyboard Shortcuts (?)" style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>⌨</button>
             <button onClick={()=>setSHelp(true)} style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>❓</button>
@@ -4339,7 +4368,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           trips={co.trips} isManager={isManager} isAdmin={isAdmin} isFinance={isFinance}
           getUser={getUser} setMdl={setMdl} submitEditRequest={submitEditRequest}
           hasEditWindow={hasEditWindow} userId={user.id} onExportPDF={exportClaimsPDF}/>}
-        {tab==="submit"&&hasPerm("submit")&&<SubmitTab user={user} co={co} submitClaim={submitClaim} camFile={camFile} clearCamFile={()=>setCamF(null)} onCam={()=>setSCam(true)} companyCategories={companyCategories} onCreateTrip={()=>setTab("trips")} sbCreateTrip={sbCreateTrip} aiTokenBalance={aiTokenBalance} setAiTokenBalance={setAiTokenBalance} cid={cid}/>}
+        {tab==="submit"&&hasPerm("submit")&&<SubmitTab user={user} co={co} submitClaim={submitClaim} camFile={camFile} clearCamFile={()=>setCamF(null)} onCam={()=>setSCam(true)} companyCategories={companyCategories} onCreateTrip={()=>setTabP("trips")} sbCreateTrip={sbCreateTrip} aiTokenBalance={aiTokenBalance} setAiTokenBalance={setAiTokenBalance} cid={cid}/>}
         {tab==="trips"&&<TripsTab trips={isAdmin?co.trips:visibleTrips} setTrips={fn=>{if(!SB_ENABLED)setTrips(fn);}} claims={isAdmin?co.claims:visibleClaims}
           isManager={isManager} isAdmin={isAdmin} getUser={getUser} users={co.users}
           closeTrip={closeTrip} toast={toast} uid={user.id} userRole={user.role} myUser={myUser}
@@ -4418,6 +4447,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
         {tab==="audit"&&(isAdmin||user?.role==="cfo")&&<Audit auditLog={isAdmin?(co.auditLog||[]):(co.auditLog||[])} claims={co.claims} getUser={getUser} users={co.users} trips={co.trips} policy={co.policy}/>}
         {tab==="my_history"&&!isManager&&!isAdmin&&<MyHistoryTab user={user} trips={co.trips} claims={co.claims} getUser={getUser} exportClaimsPDF={exportClaimsPDF}/>}
+        {tab==="wallet"&&!isManager&&!isAdmin&&<WalletLedgerTab user={user} myUser={myUser} trips={co.trips} claims={co.claims} topups={co.topups} fmt={fmt} setTab={setTab}/>}
         {tab==="ledger"&&canApprove&&<TripLedgerTab trips={isAdmin?co.trips:visibleTrips} claims={isAdmin?co.claims:visibleClaims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} companyName={activeMeta?.name||""}/>}
         {tab==="balances"&&canApprove&&<BalancesTab trips={co.trips} claims={co.claims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept)} getUser={getUser} isAdmin={isAdmin} fmt={fmt} cid={cid} sbEnabled={SB_ENABLED} onReload={loadFromSB}/>}
         {/* ── HR Role View ── */}
@@ -4459,7 +4489,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>Help & Getting Started</h1>
             <Btn onClick={()=>setShowTutorial(true)} style={{fontSize:12}}>▶ Launch Tutorial</Btn>
           </div>
-          <HelpManual userRole={user.role} onClose={()=>setTab("dashboard")} inline={true}/>
+          <HelpManual userRole={user.role} onClose={()=>setTabP("dashboard")} inline={true}/>
         </div>}
       </div>
 
@@ -4480,7 +4510,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         ].map(item=>(
           <button key={item.id} onClick={()=>{
             if(item.id==="_more")setShowMobMore(true);
-            else setTab(item.id);
+            else setTabP(item.id);
           }}
             style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2,background:"none",border:"none",cursor:"pointer",padding:"4px 2px",position:"relative",minWidth:0}}>
             <span style={{fontSize:17,lineHeight:1,color:tab===item.id?primaryColor:"rgba(255,255,255,.45)"}}>{item.icon}</span>
@@ -4519,7 +4549,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               <button key={item.id} onClick={()=>{
                 setShowMobMore(false);
                 if(item.id==="_profile")setSPro(true);
-                else setTab(item.id);
+                else setTabP(item.id);
               }}
                 style={{width:"100%",display:"flex",alignItems:"center",gap:14,padding:"12px 20px",background:"none",border:"none",cursor:"pointer",textAlign:"left",position:"relative"}}>
                 <span style={{fontSize:20,width:28,textAlign:"center",lineHeight:1}}>{item.icon}</span>
@@ -4550,8 +4580,8 @@ function EmpDash({user,myUser,co,setTab}){
         <Btn onClick={()=>setTab("submit")}>＋ New Expense</Btn>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:12,marginBottom:14}}>
-        <Card style={{padding:20,background:`linear-gradient(135deg,#1a5c2a,#2e8b4e)`}}>
-          <div style={{fontSize:10,color:"rgba(255,255,255,.55)",fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>{co.policy.reimbursementMode?"Pending Reimbursement":"Wallet Balance"}</div>
+        <Card style={{padding:20,background:`linear-gradient(135deg,#1a5c2a,#2e8b4e)`,cursor:"pointer"}} onClick={()=>setTab("wallet")}>
+          <div style={{fontSize:10,color:"rgba(255,255,255,.55)",fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>{co.policy.reimbursementMode?"Pending Reimbursement":"Wallet Balance"} <span style={{opacity:.6,fontSize:9}}>tap to view ledger →</span></div>
           <div style={{fontFamily:FD,fontSize:28,fontWeight:700,color:"#ffffff",marginTop:5}}>{fmt(co.policy.reimbursementMode?myUser?.reimbursable||0:myUser?.balance||0)}</div>
           {!co.policy.reimbursementMode&&<div style={{marginTop:8}}><PBar value={approved} max={(myUser?.balance||0)+approved} h={3} color={G}/></div>}
         </Card>
@@ -4574,6 +4604,116 @@ function EmpDash({user,myUser,co,setTab}){
             <td style={{fontWeight:700,fontSize:12}}>{fmt(c.amount)}</td>
             <td><Badge s={displayStatus(c,isAdmin)} sm/></td>
           </tr>)}</tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+// ─── WALLET LEDGER TAB ────────────────────────────────────────────────────────
+function WalletLedgerTab({user,myUser,trips,claims,topups,fmt,setTab}){
+  const[filterTrip,setFilterTrip]=useState("all");
+  const myTrips=(trips||[]).filter(t=>(t.assignedTo||[]).includes(user.id));
+
+  // Build ledger entries
+  const entries=[];
+  // Opening balance
+  if((myUser?.balance||0)>0){
+    entries.push({date:myTrips[0]?.startDate||"2024-01-01",label:"Opening Wallet Balance",type:"credit",amount:myUser.balance,tripId:null,tripName:"—"});
+  }
+  // Trip advances (budget allocated to this user per trip)
+  myTrips.forEach(t=>{
+    if((t.budget||0)>0){
+      entries.push({date:t.startDate||"",label:`Trip Advance: ${t.name}`,type:"credit",amount:t.budget,tripId:t.id,tripName:t.name});
+    }
+  });
+  // Top-ups approved
+  (topups||[]).filter(tp=>tp.empId===user.id&&tp.status==="Approved").forEach(tp=>{
+    const trip=trips.find(t=>t.id===tp.tripId);
+    entries.push({date:tp.date||"",label:`Top-up: ${tp.reason?.replace("[ARET] ","")?.slice(0,40)||"Top-up approved"}`,type:"credit",amount:tp.amount,tripId:tp.tripId,tripName:trip?.name||"—"});
+  });
+  // Approved claims (deductions)
+  (claims||[]).filter(c=>c.empId===user.id&&(c.status==="Approved"||c.status==="Auto-Approved")).forEach(c=>{
+    const trip=trips.find(t=>t.id===c.tripId);
+    entries.push({date:c.date||"",label:`${c.category}: ${c.desc?.slice(0,35)||""}`,type:"debit",amount:c.amount,tripId:c.tripId,tripName:trip?.name||"—"});
+  });
+
+  // Sort by date
+  entries.sort((a,b)=>a.date.localeCompare(b.date));
+
+  const filtered=filterTrip==="all"?entries:entries.filter(e=>e.tripId===filterTrip||(!e.tripId&&filterTrip==="general"));
+
+  // Running balance
+  let running=0;
+  const withBalance=filtered.map(e=>{
+    running+=e.type==="credit"?e.amount:-e.amount;
+    return{...e,running};
+  });
+
+  const totalCredits=filtered.filter(e=>e.type==="credit").reduce((s,e)=>s+e.amount,0);
+  const totalDebits=filtered.filter(e=>e.type==="debit").reduce((s,e)=>s+e.amount,0);
+  const netBalance=totalCredits-totalDebits;
+
+  return(
+    <div style={{maxWidth:720}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div>
+          <h1 style={{fontFamily:FD,fontSize:20,fontWeight:700,color:INK}}>My Wallet Ledger</h1>
+          <p style={{color:MUTED,fontSize:12}}>All credits and deductions to your wallet</p>
+        </div>
+        <Btn v="outline" onClick={()=>setTab("dashboard")} style={{fontSize:11}}>← Dashboard</Btn>
+      </div>
+
+      {/* Summary cards */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16}}>
+        <Card style={{padding:14,background:"linear-gradient(135deg,#1a5c2a,#2e8b4e)"}}>
+          <div style={{fontSize:9,color:"rgba(255,255,255,.6)",textTransform:"uppercase",letterSpacing:1}}>Net Balance</div>
+          <div style={{fontFamily:FD,fontSize:20,fontWeight:700,color:"#fff",marginTop:3}}>{fmt(netBalance)}</div>
+        </Card>
+        <Card style={{padding:14}}>
+          <div style={{fontSize:9,color:MUTED,textTransform:"uppercase"}}>Total Credits</div>
+          <div style={{fontFamily:FD,fontSize:18,fontWeight:700,color:"#16a34a",marginTop:3}}>+{fmt(totalCredits)}</div>
+        </Card>
+        <Card style={{padding:14}}>
+          <div style={{fontSize:9,color:MUTED,textTransform:"uppercase"}}>Total Spent</div>
+          <div style={{fontFamily:FD,fontSize:18,fontWeight:700,color:"#dc2626",marginTop:3}}>−{fmt(totalDebits)}</div>
+        </Card>
+      </div>
+
+      {/* Trip filter */}
+      <div style={{display:"flex",gap:7,marginBottom:12,flexWrap:"wrap"}}>
+        <button onClick={()=>setFilterTrip("all")} style={{padding:"5px 12px",borderRadius:15,border:`1.5px solid ${filterTrip==="all"?G:BDR}`,background:filterTrip==="all"?G:"transparent",color:filterTrip==="all"?"#fff":INK,fontSize:11,cursor:"pointer",fontWeight:600}}>All</button>
+        {myTrips.map(t=>(
+          <button key={t.id} onClick={()=>setFilterTrip(t.id)} style={{padding:"5px 12px",borderRadius:15,border:`1.5px solid ${filterTrip===t.id?G:BDR}`,background:filterTrip===t.id?G:"transparent",color:filterTrip===t.id?"#fff":INK,fontSize:11,cursor:"pointer",fontWeight:600}}>{t.name}</button>
+        ))}
+      </div>
+
+      {/* Ledger table */}
+      <Card>
+        <table style={{width:"100%",borderCollapse:"collapse"}}>
+          <thead style={{background:"#f8faf6"}}>
+            <tr>
+              <th style={{padding:"8px 12px",fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",textAlign:"left",borderBottom:`1px solid ${BDR}`}}>Date</th>
+              <th style={{padding:"8px 12px",fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",textAlign:"left",borderBottom:`1px solid ${BDR}`}}>Description</th>
+              <th style={{padding:"8px 12px",fontSize:10,fontWeight:700,color:MUTED,textTransform:"uppercase",textAlign:"left",borderBottom:`1px solid ${BDR}`}}>Trip</th>
+              <th style={{padding:"8px 12px",fontSize:10,fontWeight:700,color:"#16a34a",textTransform:"uppercase",textAlign:"right",borderBottom:`1px solid ${BDR}`}}>Credit</th>
+              <th style={{padding:"8px 12px",fontSize:10,fontWeight:700,color:"#dc2626",textTransform:"uppercase",textAlign:"right",borderBottom:`1px solid ${BDR}`}}>Debit</th>
+              <th style={{padding:"8px 12px",fontSize:10,fontWeight:700,color:INK,textTransform:"uppercase",textAlign:"right",borderBottom:`1px solid ${BDR}`}}>Balance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {withBalance.length===0&&<tr><td colSpan={6} style={{padding:24,textAlign:"center",color:MUTED,fontSize:12}}>No wallet entries yet</td></tr>}
+            {withBalance.map((e,i)=>(
+              <tr key={i} style={{borderBottom:`1px solid #f0f4ee`}}>
+                <td style={{padding:"9px 12px",fontSize:11,color:MUTED}}>{e.date||"—"}</td>
+                <td style={{padding:"9px 12px",fontSize:12,color:INK}}>{e.label}</td>
+                <td style={{padding:"9px 12px",fontSize:11,color:MUTED}}>{e.tripName}</td>
+                <td style={{padding:"9px 12px",fontSize:12,fontWeight:600,color:"#16a34a",textAlign:"right"}}>{e.type==="credit"?`+${fmt(e.amount)}`:""}</td>
+                <td style={{padding:"9px 12px",fontSize:12,fontWeight:600,color:"#dc2626",textAlign:"right"}}>{e.type==="debit"?`−${fmt(e.amount)}`:""}</td>
+                <td style={{padding:"9px 12px",fontSize:12,fontWeight:700,color:e.running>=0?"#16a34a":"#dc2626",textAlign:"right"}}>{fmt(e.running)}</td>
+              </tr>
+            ))}
+          </tbody>
         </table>
       </Card>
     </div>
@@ -4750,8 +4890,11 @@ function ClaimsTab({claims,trips,isManager,isAdmin,isFinance,getUser,setMdl,subm
 
 // ─── TRIP LEGS MODAL ──────────────────────────────────────────────────────────
 function TripLegsModal({trip,policy,onClose,onSave}){
+  useEffect(()=>{const h=e=>{if(e.key==="Escape")onClose();};document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[onClose]);
   const DEFAULT_MODES=["Air","Train (AC)","Train (Non-AC)","Bus (Volvo)","Bus (Non-AC)","Taxi / Cab","Own Vehicle","Metro","Rental Car","Ferry","Other"];
-  const MODES=policy?.allowedTransportModes||DEFAULT_MODES;
+  // Use grade-specific modes if configured in policy
+  const empGradeKey=`grade_${policy?.userGrade||1}`;
+  const MODES=(policy?.gradeTransportModes||{})[empGradeKey]||policy?.allowedTransportModes||DEFAULT_MODES;
   const initLeg=()=>({id:uid(),legNum:Date.now(),fromCity:"",toCity:"",_toCityOther:"",_fromCityOther:"",_toOther:false,_fromOther:false,departAt:"",arriveAt:"",mode:"",cityTier:"D",hotelLimit:0,diemRate:0,days:1});
   const[legs,setLegs]=useState(trip.legs?.length>0?trip.legs.map(l=>({...l,_toCityOther:"",_fromCityOther:"",_toOther:false,_fromOther:false})):[initLeg()]);
   const[busy,setBusy]=useState(false);
@@ -4891,10 +5034,10 @@ function TripLegsModal({trip,policy,onClose,onSave}){
               </div>
               <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>DAYS (auto)</label>
                 <input value={leg.days||1} readOnly style={{...inpS,background:"var(--bg,#f9fafb)",color:MUTED}}/></div>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>HOTEL LIMIT ₹</label>
-                <input type="number" value={leg.hotelLimit||""} onChange={e=>updateLeg(idx,{hotelLimit:parseFloat(e.target.value)||0})} placeholder="From grade entitlements" style={inpS}/></div>
-              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>DIEM ₹/day</label>
-                <input type="number" value={leg.diemRate||""} onChange={e=>updateLeg(idx,{diemRate:parseFloat(e.target.value)||0})} placeholder="From grade entitlements" style={inpS}/></div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>HOTEL LIMIT ₹ <span style={{fontSize:8,color:"#16a34a"}}>(from grade)</span></label>
+                <input type="number" value={leg.hotelLimit||""} readOnly style={{...inpS,background:"var(--bg,#f9fafb)",color:MUTED,cursor:"not-allowed"}} placeholder="Auto from grade entitlement"/></div>
+              <div><label style={{fontSize:10,color:MUTED,display:"block",marginBottom:3,textTransform:"uppercase"}}>DIEM ₹/day <span style={{fontSize:8,color:"#16a34a"}}>(from grade)</span></label>
+                <input type="number" value={leg.diemRate||""} readOnly style={{...inpS,background:"var(--bg,#f9fafb)",color:MUTED,cursor:"not-allowed"}} placeholder="Auto from grade entitlement"/></div>
             </div>
             {leg.toCity&&<div style={{fontSize:10,color:MUTED,marginTop:6}}>
               Tier {leg.cityTier} city{leg.days>0?` · ${leg.days} day${leg.days!==1?"s":""}`:""}{leg.diemRate>0?` · Diem: ₹${(leg.days*leg.diemRate).toLocaleString("en-IN")}`:""}
@@ -4925,6 +5068,7 @@ function TripLegsModal({trip,policy,onClose,onSave}){
 }
 
 function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin,isEmployee,userId}){
+  useEffect(()=>{const h=e=>{if(e.key==="Escape")onClose();};document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[onClose]);
   const isClosed=trip.status==="closed"||trip.status==="settled";
   const[form,setForm]=useState({
     name:trip.name,
@@ -5003,7 +5147,8 @@ function TripEditModal({trip,users,getUser,onClose,onSave,isAdmin,isEmployee,use
 }
 
 function TripBudgetModal({trip,users,claims,getUser,onClose,onSave,sbCreateTopup}){
-  const assigned=(trip.assignedTo||[]).map(id=>users.find(u=>u.id===id)).filter(Boolean);
+  useEffect(()=>{const h=e=>{if(e.key==="Escape")onClose();};document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[onClose]);
+    const assigned=(trip.assignedTo||[]).map(id=>users.find(u=>u.id===id)).filter(Boolean);
   const empBudgets=trip.employeeBudgets||{};
   const[budgets,setBudgets]=useState(()=>{
     const b={};
@@ -5601,17 +5746,24 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
         </div>
         <div style={{marginBottom:10}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Description *</label><input value={fm.desc} onChange={e=>upd(idx,{desc:e.target.value})} placeholder="Brief description" style={{...inpS,borderColor:fm.ocrState==="done"&&fm.desc?G:BDR}}/></div>
         <div style={{marginBottom:14}}><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Notes / Invoice / GSTIN</label><textarea value={fm.notes} onChange={e=>upd(idx,{notes:e.target.value})} rows={2} placeholder="Invoice no., GSTIN, additional info…" style={{...inpS,resize:"vertical"}}/></div>
-        {/* Expense splitting */}
+        {/* Expense splitting — only trip co-travellers */}
         <div style={{marginBottom:10}}>
           <label style={{display:"flex",alignItems:"center",gap:7,fontSize:11,color:MUTED,cursor:"pointer"}}>
             <input type="checkbox" checked={!!fm.splitWith} onChange={e=>upd(idx,{splitWith:e.target.checked?[]:undefined})} style={{accentColor:G}}/>
-            Split this expense with colleagues
+            Split this expense with trip co-travellers
           </label>
           {fm.splitWith&&<div style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:6}}>
-            {co.users.filter(u=>u.id!==user.id&&["employee","manager"].includes(u.role)).map(u=>{
-              const selected=fm.splitWith.includes(u.id);
-              return<div key={u.id} onClick={()=>upd(idx,{splitWith:selected?fm.splitWith.filter(x=>x!==u.id):[...fm.splitWith,u.id]})} style={{padding:"4px 10px",borderRadius:15,border:`1.5px solid ${selected?G:BDR}`,background:selected?G:"#fff",color:selected?"#fff":INK,fontSize:11,cursor:"pointer",fontWeight:selected?600:400}}>{u.name.split(" ")[0]}</div>;
-            })}
+            {(()=>{
+              // Only show people assigned to the same trip
+              const trip=co.trips?.find(t=>t.id===fm.tripId||t.id===myTrips[0]?.id);
+              const coTravellers=trip?.assignedTo?.filter(id=>id!==user.id)||[];
+              const travellers=co.users.filter(u=>coTravellers.includes(u.id));
+              if(travellers.length===0) return<div style={{fontSize:11,color:MUTED}}>No other travellers on this trip</div>;
+              return travellers.map(u=>{
+                const selected=fm.splitWith.includes(u.id);
+                return<div key={u.id} onClick={()=>upd(idx,{splitWith:selected?fm.splitWith.filter(x=>x!==u.id):[...fm.splitWith,u.id]})} style={{padding:"4px 10px",borderRadius:15,border:`1.5px solid ${selected?G:BDR}`,background:selected?G:"#fff",color:selected?"#fff":INK,fontSize:11,cursor:"pointer",fontWeight:selected?600:400}}>{u.name.split(" ")[0]}</div>;
+              });
+            })()}
             {fm.splitWith.length>0&&<div style={{fontSize:10,color:MUTED,width:"100%",marginTop:3}}>
               Each person pays {fmt(Math.round(parseFloat(fm.amount||0)/(fm.splitWith.length+1)))} · Total: {fmt(parseFloat(fm.amount||0))}
             </div>}
@@ -5946,7 +6098,7 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
         }}
       />}
       {/* Itinerary / legs modal */}
-      {legsTrip&&<TripLegsModal trip={legsTrip} policy={policy}
+      {legsTrip&&<TripLegsModal trip={legsTrip} policy={{...policy,userGrade:myUser?.grade||1}}
         onClose={()=>setLegsTrip(null)}
         onSave={async(tripId,legs)=>{
           if(sbUpdateTrip){
@@ -6024,9 +6176,9 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                 {/* Employee actions on their own trips — TAR, TERC, Itinerary, Conveyance, ARET */}
                 {(t.assignedTo||[]).includes(userId)&&(t.status==="active"||t.status==="closed"||t.status==="pending_approval")&&(
                   <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                    <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"",users,policy);doc.save(`${t.name||"Trip"}_Summary.pdf`);}catch(e){toast("PDF failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄 Summary</Btn>
                     <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===(t.createdBy||userId))||{name:""};const doc=await generateTAR(t,creator,users,"");doc.save(`TAR_${t.name||"Trip"}.pdf`);}catch(e){toast("TAR failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📋 TAR</Btn>
                     <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===(t.createdBy||userId))||{name:""};const doc=await generateTERC(t,creator,claims.filter(c=>c.tripId===t.id),policy,"");doc.save(`TERC_${t.name||"Trip"}.pdf`);}catch(e){toast("TERC failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📑 TERC</Btn>
-                    <Btn v="outline" onClick={()=>setConveyanceTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🚗 Conveyance</Btn>
                     <Btn v="outline" onClick={()=>setLegsTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>📍 Itinerary</Btn>
                     {(isAdmin||isManager)&&<>
                       <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"",users,policy);doc.save(`${t.name||"Trip"}_Settlement.pdf`);}catch(e){toast("PDF failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄 PDF</Btn>
@@ -6048,7 +6200,6 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
                     <Btn v="outline" onClick={async()=>{try{const doc=await generateSettlementPDF(t,claims,getUser,"",users,policy);doc.save(`${t.name||"Trip"}_Settlement.pdf`);}catch(e){toast("PDF failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📄 PDF</Btn>
                     <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===t.createdBy)||{name:""};const doc=await generateTAR(t,creator,users,"");doc.save(`TAR_${t.name||"Trip"}.pdf`);}catch(e){toast("TAR failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📋 TAR</Btn>
                     <Btn v="outline" onClick={async()=>{try{const creator=users.find(u=>u.id===t.createdBy)||{name:""};const doc=await generateTERC(t,creator,claims.filter(c=>c.tripId===t.id),policy,"");doc.save(`TERC_${t.name||"Trip"}.pdf`);}catch(e){toast("TERC failed: "+e.message,"error");}}} style={{fontSize:10,padding:"5px 8px"}}>📑 TERC</Btn>
-                    <Btn v="outline" onClick={()=>setConveyanceTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>🚗 Conveyance</Btn>
                     <Btn v="outline" onClick={()=>setEditTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>Edit</Btn>
                     <Btn v="outline" onClick={()=>setLegsTrip(t)} style={{fontSize:10,padding:"5px 8px"}}>📍 Itinerary</Btn>
                     {(isAdmin||(t.status==="pending_approval"||t.status==="declined")&&t.createdBy===userId)&&
@@ -7588,25 +7739,35 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
           </div>
         </Card>
 
-        {/* ── Allowed Transport Modes ── */}
-        <Card style={{padding:18}}>
-          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>Allowed Transport Modes</div>
-          <div style={{fontSize:11,color:MUTED,marginBottom:10}}>Select which modes employees can choose in trip itinerary</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:8}}>
-            {["Air","Train (AC)","Train (Non-AC)","Bus (Volvo)","Bus (Non-AC)","Taxi / Cab","Own Vehicle","Metro","Rental Car","Ferry","Other"].map(mode=>{
-              const allowed=policy.allowedTransportModes||["Air","Train (AC)","Train (Non-AC)","Bus (Volvo)","Taxi / Cab","Own Vehicle"];
-              const checked=allowed.includes(mode);
-              return(
-                <label key={mode} style={{display:"flex",alignItems:"center",gap:7,padding:"7px 10px",borderRadius:8,border:`1.5px solid ${checked?G:BDR}`,background:checked?"#f0fde9":"var(--card,#fff)",cursor:"pointer",fontSize:12,fontWeight:checked?600:400,color:checked?GD:INK}}>
-                  <input type="checkbox" checked={checked} onChange={e=>{
-                    const cur=policy.allowedTransportModes||["Air","Train (AC)","Train (Non-AC)","Bus (Volvo)","Taxi / Cab","Own Vehicle"];
-                    setPolicy({...policy,allowedTransportModes:e.target.checked?[...cur,mode]:cur.filter(m=>m!==mode)});
-                  }} style={{width:14,height:14,accentColor:G,cursor:"pointer"}}/>
-                  {mode}
-                </label>
-              );
-            })}
-          </div>
+        {/* ── Allowed Transport Modes per Grade ── */}
+        <Card style={{padding:18,gridColumn:"1/-1"}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>Allowed Transport Modes — Per Grade</div>
+          <div style={{fontSize:11,color:MUTED,marginBottom:12}}>Select which modes each grade level can use in trip itinerary</div>
+          {(policy.approvalHierarchy||[{level:1},{level:2},{level:3}]).map(h=>{
+            const gradeKey=`grade_${h.level}`;
+            const ALL_MODES=["Air","Train (AC)","Train (Non-AC)","Bus (Volvo)","Bus (Non-AC)","Taxi / Cab","Own Vehicle","Metro","Rental Car","Ferry","Other"];
+            const allowed=(policy.gradeTransportModes||{})[gradeKey]||ALL_MODES;
+            return(
+              <div key={h.level} style={{marginBottom:14,padding:"10px 12px",border:`1px solid ${BDR}`,borderRadius:9,background:"var(--card,#fff)"}}>
+                <div style={{fontWeight:700,fontSize:12,color:INK,marginBottom:8}}>Grade {h.level} — {h.label||`Level ${h.level}`}</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
+                  {ALL_MODES.map(mode=>{
+                    const checked=allowed.includes(mode);
+                    return(
+                      <label key={mode} style={{display:"flex",alignItems:"center",gap:5,padding:"4px 9px",borderRadius:7,border:`1.5px solid ${checked?G:BDR}`,background:checked?"#f0fde9":"var(--card,#fff)",cursor:"pointer",fontSize:11,fontWeight:checked?600:400,color:checked?GD:INK}}>
+                        <input type="checkbox" checked={checked} onChange={e=>{
+                          const cur=(policy.gradeTransportModes||{})[gradeKey]||ALL_MODES;
+                          const updated=e.target.checked?[...cur,mode]:cur.filter(m=>m!==mode);
+                          setPolicy({...policy,gradeTransportModes:{...(policy.gradeTransportModes||{}), [gradeKey]:updated}});
+                        }} style={{width:12,height:12,accentColor:G,cursor:"pointer"}}/>
+                        {mode}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
         </Card>
         {policy.gradeBased&&(policy.approvalHierarchy||[]).length>0&&<Card style={{padding:18,gridColumn:"1/-1"}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>Grade Entitlements — Hotel Limit &amp; Diem Rate per Grade per Tier</div>
@@ -10251,33 +10412,38 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
             <Badge s={c.status==="Approved"||c.status==="Auto-Approved"?"Approved":c.status}/>
             <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
-              {/* Pending: direct edit */}
               {c.status==="Pending"&&c.empId===userId&&(
                 <Btn v="outline" onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Edit</Btn>
               )}
-              {/* Delete pending claim */}
               {(c.status==="Pending"&&c.empId===userId||isAdmin)&&deleteClaim&&(
                 <Btn v="danger" onClick={()=>{deleteClaim(c.id);setMdl(null);}} style={{padding:"6px 10px",fontSize:11}}>🗑 Delete</Btn>
               )}
-              {/* Approved with open edit window: edit now */}
               {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&hasEditWindow&&hasEditWindow(c.id)&&(
-                <Btn onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11,background:"#16a34a",color:"#fff"}}>✏ Edit Now <span style={{fontSize:9,opacity:.8}}>(window open)</span></Btn>
+                <Btn onClick={()=>setMdl({type:"editClaim",data:c})} style={{padding:"6px 12px",fontSize:11,background:"#16a34a",color:"#fff"}}>✏ Edit Now</Btn>
               )}
-              {/* Approved without window: request edit */}
               {(c.status==="Approved"||c.status==="Auto-Approved")&&c.empId===userId&&onEditRequest&&!(hasEditWindow&&hasEditWindow(c.id))&&(
                 <Btn v="warning" onClick={()=>setMdl({type:"editRequest",data:c})} style={{padding:"6px 12px",fontSize:11}}>✏ Request Edit</Btn>
               )}
               <Btn v="outline" onClick={()=>setMdl(null)} style={{fontSize:11}}>Close</Btn>
             </div>
           </div>
-          {/* Admin override — reverse any manager decision */}
+          {/* Fix 3: Show approve/reject directly in detail modal when claim is pending */}
+          {(c.status==="Pending"||c.status==="Manager Approved"||c.status==="Budget-Escalation Approved")&&handleDecision&&(isManager||isAdmin)&&c.empId!==userId&&(
+            <div style={{marginTop:10,background:"#f8fafc",borderRadius:10,padding:14,border:`1px solid ${BDR}`}}>
+              <div style={{fontSize:10,fontWeight:700,color:MUTED,marginBottom:8,textTransform:"uppercase",letterSpacing:.5}}>Review Claim</div>
+              <textarea value={remarks} onChange={e=>setRemarks(e.target.value)} rows={2} placeholder="Remarks (optional)…" style={{width:"100%",padding:"8px 11px",border:`1.5px solid ${BDR}`,borderRadius:7,fontFamily:FB,fontSize:12,resize:"vertical",outline:"none",display:"block",boxSizing:"border-box",marginBottom:10}}/>
+              <div style={{display:"flex",gap:8}}>
+                <Btn onClick={async()=>{await handleDecision(c.id,"Approved",remarks);}} style={{flex:1,background:"#16a34a"}}>✓ Approve</Btn>
+                <Btn v="danger" onClick={async()=>{await handleDecision(c.id,"Rejected",remarks);}} style={{flex:1}}>✗ Reject</Btn>
+              </div>
+            </div>
+          )}
           {isAdmin&&handleDecision&&(c.status==="Approved"||c.status==="Auto-Approved"||c.status==="Rejected"||c.status==="Manager Approved")&&(
-            <div style={{padding:"10px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8}}>
+            <div style={{padding:"10px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,marginTop:8}}>
               <div style={{fontSize:10,fontWeight:700,color:"#92400e",marginBottom:6,textTransform:"uppercase",letterSpacing:.5}}>⚡ Admin Override</div>
               <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
                 {c.status!=="Approved"&&<Btn onClick={()=>{handleDecision(c.id,"Approved","Admin override");setMdl(null);}} style={{padding:"6px 12px",fontSize:11,background:"#16a34a",color:"#fff"}}>✓ Override → Approve</Btn>}
                 {c.status!=="Rejected"&&<Btn onClick={()=>{handleDecision(c.id,"Rejected","Admin override");setMdl(null);}} style={{padding:"6px 12px",fontSize:11,background:"#dc2626",color:"#fff"}}>✗ Override → Reject</Btn>}
-                {(c.status==="Approved"||c.status==="Auto-Approved"||c.status==="Manager Approved")&&<Btn v="outline" onClick={()=>{handleDecision(c.id,"Pending","Admin override — returned for re-review");setMdl(null);}} style={{padding:"6px 12px",fontSize:11}}>↩ Return to Pending</Btn>}
               </div>
             </div>
           )}
