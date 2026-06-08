@@ -1713,7 +1713,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
   const[form,setForm]=useState({name:"",industry:"",plan:"Starter",maxUsers:5,adminName:"",adminEmail:"",adminPw:""});
   const[userCounts,setUserCounts]=useState({});
 
-  const toast=(msg,t="success")=>{setNtf({msg,t});setTimeout(()=>setNtf(null),t==="error"?7000:3000);};
+  const toast=(msg,t="success")=>{setNtf({msg,t});if(t!=="error")setTimeout(()=>setNtf(null),3000);};
   const allCo=SB_ENABLED?(sbCoList||[]):Object.values(DB);
   const inpS={padding:"9px 12px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:13,background:"var(--input-bg,#fafff8)",fontFamily:FB,width:"100%"};
 
@@ -1790,7 +1790,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
   return(
     <div style={{display:"flex",minHeight:"100vh",fontFamily:FB,background:"#f0f4f8"}}>
       <style>{GLSTYLE+`.login-inp::placeholder{color:rgba(255,255,255,0.28)!important;font-weight:300}.login-inp::-webkit-input-placeholder{color:rgba(255,255,255,0.28)!important}`}</style>
-      {notif&&<div style={{position:"fixed",top:20,right:20,zIndex:1000,padding:"12px 18px",borderRadius:12,fontWeight:600,fontSize:13,background:notif.t==="error"?"#fee2e2":"#dcfce7",color:notif.t==="error"?"#dc2626":"#15803d",boxShadow:"0 4px 20px #0002"}}>{notif.msg}</div>}
+      {notif&&<div style={{position:"fixed",top:20,right:20,zIndex:2000,padding:"14px 18px 14px 16px",borderRadius:12,fontWeight:600,fontSize:13,background:notif.t==="error"?"#fee2e2":notif.t==="warn"?"#fef3c7":"#dcfce7",color:notif.t==="error"?"#dc2626":notif.t==="warn"?"#92400e":"#15803d",boxShadow:"0 4px 24px #0003",maxWidth:380,display:"flex",alignItems:"flex-start",gap:10,wordBreak:"break-word"}}><span style={{flex:1,lineHeight:1.5}}>{notif.msg}</span><button onClick={()=>setNtf(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,color:"inherit",opacity:0.6,flexShrink:0,padding:0,lineHeight:1}}>✕</button></div>}
       {/* Sidebar */}
       <div style={{width:220,background:"#1e2736",display:"flex",flexDirection:"column",padding:"20px 12px",position:"sticky",top:0,height:"100vh"}}>
         <div style={{marginBottom:18}}><Logo width={140} dark/></div>
@@ -2678,7 +2678,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   // Resolve the effective approver (handles delegation)
 
   // toast must be defined before any useEffect that calls it
-  const toast=(msg,t="success")=>{setNtf({msg,t});setTimeout(()=>setNtf(null),t==="error"?7000:3200);};
+  const toast=(msg,t="success")=>{setNtf({msg,t});if(t!=="error")setTimeout(()=>setNtf(null),3200);};
 
   useEffect(()=>{if(typeof Notification!=="undefined"&&Notification.permission==="default")askPush();},[]);
   useEffect(()=>{
@@ -4156,7 +4156,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           .xpensr-root { transform: scale(${(appFontSize/13).toFixed(3)}); transform-origin: top left; width: ${(100*(13/appFontSize)).toFixed(1)}%; }
         }
       `}</style>
-      {notif&&<div style={{position:"fixed",top:20,right:20,zIndex:1000,padding:"12px 18px",borderRadius:12,fontWeight:600,fontSize:13,background:notif.t==="error"?"#fee2e2":notif.t==="warn"?"#fef3c7":"#dcfce7",color:notif.t==="error"?"#dc2626":notif.t==="warn"?"#92400e":"#15803d",boxShadow:"0 4px 20px #0002",maxWidth:320}}>{notif.msg}</div>}
+      {notif&&<div style={{position:"fixed",top:20,right:20,zIndex:2000,padding:"14px 18px 14px 16px",borderRadius:12,fontWeight:600,fontSize:13,background:notif.t==="error"?"#fee2e2":notif.t==="warn"?"#fef3c7":"#dcfce7",color:notif.t==="error"?"#dc2626":notif.t==="warn"?"#92400e":"#15803d",boxShadow:"0 4px 24px #0003",maxWidth:400,display:"flex",alignItems:"flex-start",gap:10,wordBreak:"break-word"}}><span style={{flex:1,lineHeight:1.5}}>{notif.msg}</span><button onClick={()=>setNtf(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,color:"inherit",opacity:0.6,flexShrink:0,padding:0,lineHeight:1}}>✕</button></div>}
       {!online&&<div style={{position:"fixed",bottom:0,left:0,right:0,background:"#92400e",color:"#fef3c7",textAlign:"center",padding:"7px",fontSize:12,fontWeight:600,zIndex:999}}>📴 Offline — claims queued ({queue.length}) · will sync when connected</div>}
       {showHelp&&<HelpManual userRole={user.role} onClose={()=>setSHelp(false)}/>}
       {showCam&&<CameraModal onCapture={f=>{setCamF(f);setSCam(false);setTab("submit");}} onClose={()=>setSCam(false)}/>}
@@ -5302,7 +5302,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
     reader.readAsDataURL(f);
   };
 
-  const addForm=()=>{const nf=blankForm();setForms(p=>[...p,nf]);setIdx(forms.length);};
+  const [uploadError,setUploadError]=useState("");
   const removeForm=i=>{if(forms.length===1)return;setForms(p=>p.filter((_,j)=>j!==i));setIdx(Math.max(0,idx-1));};
   const submitAll=async()=>{
     const valid=forms.filter(f=>f.category&&f.desc&&f.amount);
@@ -5602,18 +5602,16 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
             const resolvedTripId=fm.tripId||(myTrips.length>0?myTrips[0].id:null);
             if(!resolvedTripId){alert("No active trip found. Please create a trip first.");return;}
             const tripId=resolvedTripId;
+            setUploadError("");
             try{
               await submitClaim({...fm,tripId});
-              // Only clear form on TRUE success (submitClaim didn't throw)
-              // Clear this form on success, clear ALL drafts if all blank
               const newForms=forms.map((x,i)=>i===idx?blankForm():x);
               setForms(newForms);
               setIdx(0);
-              // Always clear draft after submission — don't restore stale data
               try{localStorage.removeItem("xpensr_draft_v1");}catch{}
             }catch(e){
-              // Do NOT clear form — show error and let user fix it
-              alert("Submission failed: "+(e?.message||String(e)));
+              const msg=e?.message||String(e);
+              setUploadError(msg);
             }
           }} style={{flex:1,padding:11}}>
             "Submit Claim →"
