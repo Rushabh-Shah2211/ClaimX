@@ -605,49 +605,34 @@ async function sbGetReceiptUrl(storagePath){
 // ─── SB: upload receipt from base64 ──────────────────────────────────────────
 async function sbUploadReceipt(claimId,cid,b64,mimeType,fileName){
   if(!supabase)return null;
-  const binary=atob(b64);
-  const bytes=new Uint8Array(binary.length);
-  for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
-  const blob=new Blob([bytes],{type:mimeType});
   const ext=mimeType.includes("pdf")?"pdf":"jpg";
   const key=`${cid}/${claimId}/${Date.now()}.${ext}`;
 
-  // ── Server-side R2 upload: browser sends base64 → Vercel → R2 ──────────────
-  // No CORS needed — Vercel uploads to R2 server-to-server using AWS Sig V4
-  try{
-    const r2Resp=await fetch("/api/r2upload",{
-      method:"POST",
-      headers:{"Content-Type":"application/json","x-company-id":cid},
-      body:JSON.stringify({key,mimeType,dataBase64:b64}),
-    });
-    if(!r2Resp.ok){
-      const errData=await r2Resp.json().catch(()=>({error:"HTTP "+r2Resp.status}));
-      throw new Error(errData.error||"R2 upload failed: "+r2Resp.status);
-    }
-    const{storagePath}=await r2Resp.json();
-    await supabase.from("receipts").insert({
-      claim_id:claimId,company_id:cid,
-      file_name:fileName||`receipt.${ext}`,
-      storage_path:storagePath||key,
-      mime_type:mimeType,
-      storage_provider:"r2",
-    });
-    return storagePath||key;
+  // ── Upload via Vercel → R2 (server-side, no CORS issues) ─────────────────
+  const r2Resp=await fetch("/api/r2upload",{
+    method:"POST",
+    headers:{"Content-Type":"application/json","x-company-id":cid},
+    body:JSON.stringify({key,mimeType,dataBase64:b64}),
+  });
 
-  }catch(r2Err){
-    log.error("R2 upload failed — falling back to Supabase:",r2Err.message);
-    if(typeof window!=="undefined") window.__r2LastError=r2Err.message;
-    // Supabase fallback
-    const{error:upErr}=await supabase.storage.from("receipts").upload(key,blob,{contentType:mimeType});
-    if(upErr)throw upErr;
-    await supabase.from("receipts").insert({
-      claim_id:claimId,company_id:cid,
-      file_name:fileName||`receipt.${ext}`,
-      storage_path:key,mime_type:mimeType,
-      storage_provider:"xpensr_supabase",
-    });
-    return key;
+  if(!r2Resp.ok){
+    let errMsg=`R2 HTTP ${r2Resp.status}`;
+    try{const d=await r2Resp.json();errMsg=d.error||errMsg;}catch{}
+    throw new Error(errMsg);
   }
+
+  const{storagePath}=await r2Resp.json();
+
+  const{error:dbErr}=await supabase.from("receipts").insert({
+    claim_id:claimId,company_id:cid,
+    file_name:fileName||`receipt.${ext}`,
+    storage_path:storagePath||key,
+    mime_type:mimeType,
+    storage_provider:"r2",
+  });
+  if(dbErr) throw new Error("Receipt DB save failed: "+dbErr.message);
+
+  return storagePath||key;
 }
 
 // ─── DEFAULT POLICY ───────────────────────────────────────────────────────────
@@ -3407,13 +3392,20 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
       });
       if(claimErr){toast(claimErr.message,"error");return;}
 
-      // Upload receipts to Supabase Storage
+      // Upload receipts to Cloudflare R2 (with visible status)
+      let uploadedCount=0;
       for(const r of(form.receipts||[])){
         if(r.b64){
-          try{await sbUploadReceipt(claimId,cid,r.b64,r.type,r.name);}
-          catch(e){log.warn("Receipt upload failed:",e.message);}
+          try{
+            await sbUploadReceipt(claimId,cid,r.b64,r.type,r.name);
+            uploadedCount++;
+          }catch(e){
+            toast(`⚠ Receipt upload failed: ${e.message}`,"error");
+            log.warn("Receipt upload failed:",e.message);
+          }
         }
       }
+      if(uploadedCount>0) toast(`✓ ${uploadedCount} receipt${uploadedCount>1?"s":""} uploaded to storage`);
 
       // Update trip spent + user balance via Supabase
       if(auto){
