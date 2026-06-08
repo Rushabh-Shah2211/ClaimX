@@ -6768,69 +6768,68 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
   );
 }
 // ─── COMPANY BYOK AI KEY CONFIG ───────────────────────────────────────────────
-function CompanyAiKeyConfig({cid,sbEnabled}){
-  const[existing,setExisting]=useState(null);  // current saved key row
+// ─── COMPANY BYOK AI KEY CONFIG ───────────────────────────────────────────────
+// SECURITY: API key NEVER touches browser storage or DevTools.
+// Browser sends the key ONCE to /api/aikey (serverless, service role).
+// Server validates it, stores it encrypted. Browser only receives a masked string.
+function CompanyAiKeyConfig({cid}){
+  const[status,setStatus]=useState(null);
   const[provider,setProvider]=useState("claude");
   const[apiKey,setApiKey]=useState("");
   const[model,setModel]=useState("");
+  const[aiEnabled,setAiEnabled]=useState(false);
   const[saving,setSaving]=useState(false);
   const[msg,setMsg]=useState("");
   const[loading,setLoading]=useState(true);
   const[showKey,setShowKey]=useState(false);
-  const[removing,setRemoving]=useState(false);
 
   const PROVIDERS=[
-    {id:"claude", label:"Anthropic Claude", icon:"🟠",
-     models:["claude-haiku-4-5-20251001","claude-sonnet-4-20250514","claude-opus-4-20250514"],
-     placeholder:"sk-ant-api03-...",
-     howTo:"console.anthropic.com → API Keys → Create Key"},
-    {id:"openai", label:"OpenAI / ChatGPT", icon:"🟢",
-     models:["gpt-4o-mini","gpt-4o","gpt-4-turbo"],
-     placeholder:"sk-proj-...",
-     howTo:"platform.openai.com → API Keys → Create new secret key"},
-    {id:"gemini", label:"Google Gemini", icon:"🔵",
-     models:["gemini-1.5-flash","gemini-1.5-pro","gemini-2.0-flash"],
-     placeholder:"AIzaSy...",
-     howTo:"aistudio.google.com → Get API Key"},
+    {id:"claude",label:"Anthropic Claude",icon:"🟠",models:["claude-haiku-4-5-20251001","claude-sonnet-4-20250514","claude-opus-4-20250514"],placeholder:"sk-ant-api03-...",howTo:"console.anthropic.com → API Keys"},
+    {id:"openai",label:"OpenAI / ChatGPT",icon:"🟢",models:["gpt-4o-mini","gpt-4o","gpt-4-turbo"],placeholder:"sk-proj-...",howTo:"platform.openai.com → API Keys"},
+    {id:"gemini",label:"Google Gemini",icon:"🔵",models:["gemini-1.5-flash","gemini-1.5-pro","gemini-2.0-flash"],placeholder:"AIzaSy...",howTo:"aistudio.google.com → Get API Key"},
   ];
 
-  useEffect(()=>{
-    if(!sbEnabled||!cid){setLoading(false);return;}
-    supabase.from("company_ai_keys").select("provider,model,is_active,created_at,api_key").eq("company_id",cid).maybeSingle()
-      .then(({data})=>{
-        if(data){
-          setExisting(data);
-          setProvider(data.provider||"claude");
-          setModel(data.model||"");
-          // Show masked key
-          setApiKey("••••••••••••••••••••");
-        }
-        setLoading(false);
-      });
-  },[cid,sbEnabled]);
+  const load=async()=>{
+    if(!cid)return;
+    try{
+      const r=await fetch("/api/aikey",{headers:{"x-company-id":cid}});
+      const d=await r.json();
+      setStatus(d);
+      if(d.hasKey){setProvider(d.provider||"claude");setModel(d.model||"");setAiEnabled(d.aiEnabled||false);}
+    }catch{}
+    setLoading(false);
+  };
+  useEffect(()=>{load();},[cid]);
 
   const save=async()=>{
-    if(!apiKey||apiKey.startsWith("•")){setMsg("Enter a valid API key.");return;}
-    if(apiKey.length<10){setMsg("API key looks too short. Check and try again.");return;}
+    if(!apiKey||apiKey.length<10){setMsg("Enter a valid API key (min 10 chars).");return;}
     setSaving(true);setMsg("");
     try{
-      const selectedModel=model||(PROVIDERS.find(p=>p.id===provider)?.models[0]||"");
-      const row={company_id:cid,provider,api_key:apiKey,model:selectedModel,is_active:true};
-      const{error}=await supabase.from("company_ai_keys").upsert(row,{onConflict:"company_id"});
-      if(error)throw new Error(error.message);
-      setExisting({...row,api_key:"••••"});
-      setApiKey("••••••••••••••••••••");
-      setMsg("✓ API key saved. AI features are now powered by your own key.");
+      const r=await fetch("/api/aikey",{
+        method:"POST",
+        headers:{"Content-Type":"application/json","x-company-id":cid},
+        body:JSON.stringify({provider,apiKey,model:model||(PROVIDERS.find(p=>p.id===provider)?.models[0]||""),aiEnabled}),
+      });
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error||"Save failed");
+      setMsg(d.message||"✓ Key saved");
+      setApiKey(""); // clear from memory immediately after send
+      await load();
     }catch(e){setMsg("Error: "+e.message);}
     setSaving(false);
   };
 
+  const toggle=async(enabled)=>{
+    try{
+      await fetch("/api/aikey",{method:"POST",headers:{"Content-Type":"application/json","x-company-id":cid},body:JSON.stringify({_toggleOnly:true,provider:status?.provider,aiEnabled:enabled})});
+      await load();
+    }catch{}
+  };
+
   const remove=async()=>{
-    if(!window.confirm("Remove your API key? AI OCR will stop working until you add a new key or purchase XpensR tokens."))return;
-    setRemoving(true);
-    await supabase.from("company_ai_keys").delete().eq("company_id",cid);
-    setExisting(null);setApiKey("");setModel("");setMsg("Key removed.");
-    setRemoving(false);
+    if(!window.confirm("Remove API key? AI features will stop."))return;
+    await fetch("/api/aikey",{method:"DELETE",headers:{"x-company-id":cid}});
+    setApiKey("");await load();setMsg("Key removed.");
   };
 
   const inpS={padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,background:"var(--input-bg,#fafff8)",width:"100%",fontFamily:FB};
@@ -6840,70 +6839,179 @@ function CompanyAiKeyConfig({cid,sbEnabled}){
 
   return(
     <div>
-      {/* Status badge */}
-      {existing?.is_active
-        ?<div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:"#f0fde9",border:`1px solid ${GM}`,borderRadius:8,marginBottom:14}}>
-          <span style={{fontSize:16}}>{PROVIDERS.find(p=>p.id===existing.provider)?.icon||"🤖"}</span>
+      {status?.hasKey
+        ?<div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:status.aiEnabled?"#f0fde9":"#fef3c7",border:`1px solid ${status.aiEnabled?GM:"#fcd34d"}`,borderRadius:9,marginBottom:14}}>
+          <span style={{fontSize:20}}>{PROVIDERS.find(p=>p.id===status.provider)?.icon||"🤖"}</span>
           <div style={{flex:1}}>
-            <div style={{fontWeight:700,fontSize:12,color:"#16a34a"}}>✓ Your own API key is active</div>
-            <div style={{fontSize:10,color:MUTED}}>Provider: {PROVIDERS.find(p=>p.id===existing.provider)?.label} · Model: {existing.model||"default"} · XpensR tokens not used</div>
+            <div style={{fontWeight:700,fontSize:12,color:status.aiEnabled?"#16a34a":"#92400e"}}>{status.aiEnabled?"✓ AI active — using your own key":"⏸ Key saved but AI is paused"}</div>
+            <div style={{fontSize:10,color:MUTED}}>{PROVIDERS.find(p=>p.id===status.provider)?.label} · {status.model||"default"} · {status.maskedKey}</div>
           </div>
-          <button onClick={remove} disabled={removing} style={{background:"none",border:"1px solid #fca5a5",borderRadius:6,padding:"3px 10px",color:"#dc2626",fontSize:11,cursor:"pointer"}}>
-            {removing?"Removing…":"Remove"}
-          </button>
+          <button onClick={()=>toggle(!status.aiEnabled)} style={{padding:"4px 11px",borderRadius:6,border:"none",background:status.aiEnabled?"#fef3c7":"#f0fde9",color:status.aiEnabled?"#92400e":"#16a34a",fontWeight:700,fontSize:11,cursor:"pointer"}}>{status.aiEnabled?"Pause":"Enable"}</button>
+          <button onClick={remove} style={{padding:"4px 10px",borderRadius:6,border:"1px solid #fca5a5",background:"none",color:"#dc2626",fontSize:11,cursor:"pointer"}}>Remove</button>
         </div>
-        :<div style={{padding:"8px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,marginBottom:14,fontSize:11,color:"#92400e"}}>
-          ⚠ No API key configured. AI invoice OCR and chat are disabled unless you have an XpensR token pack.
-        </div>
+        :<div style={{padding:"8px 12px",background:"#f8fafc",border:`1px solid ${BDR}`,borderRadius:9,marginBottom:14,fontSize:11,color:MUTED}}>No API key — AI is disabled. Add your key below to enable.</div>
       }
 
-      {/* Provider selector */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
         {PROVIDERS.map(p=>(
-          <button key={p.id} onClick={()=>{setProvider(p.id);setModel(p.models[0]);}} style={{padding:"10px 6px",borderRadius:9,border:`2px solid ${provider===p.id?G:BDR}`,background:provider===p.id?"#f0fde9":"var(--card,#fff)",cursor:"pointer",textAlign:"center",transition:"all .15s"}}>
-            <div style={{fontSize:18,marginBottom:3}}>{p.icon}</div>
+          <button key={p.id} onClick={()=>{setProvider(p.id);setModel(p.models[0]);}} style={{padding:"9px 6px",borderRadius:9,border:`2px solid ${provider===p.id?G:BDR}`,background:provider===p.id?"#f0fde9":"var(--card,#fff)",cursor:"pointer",textAlign:"center"}}>
+            <div style={{fontSize:17,marginBottom:2}}>{p.icon}</div>
             <div style={{fontSize:10,fontWeight:700,color:provider===p.id?GD:INK}}>{p.label}</div>
           </button>
         ))}
       </div>
 
-      {/* Model selector */}
-      <div style={{marginBottom:10}}>
-        <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Model</label>
-        <select value={model||curP.models[0]} onChange={e=>setModel(e.target.value)} style={{...inpS,appearance:"none"}}>
-          {curP.models.map(m=><option key={m} value={m}>{m}</option>)}
-        </select>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        <div>
+          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Model</label>
+          <select value={model||curP.models[0]} onChange={e=>setModel(e.target.value)} style={{...inpS,appearance:"none"}}>
+            {curP.models.map(m=><option key={m} value={m}>{m}</option>)}
+          </select>
+        </div>
+        <div style={{display:"flex",alignItems:"flex-end",paddingBottom:1}}>
+          <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:INK}}>
+            <Toggle on={aiEnabled} onClick={()=>setAiEnabled(p=>!p)} label="Enable AI after saving"/>
+          </label>
+        </div>
       </div>
 
-      {/* API Key input */}
       <div style={{marginBottom:10}}>
         <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>
-          API Key
-          <span style={{fontWeight:400,textTransform:"none",marginLeft:8,color:MUTED}}>— {curP.howTo}</span>
+          API Key <span style={{fontWeight:400,textTransform:"none",fontSize:9}}>— get from: {curP.howTo}</span>
         </label>
         <div style={{position:"relative"}}>
-          <input
-            type={showKey?"text":"password"}
-            value={apiKey}
-            onChange={e=>setApiKey(e.target.value)}
-            onFocus={()=>{if(apiKey.startsWith("•"))setApiKey("");}}
-            placeholder={curP.placeholder}
-            style={inpS}
-            autoComplete="off"
-          />
+          <input type={showKey?"text":"password"} value={apiKey} onChange={e=>setApiKey(e.target.value)}
+            placeholder={status?.hasKey?"Enter new key to replace existing…":curP.placeholder}
+            style={inpS} autoComplete="off" spellCheck={false}/>
           <button onClick={()=>setShowKey(p=>!p)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:MUTED,fontSize:14}}>{showKey?"🙈":"👁"}</button>
         </div>
       </div>
 
       <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:7,padding:"8px 12px",marginBottom:12,fontSize:11,color:"#1d4ed8"}}>
-        🔒 Your API key is stored securely in your private database. XpensR never reads or uses your key — it is sent directly from our server to the AI provider when you scan a receipt or use the chat assistant.
+        🔒 Your key is sent over HTTPS to our secure server and stored encrypted in your private database. It is never visible in browser DevTools, Network tab, or localStorage. XpensR never charges for your AI usage.
       </div>
 
       {msg&&<div style={{fontSize:12,padding:"7px 10px",borderRadius:6,marginBottom:10,background:msg.startsWith("✓")?"#f0fde9":"#fee2e2",color:msg.startsWith("✓")?"#16a34a":"#dc2626"}}>{msg}</div>}
+      <Btn onClick={save} disabled={saving||!apiKey} style={{padding:"9px 22px"}}>{saving?"Validating & Saving…":"Save API Key"}</Btn>
+    </div>
+  );
+}
 
-      <Btn onClick={save} disabled={saving||!apiKey||apiKey.startsWith("•")} style={{padding:"9px 22px"}}>
-        {saving?"Saving…":"Save API Key"}
-      </Btn>
+// ─── COMPANY BYOS STORAGE CONFIG ──────────────────────────────────────────────
+// Receipts upload DIRECTLY from browser to company's own storage bucket.
+// Storage credentials stored server-side only via /api/storage.
+// Company pays their storage provider directly — XpensR never handles files.
+function CompanyStorageConfig({cid}){
+  const[status,setStatus]=useState(null);
+  const[form,setForm]=useState({provider:"r2",bucket:"",endpoint:"",accessKeyId:"",secretAccessKey:"",region:"auto"});
+  const[saving,setSaving]=useState(false);
+  const[msg,setMsg]=useState("");
+  const[loading,setLoading]=useState(true);
+  const[showSecret,setShowSecret]=useState(false);
+
+  const PROVIDERS=[
+    {id:"r2",label:"Cloudflare R2",icon:"🟠",desc:"No egress fees · Cheapest",endpointHelp:"https://ACCOUNT_ID.r2.cloudflarestorage.com"},
+    {id:"b2",label:"Backblaze B2",icon:"🔴",desc:"Very cheap · 10GB free",endpointHelp:"https://s3.REGION.backblazeb2.com"},
+    {id:"s3",label:"AWS S3",icon:"🟡",desc:"Most reliable",endpointHelp:"Leave blank for standard AWS"},
+    {id:"supabase",label:"Your Supabase",icon:"🟢",desc:"Your own Supabase project",endpointHelp:"Your Supabase project URL"},
+  ];
+
+  useEffect(()=>{
+    if(!cid)return;
+    fetch("/api/storage",{headers:{"x-company-id":cid}})
+      .then(r=>r.json()).then(d=>{setStatus(d);setLoading(false);}).catch(()=>setLoading(false));
+  },[cid]);
+
+  const save=async()=>{
+    if(!form.bucket){setMsg("Bucket name is required.");return;}
+    setSaving(true);setMsg("");
+    try{
+      const r=await fetch("/api/storage?action=configure",{
+        method:"POST",
+        headers:{"Content-Type":"application/json","x-company-id":cid},
+        body:JSON.stringify(form),
+      });
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error||"Failed");
+      setMsg(d.message||"✓ Storage configured");
+      setForm(f=>({...f,secretAccessKey:"",accessKeyId:""}));
+      const st=await fetch("/api/storage",{headers:{"x-company-id":cid}}).then(r=>r.json());
+      setStatus(st);
+    }catch(e){setMsg("Error: "+e.message);}
+    setSaving(false);
+  };
+
+  const remove=async()=>{
+    if(!window.confirm("Remove custom storage? New receipts will use XpensR default storage."))return;
+    await fetch("/api/storage",{method:"DELETE",headers:{"x-company-id":cid}});
+    setStatus({hasConfig:false});setMsg("Custom storage removed.");
+  };
+
+  const inpS={padding:"8px 10px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,background:"var(--input-bg,#fafff8)",width:"100%",fontFamily:FB};
+  const curP=PROVIDERS.find(p=>p.id===form.provider)||PROVIDERS[0];
+
+  if(loading)return<div style={{color:MUTED,fontSize:12}}>Loading…</div>;
+
+  return(
+    <div>
+      {status?.hasConfig
+        ?<div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"#f0fde9",border:`1px solid ${GM}`,borderRadius:9,marginBottom:14}}>
+          <span style={{fontSize:18}}>{PROVIDERS.find(p=>p.id===status.provider)?.icon||"📦"}</span>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:700,fontSize:12,color:"#16a34a"}}>✓ Custom storage active</div>
+            <div style={{fontSize:10,color:MUTED}}>{PROVIDERS.find(p=>p.id===status.provider)?.label||status.provider} · Bucket: {status.bucket}</div>
+          </div>
+          <button onClick={remove} style={{padding:"4px 10px",borderRadius:6,border:"1px solid #fca5a5",background:"none",color:"#dc2626",fontSize:11,cursor:"pointer"}}>Remove</button>
+        </div>
+        :<div style={{padding:"8px 12px",background:"#f8fafc",border:`1px solid ${BDR}`,borderRadius:9,marginBottom:14,fontSize:11,color:MUTED}}>Using XpensR default storage. Configure your own below to control costs directly.</div>
+      }
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:12}}>
+        {PROVIDERS.map(p=>(
+          <button key={p.id} onClick={()=>setForm(f=>({...f,provider:p.id,endpoint:"",region:"auto"}))} style={{padding:"8px 10px",borderRadius:9,border:`2px solid ${form.provider===p.id?G:BDR}`,background:form.provider===p.id?"#f0fde9":"var(--card,#fff)",cursor:"pointer",textAlign:"left"}}>
+            <div style={{display:"flex",alignItems:"center",gap:7}}>
+              <span style={{fontSize:16}}>{p.icon}</span>
+              <div><div style={{fontWeight:700,fontSize:11,color:form.provider===p.id?GD:INK}}>{p.label}</div><div style={{fontSize:9,color:MUTED}}>{p.desc}</div></div>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        <div>
+          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Bucket Name *</label>
+          <input value={form.bucket} onChange={e=>setForm(f=>({...f,bucket:e.target.value}))} placeholder="xpensr-receipts" style={inpS}/>
+        </div>
+        <div>
+          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Region</label>
+          <input value={form.region} onChange={e=>setForm(f=>({...f,region:e.target.value}))} placeholder="auto" style={inpS}/>
+        </div>
+        <div style={{gridColumn:"1/-1"}}>
+          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Endpoint <span style={{fontWeight:400,fontSize:9}}>{curP.endpointHelp}</span></label>
+          <input value={form.endpoint} onChange={e=>setForm(f=>({...f,endpoint:e.target.value}))} placeholder={curP.endpointHelp} style={inpS}/>
+        </div>
+        <div>
+          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Access Key ID</label>
+          <input value={form.accessKeyId} onChange={e=>setForm(f=>({...f,accessKeyId:e.target.value}))} autoComplete="off" style={inpS}/>
+        </div>
+        <div>
+          <label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Secret Access Key</label>
+          <div style={{position:"relative"}}>
+            <input type={showSecret?"text":"password"} value={form.secretAccessKey} onChange={e=>setForm(f=>({...f,secretAccessKey:e.target.value}))} autoComplete="new-password" style={inpS}/>
+            <button onClick={()=>setShowSecret(p=>!p)} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:MUTED,fontSize:13}}>{showSecret?"🙈":"👁"}</button>
+          </div>
+        </div>
+      </div>
+
+      <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:7,padding:"8px 12px",marginBottom:12,fontSize:11,color:"#1d4ed8"}}>
+        🔒 Credentials are sent to our secure server and stored encrypted. Receipts upload directly from your employees' browsers to your bucket — XpensR never receives or stores the files. You pay your storage provider directly.
+      </div>
+      <div style={{background:"#f0fde9",border:`1px solid ${GM}`,borderRadius:7,padding:"8px 12px",marginBottom:12,fontSize:11,color:GD}}>
+        💡 Create a private bucket named <code>xpensr-receipts</code>. XpensR generates signed URLs so only authorised users can view receipts.
+      </div>
+
+      {msg&&<div style={{fontSize:12,padding:"7px 10px",borderRadius:6,marginBottom:10,background:msg.startsWith("✓")?"#f0fde9":"#fee2e2",color:msg.startsWith("✓")?"#16a34a":"#dc2626"}}>{msg}</div>}
+      <Btn onClick={save} disabled={saving||!form.bucket} style={{padding:"9px 22px"}}>{saving?"Saving…":"Save Storage Config"}</Btn>
     </div>
   );
 }
@@ -7116,6 +7224,20 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>🤖 AI Configuration — Your Own API Key</div>
           <div style={{fontSize:11,color:MUTED,marginBottom:12}}>Add your own API key from Claude, ChatGPT, or Gemini. Your key is used directly — XpensR does not charge any tokens or see your usage.</div>
           <CompanyAiKeyConfig cid={cid} sbEnabled={sbEnabled}/>
+        </Card>
+
+        {/* ── AI Configuration (BYOK) ── */}
+        <Card style={{padding:18}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>🤖 AI — Bring Your Own API Key</div>
+          <div style={{fontSize:11,color:MUTED,marginBottom:12}}>Connect your own Claude, ChatGPT, or Gemini key. XpensR never charges for AI usage when you use your own key.</div>
+          <CompanyAiKeyConfig cid={cid}/>
+        </Card>
+
+        {/* ── Storage Configuration (BYOS) ── */}
+        <Card style={{padding:18}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>📦 Storage — Bring Your Own Storage</div>
+          <div style={{fontSize:11,color:MUTED,marginBottom:12}}>Connect S3, Cloudflare R2, or Backblaze B2. Receipts go directly to your bucket — you pay your storage provider, not XpensR.</div>
+          <CompanyStorageConfig cid={cid}/>
         </Card>
 
         {/* AI Token Subscription — admin and CFO only */}
