@@ -6790,13 +6790,16 @@ function CompanyAiKeyConfig({cid}){
   ];
 
   const load=async()=>{
-    if(!cid)return;
+    if(!cid){setLoading(false);return;}
     try{
       const r=await fetch("/api/aikey",{headers:{"x-company-id":cid}});
+      if(!r.ok){setStatus({hasKey:false,apiNotDeployed:true});setLoading(false);return;}
       const d=await r.json();
       setStatus(d);
       if(d.hasKey){setProvider(d.provider||"claude");setModel(d.model||"");setAiEnabled(d.aiEnabled||false);}
-    }catch{}
+    }catch{
+      setStatus({hasKey:false,apiNotDeployed:true});
+    }
     setLoading(false);
   };
   useEffect(()=>{load();},[cid]);
@@ -6832,10 +6835,11 @@ function CompanyAiKeyConfig({cid}){
     setApiKey("");await load();setMsg("Key removed.");
   };
 
+  if(loading)return<div style={{color:MUTED,fontSize:12}}>Loading AI config…</div>;
+  if(status?.apiNotDeployed)return<div style={{padding:"10px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,fontSize:11,color:"#92400e"}}>⚠ Awaiting deployment: add <code>api/aikey.js</code> to your project and redeploy to Vercel.</div>;
+
   const inpS={padding:"9px 11px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,background:"var(--input-bg,#fafff8)",width:"100%",fontFamily:FB};
   const curP=PROVIDERS.find(p=>p.id===provider)||PROVIDERS[0];
-
-  if(loading)return<div style={{color:MUTED,fontSize:12}}>Loading…</div>;
 
   return(
     <div>
@@ -6917,9 +6921,11 @@ function CompanyStorageConfig({cid}){
   ];
 
   useEffect(()=>{
-    if(!cid)return;
+    if(!cid){setLoading(false);return;}
     fetch("/api/storage",{headers:{"x-company-id":cid}})
-      .then(r=>r.json()).then(d=>{setStatus(d);setLoading(false);}).catch(()=>setLoading(false));
+      .then(r=>{if(!r.ok)throw new Error("not deployed");return r.json();})
+      .then(d=>{setStatus(d);setLoading(false);})
+      .catch(()=>{setStatus({hasConfig:false,apiNotDeployed:true});setLoading(false);});
   },[cid]);
 
   const save=async()=>{
@@ -6950,7 +6956,8 @@ function CompanyStorageConfig({cid}){
   const inpS={padding:"8px 10px",border:`1.5px solid ${BDR}`,borderRadius:8,fontSize:12,background:"var(--input-bg,#fafff8)",width:"100%",fontFamily:FB};
   const curP=PROVIDERS.find(p=>p.id===form.provider)||PROVIDERS[0];
 
-  if(loading)return<div style={{color:MUTED,fontSize:12}}>Loading…</div>;
+  if(loading)return<div style={{color:MUTED,fontSize:12}}>Loading storage config…</div>;
+  if(status?.apiNotDeployed)return<div style={{padding:"10px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,fontSize:11,color:"#92400e"}}>⚠ Awaiting deployment: add <code>api/storage.js</code> to your project and redeploy to Vercel.</div>;
 
   return(
     <div>
@@ -7218,12 +7225,6 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
             <div><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Send to Email</label><input type="email" value={policy.scheduledReports?.email||""} onChange={e=>setPolicy({...policy,scheduledReports:{...policy.scheduledReports,email:e.target.value}})} placeholder="reports@company.in" style={inpS}/></div>
             <div style={{marginTop:8,padding:"7px 10px",background:GL,borderRadius:7,fontSize:11,color:GD}}>✓ {policy.scheduledReports?.frequency} reports → {policy.scheduledReports?.email||"(set email above)"}</div>
           </div>}
-        </Card>
-        {/* ── AI Configuration (BYOK) ── */}
-        <Card style={{padding:18}}>
-          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>🤖 AI Configuration — Your Own API Key</div>
-          <div style={{fontSize:11,color:MUTED,marginBottom:12}}>Add your own API key from Claude, ChatGPT, or Gemini. Your key is used directly — XpensR does not charge any tokens or see your usage.</div>
-          <CompanyAiKeyConfig cid={cid} sbEnabled={sbEnabled}/>
         </Card>
 
         {/* ── AI Configuration (BYOK) ── */}
