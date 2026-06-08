@@ -612,36 +612,43 @@ async function sbUploadReceipt(claimId,cid,b64,mimeType,fileName){
   const ext=mimeType.includes("pdf")?"pdf":"jpg";
   const key=`${cid}/${claimId}/${Date.now()}.${ext}`;
 
-  // ── Upload to Cloudflare R2 via serverless proxy ──────────────────────────
+  // ── Two-step R2 upload: presign → browser PUTs directly to R2 ─────────────
+  // Avoids Vercel 4.5MB body limit — file goes browser → R2 directly
   try{
-    const r=await fetch("/api/r2upload",{
+    // Step 1: Get presigned PUT URL from server
+    const presignResp=await fetch("/api/r2upload",{
       method:"POST",
       headers:{"Content-Type":"application/json","x-company-id":cid},
-      body:JSON.stringify({key,mimeType,dataBase64:b64}),
+      body:JSON.stringify({action:"presign",key,mimeType}),
     });
-    if(!r.ok){
-      const errData=await r.json().catch(()=>({error:"HTTP "+r.status}));
-      throw new Error(errData.error||"R2 upload failed: "+r.status);
+    if(!presignResp.ok){
+      const e=await presignResp.json().catch(()=>({error:"presign HTTP "+presignResp.status}));
+      throw new Error(e.error||"Presign failed");
     }
-    const{storagePath}=await r.json();
-    // Record in Supabase metadata table (just the path — file is in R2)
+    const{putUrl}=await presignResp.json();
+
+    // Step 2: PUT file directly to R2 (no Vercel in the loop)
+    const r2Resp=await fetch(putUrl,{
+      method:"PUT",
+      headers:{"Content-Type":mimeType},
+      body:blob,
+    });
+    if(!r2Resp.ok)throw new Error("R2 PUT failed: "+r2Resp.status+" "+r2Resp.statusText);
+
+    // Record path in Supabase (metadata only — file lives in R2)
     await supabase.from("receipts").insert({
       claim_id:claimId,company_id:cid,
       file_name:fileName||`receipt.${ext}`,
-      storage_path:storagePath||key,
+      storage_path:key,
       mime_type:mimeType,
       storage_provider:"r2",
     });
-    return storagePath||key;
+    return key;
+
   }catch(r2Err){
-    // Log to console AND show in UI so admin knows R2 is not working
     log.error("R2 upload failed — falling back to Supabase:",r2Err.message);
-    // Show a visible warning in the browser console (production)
-    if(typeof window!=="undefined"){
-      window.__r2LastError=r2Err.message;
-      console.warn("%c⚠ XpensR: Receipt stored in Supabase (R2 unavailable): "+r2Err.message,"color:#f59e0b;font-weight:bold");
-    }
-    // Fallback to Supabase storage if R2 not configured
+    if(typeof window!=="undefined") window.__r2LastError=r2Err.message;
+    // Supabase fallback
     const{error:upErr}=await supabase.storage.from("receipts").upload(key,blob,{contentType:mimeType});
     if(upErr)throw upErr;
     await supabase.from("receipts").insert({
