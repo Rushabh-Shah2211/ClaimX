@@ -13,6 +13,67 @@ function setCORS(req, res) {
   res.setHeader('Vary', 'Origin');
 }
 
+// Generate presigned GET URL for viewing a stored receipt
+async function signedGetUrl(key) {
+  const accountId  = process.env.R2_ACCOUNT_ID      || '';
+  const accessKey  = process.env.R2_ACCESS_KEY_ID   || '';
+  const secretKey  = process.env.R2_SECRET_ACCESS_KEY || '';
+  const bucket     = process.env.R2_BUCKET_NAME      || '';
+
+  if (!accountId || !accessKey || !secretKey || !bucket) {
+    throw new Error('R2 not configured.');
+  }
+
+  const endpoint = `https://${accountId}.r2.cloudflarestorage.com`;
+  const region = 'auto';
+  const service = 's3';
+
+  const now = new Date();
+  const dateStamp = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const amzDate   = now.toISOString().replace(/[:\-]|\.\d{3}/g, '').slice(0, 15) + 'Z';
+  const expiresIn = 3600;
+
+  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+  const credential = `${accessKey}/${credentialScope}`;
+  const host = `${bucket}.${accountId}.r2.cloudflarestorage.com`;
+  const objectUrl = `${endpoint}/${bucket}/${key}`;
+
+  const queryParams = new URLSearchParams({
+    'X-Amz-Algorithm':     'AWS4-HMAC-SHA256',
+    'X-Amz-Credential':    credential,
+    'X-Amz-Date':          amzDate,
+    'X-Amz-Expires':       String(expiresIn),
+    'X-Amz-SignedHeaders': 'host',
+  });
+
+  const encoder = new TextEncoder();
+  const sign = async (keyData, msg) => {
+    const k = await crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    return new Uint8Array(await crypto.subtle.sign('HMAC', k, encoder.encode(msg)));
+  };
+  const toHex = buf => Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
+
+  const canonicalRequest = [
+    'GET',
+    `/${bucket}/${key}`,
+    queryParams.toString(),
+    `host:${host}\n`,
+    'host',
+    'UNSIGNED-PAYLOAD',
+  ].join('\n');
+
+  const hashedRequest = toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(canonicalRequest))));
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, credentialScope, hashedRequest].join('\n');
+
+  const kDate    = await sign(encoder.encode(`AWS4${secretKey}`), dateStamp);
+  const kRegion  = await sign(kDate, region);
+  const kService = await sign(kRegion, service);
+  const kSigning = await sign(kService, 'aws4_request');
+  const signature = toHex(await sign(kSigning, stringToSign));
+
+  return `${objectUrl}?${queryParams}&X-Amz-Signature=${signature}`;
+}
+
 // Generate presigned R2 upload URL using AWS Signature V4
 // Cloudflare R2 is fully S3-compatible
 async function signedPutUrl(key, mimeType) {
@@ -87,8 +148,21 @@ export default async function handler(req, res) {
   setCORS(req, res);
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
 
-  // GET: diagnostic — check if R2 is configured (returns status, never exposes keys)
+  // GET: diagnostic OR signed view URL
   if (req.method === 'GET') {
+    const { action, key } = req.query || {};
+
+    // Generate a presigned GET URL for viewing a stored receipt
+    if (action === 'view' && key) {
+      try {
+        const viewUrl = await signedGetUrl(key);
+        return res.status(200).json({ viewUrl });
+      } catch (err) {
+        return res.status(500).json({ error: err.message });
+      }
+    }
+
+    // Diagnostic — check config status
     const accountId = process.env.R2_ACCOUNT_ID || '';
     const accessKey = process.env.R2_ACCESS_KEY_ID || '';
     const secretKey = process.env.R2_SECRET_ACCESS_KEY || '';

@@ -559,18 +559,14 @@ async function sbLoadCompany(cid){
       if(rc.storage_path){
         try{
           if(rc.storage_provider==="r2"){
-            // R2 public URL via custom domain or direct R2 URL
             const r2Public=import.meta.env.VITE_R2_PUBLIC_URL;
             if(r2Public){
+              // Public domain configured — direct URL, no signing needed
               url=`${r2Public.replace(/\/$/,"")}/${rc.storage_path}`;
             } else {
-              // No public domain — fetch signed URL from serverless
-              const r=await fetch("/api/r2upload?action=view-url",{
-                method:"POST",
-                headers:{"Content-Type":"application/json","x-company-id":rc.company_id||""},
-                body:JSON.stringify({key:rc.storage_path}),
-              });
-              if(r.ok){const d=await r.json();url=d.viewUrl||null;}
+              // No public domain — get presigned view URL from server
+              const vr=await fetch(`/api/r2upload?action=view&key=${encodeURIComponent(rc.storage_path)}`);
+              if(vr.ok){const vd=await vr.json();url=vd.viewUrl||null;}
             }
           } else {
             const{data}=await supabase.storage.from("receipts").createSignedUrl(rc.storage_path, 3600);
@@ -6992,7 +6988,51 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
     </div>
   );
 }
-// ─── COMPANY BYOK AI KEY CONFIG ───────────────────────────────────────────────
+// ─── R2 STORAGE STATUS WIDGET ────────────────────────────────────────────────
+function R2StatusWidget(){
+  const[status,setStatus]=useState(null);
+  const[loading,setLoading]=useState(true);
+  useEffect(()=>{
+    fetch("/api/r2upload")
+      .then(r=>r.json())
+      .then(d=>{setStatus(d);setLoading(false);})
+      .catch(()=>{setStatus({configured:false,missing:["api/r2upload not deployed"]});setLoading(false);});
+  },[]);
+  if(loading)return<div style={{fontSize:12,color:MUTED}}>Checking storage…</div>;
+  return(
+    <div>
+      {status?.configured
+        ?<>
+          <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"#f0fde9",border:`1px solid ${GM}`,borderRadius:9,marginBottom:10}}>
+            <span style={{fontSize:20}}>🟠</span>
+            <div>
+              <div style={{fontWeight:700,fontSize:12,color:"#16a34a"}}>✓ Cloudflare R2 active — all receipts go to your R2 bucket</div>
+              <div style={{fontSize:10,color:MUTED}}>Bucket: <code style={{background:"#f0fde9",padding:"0 3px",borderRadius:3}}>{status.bucket}</code> · Files never stored on XpensR servers</div>
+            </div>
+          </div>
+          {!status.publicUrl&&<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,padding:"10px 12px",fontSize:11,color:"#92400e"}}>
+            <b>⚠ Receipts uploading to R2 but images not yet viewable in app.</b>
+            <ol style={{marginLeft:16,marginTop:5,lineHeight:1.9}}>
+              <li>Go to <b>Cloudflare → R2 → {status.bucket} → Settings → Public Access</b></li>
+              <li>Click <b>Allow Access</b> — Cloudflare gives you a URL like <code>https://pub-xxxx.r2.dev</code></li>
+              <li>In <b>Vercel → Settings → Environment Variables</b> add:<br/><code>VITE_R2_PUBLIC_URL = https://pub-xxxx.r2.dev</code></li>
+              <li><b>Redeploy</b> — receipts will then display correctly</li>
+            </ol>
+          </div>}
+          {status.publicUrl&&<div style={{background:"#f0fde9",border:`1px solid ${GM}`,borderRadius:8,padding:"9px 12px",fontSize:11,color:GD}}>
+            ✓ Public URL set — receipt images will display: <code style={{fontSize:10}}>{status.publicUrl}</code>
+          </div>}
+        </>
+        :<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:9,padding:"10px 14px"}}>
+          <div style={{fontWeight:700,fontSize:12,color:"#92400e",marginBottom:6}}>⚠ R2 not configured — receipts going to Supabase</div>
+          {(status?.missing||[]).map(m=><div key={m} style={{fontFamily:"monospace",fontSize:11,color:"#dc2626",marginBottom:2}}>✗ {m}</div>)}
+          <div style={{fontSize:10,color:MUTED,marginTop:6}}>Add missing vars in Vercel → Settings → Environment Variables, then redeploy.</div>
+        </div>
+      }
+    </div>
+  );
+}
+
 // ─── COMPANY BYOK AI KEY CONFIG ───────────────────────────────────────────────
 // SECURITY: API key NEVER touches browser storage or DevTools.
 // Browser sends the key ONCE to /api/aikey (serverless, service role).
@@ -7332,6 +7372,12 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
             <div><label style={{fontSize:10,fontWeight:700,color:MUTED,display:"block",marginBottom:4,textTransform:"uppercase"}}>Send to Email</label><input type="email" value={policy.scheduledReports?.email||""} onChange={e=>setPolicy({...policy,scheduledReports:{...policy.scheduledReports,email:e.target.value}})} placeholder="reports@company.in" style={inpS}/></div>
             <div style={{marginTop:8,padding:"7px 10px",background:GL,borderRadius:7,fontSize:11,color:GD}}>✓ {policy.scheduledReports?.frequency} reports → {policy.scheduledReports?.email||"(set email above)"}</div>
           </div>}
+        </Card>
+
+        {/* ── Storage Status ── */}
+        <Card style={{padding:18}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:10}}>📦 Receipt Storage</div>
+          <R2StatusWidget/>
         </Card>
 
         {/* ── AI Configuration (BYOK) ── */}
@@ -9996,6 +10042,16 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
     Promise.all(c.receipts.map(async r=>{
       if(r.url||!r.storagePath)return r;
       try{
+        if(r.storageProvider==="r2"){
+          const r2Public=import.meta.env.VITE_R2_PUBLIC_URL;
+          if(r2Public){
+            return{...r,url:`${r2Public.replace(/\/$/,"")}/${r.storagePath}`};
+          } else {
+            const vr=await fetch(`/api/r2upload?action=view&key=${encodeURIComponent(r.storagePath)}`);
+            if(vr.ok){const vd=await vr.json();return{...r,url:vd.viewUrl||null};}
+            return r;
+          }
+        }
         const{data}=await supabase.storage.from("receipts").createSignedUrl(r.storagePath,3600);
         return{...r,url:data?.signedUrl||null};
       }catch{return r;}
