@@ -5304,6 +5304,7 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
 
   const [uploadError,setUploadError]=useState("");
   const removeForm=i=>{if(forms.length===1)return;setForms(p=>p.filter((_,j)=>j!==i));setIdx(Math.max(0,idx-1));};
+  const addForm=()=>{setForms(p=>[...p,blankForm()]);setIdx(forms.length);};
   const submitAll=async()=>{
     const valid=forms.filter(f=>f.category&&f.desc&&f.amount);
     if(!valid.length){alert("No complete forms to submit. Please fill Category, Description, and Amount.");return;}
