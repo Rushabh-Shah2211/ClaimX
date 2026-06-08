@@ -10,8 +10,8 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       VitePWA({
-        registerType: 'autoUpdate',   // SW auto-updates when new version deployed
-        injectRegister: 'auto',
+        registerType: 'autoUpdate',
+        injectRegister: null,
         includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'pwa-192.png', 'pwa-512.png'],
 
         manifest: {
