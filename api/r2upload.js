@@ -94,8 +94,11 @@ async function uploadToR2(key, mimeType, bodyBytes) {
   });
 
   if (!resp.ok) {
-    const txt = await resp.text().catch(() => resp.status);
-    throw new Error(`R2 PUT ${resp.status}: ${txt}`);
+    const txt = await resp.text().catch(() => `status ${resp.status}`);
+    const code = txt.match(/<Code>(.*?)<\/Code>/)?.[1];
+    const msg  = txt.match(/<Message>(.*?)<\/Message>/)?.[1];
+    const detail = code ? `${code}${msg?': '+msg:''}` : txt.slice(0,300);
+    throw new Error(`R2 ${resp.status} — ${detail}`);
   }
 
   return true;
@@ -174,20 +177,30 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'R2 not configured on server.' });
 
   try {
-    // Convert base64 to bytes
-    const binary = atob(dataBase64);
-    const bytes  = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    // Safely decode base64 — atob is available in Node 18+ / Vercel Edge
+    let bytes;
+    try {
+      const binary = Buffer.from(dataBase64, 'base64');
+      bytes = new Uint8Array(binary.buffer, binary.byteOffset, binary.byteLength);
+    } catch (decodeErr) {
+      return res.status(400).json({ error: `Base64 decode failed: ${decodeErr.message}` });
+    }
+
+    if (bytes.length === 0) {
+      return res.status(400).json({ error: 'File is empty — nothing to upload.' });
+    }
+    if (bytes.length > 12_000_000) {
+      return res.status(413).json({ error: `File too large: ${(bytes.length/1024/1024).toFixed(1)}MB. Max 10MB.` });
+    }
 
     await uploadToR2(key, mimeType, bytes);
 
     const { pubUrl } = cfg();
-    const viewUrl = pubUrl
-      ? `${pubUrl.replace(/\/$/,'')}/${key}`
-      : null;
+    const viewUrl = pubUrl ? `${pubUrl.replace(/\/$/,'')}/${key}` : null;
 
     return res.status(200).json({ success: true, storagePath: key, viewUrl });
   } catch (e) {
+    // Return the full error including any R2 XML response
     return res.status(500).json({ error: e.message });
   }
 }
