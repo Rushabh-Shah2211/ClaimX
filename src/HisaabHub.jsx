@@ -4245,7 +4245,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     ...(!canApprove&&!isCFO&&!isHR?[{id:"wallet",icon:"👛",label:"My Wallet"}]:[]),
     {id:"analytics", icon:"📊", label:"Analytics"},
     ...(canApprove?[{id:"ledger",icon:"📒",label:"Trip Ledger"},{id:"balances",icon:"⚖️",label:"Balances & Settlement"}]:[]),
-    ...(canApprove||isFinance||isHR?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
+    ...((isAdmin||isCFO||isHR||isFinance)?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
     ...(isAdmin||isFinance||isManager?[{id:"finance_view",icon:"💼",label:isManager&&!isAdmin&&!isFinance?"Dept Budget":"Finance"}]:[]),
     ...(isHR?[{id:"hr_view",icon:"👔",label:"HR Oversight"},{id:"policy",icon:"⚙️",label:"Policy (view)"}]:[]),
     ...(!isAdmin&&isCFO?[{id:"cfo_view",icon:"📈",label:"Executive View"}]:[]),
@@ -4440,13 +4440,13 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {/* TABS */}
         {tab==="dashboard"&&isManager&&<>
           <TravelCalendar trips={isAdmin?co.trips:visibleTrips} users={co.users} isAdmin={isAdmin} myDept={myUser?.dept} visibleUserIds={visibleUserIds}/>
-          <MgrDash co={co} meta={activeMeta} setTab={setTab} getUser={getUser} isAdmin={isAdmin} myUserId={user.id}/>
+          <MgrDash co={co} meta={activeMeta} setTab={setTabP} getUser={getUser} isAdmin={isAdmin} myUserId={user.id} visibleUserIds={visibleUserIds}/>
         </>}
         {tab==="dashboard"&&isHR&&!isManager&&<HROversightTab claims={co.claims} trips={co.trips} users={co.users} getUser={getUser} policy={co.policy} aretRequests={[]} fmt={fmt}/>}
         {tab==="dashboard"&&user.role==="cfo"&&<CFODashboard claims={co.claims} trips={co.trips} users={co.users} policy={co.policy} topups={co.topups} getUser={getUser} fmt={fmt} activeMeta={activeMeta}/>}
         {tab==="dashboard"&&!isManager&&!isHR&&user.role!=="cfo"&&<EmpDash user={user} myUser={myUser} co={co} setTab={setTab}/>}
         {tab==="claims"&&<ClaimsTab
-          claims={isAdmin?co.claims:isManager?co.claims.filter(c=>{const e=getUser(c.empId);return c.empId===user.id||e?.dept===myUser?.dept;}):isFinance?co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved"):co.claims.filter(c=>c.empId===user.id)}
+          claims={isAdmin?co.claims:co.claims.filter(c=>visibleUserIds.has(c.empId)||c.empId===user.id)}
           trips={co.trips} isManager={isManager} isAdmin={isAdmin} isFinance={isFinance}
           getUser={getUser} setMdl={setMdl} submitEditRequest={submitEditRequest}
           hasEditWindow={hasEditWindow} userId={user.id} onExportPDF={exportClaimsPDF}/>}
@@ -4531,21 +4531,21 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="my_history"&&!isManager&&!isAdmin&&<MyHistoryTab user={user} trips={co.trips} claims={co.claims} getUser={getUser} exportClaimsPDF={exportClaimsPDF}/>}
         {tab==="wallet"&&!isManager&&!isAdmin&&<WalletLedgerTab user={user} myUser={myUser} trips={co.trips} claims={co.claims} topups={co.topups} fmt={fmt} setTab={setTab}/>}
         {tab==="ledger"&&canApprove&&<TripLedgerTab trips={isAdmin?co.trips:visibleTrips} claims={isAdmin?co.claims:visibleClaims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} companyName={activeMeta?.name||""}/>}
-        {tab==="balances"&&canApprove&&<BalancesTab trips={co.trips} claims={co.claims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept)} getUser={getUser} isAdmin={isAdmin} fmt={fmt} cid={cid} sbEnabled={SB_ENABLED} onReload={loadFromSB}/>}
+        {tab==="balances"&&canApprove&&<BalancesTab trips={isAdmin?co.trips:visibleTrips} claims={isAdmin?co.claims:visibleClaims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))} getUser={getUser} isAdmin={isAdmin} fmt={fmt} cid={cid} sbEnabled={SB_ENABLED} onReload={loadFromSB}/>}
         {/* ── HR Role View ── */}
         {tab==="hr_view"&&(isHR||isAdmin)&&<HROversightTab claims={co.claims} trips={co.trips} users={co.users} getUser={getUser} policy={co.policy} aretRequests={[]} fmt={fmt}/>}
         {/* ── CFO/CEO Executive View ── */}
         {(tab==="cfo_view")&&isCFO&&<CFODashboard claims={co.claims} trips={co.trips} users={co.users} policy={co.policy} topups={co.topups} getUser={getUser} fmt={fmt} activeMeta={activeMeta}/>}
         {/* HR can view Policy in read-only mode */}
         {tab==="policy"&&isHR&&<PolicyReadOnly policy={co.policy} users={co.users}/>}
-        {tab==="finance_view"&&(isAdmin||isFinance||isManager)&&<FinanceTab claims={co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved")} trips={co.trips} getUser={getUser} users={co.users} isAdmin={isAdmin} isManager={isManager} policy={co.policy} onExportPDF={exportClaimsPDF}
+        {tab==="finance_view"&&(isAdmin||isFinance||isManager)&&<FinanceTab claims={(isAdmin||isFinance)?co.claims.filter(c=>c.status==="Approved"||c.status==="Manager Approved"):co.claims.filter(c=>(c.status==="Approved"||c.status==="Manager Approved")&&(visibleUserIds.has(c.empId)||c.empId===user.id))} trips={isAdmin||isFinance?co.trips:visibleTrips} getUser={getUser} users={isAdmin||isFinance?co.users:co.users.filter(u=>visibleUserIds.has(u.id))} isAdmin={isAdmin} isManager={isManager} policy={co.policy} onExportPDF={exportClaimsPDF}
           onBudgetEnhancement={submitBudgetEnhancement}
           onApproveBudgetEnhancement={approveBudgetEnhancement}
           myDept={myUser?.dept}
           myUser={myUser}/>}
         {tab==="trip_approvals"&&canApprove&&<TripApprovalsTab trips={co.trips} getUser={getUser} approveTrip={approveTrip} rejectTrip={rejectTrip} isAdmin={isAdmin}/>}
         {tab==="editreqs"&&canApprove&&<EditRequestsTab editRequests={editRequests} claims={co.claims} getUser={getUser} isManager={canApprove} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} submitEditRequest={submitEditRequest} hasEditWindow={hasEditWindow} userId={user.id} reload={loadEditRequests}/>}
-        {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={isAdmin?co.users:co.users.filter(u=>u.dept===myUser?.dept||u.id===user.id)} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin} currentUser={myUser}
+        {tab==="employees"&&(isAdmin||isManager)&&<Employees companyMeta={activeMeta} users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id)||u.id===user.id)} setUsers={fn=>{if(!SB_ENABLED)setUsers(fn);}} claims={co.claims} policy={co.policy} toast={toast} addUserToSB={addUserToSB} updateUserInSB={updateUserInSB} sbEnabled={SB_ENABLED} companyDepts={companyDepts} isAdmin={isAdmin} currentUser={myUser}
           empGroups={co.empGroups||[]}
           sbSaveGroup={async(g)=>{
             if(SB_ENABLED){
@@ -4624,7 +4624,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
               {id:"inbox",icon:"🔔",label:"Inbox",badge:myNotifs.length},
               ...(isAdmin?[{id:"employees",icon:"👥",label:"Employees"}]:[]),
               ...(isAdmin?[{id:"policy",icon:"⚙️",label:"Policy & Settings"}]:[]),
-              ...(canApprove?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
+              ...((isAdmin||isCFO||isHR||isFinance)?[{id:"audit",icon:"🗒️",label:"Audit Log"}]:[]),
               {id:"help",icon:"❓",label:"Help & Tutorial"},
               {id:"_profile",icon:"👤",label:"My Profile"},
             ].map(item=>(
@@ -4828,23 +4828,23 @@ function WalletLedgerTab({user,myUser,trips,claims,topups,fmt,setTab}){
 }
 
 // ─── MANAGER DASHBOARD ────────────────────────────────────────────────────────
-function MgrDash({co,meta,setTab,getUser,myUserId}){
+function MgrDash({co,meta,setTab,getUser,myUserId,isAdmin:isAdminProp,visibleUserIds:visIds}){
   const myUser=co.users.find(u=>u.id===myUserId);
   const myDept=myUser?.dept;
-  const isAdmin=myUser?.role==="admin";
-  // Filter employees by dept for manager, show all for admin
-  const emps=co.users.filter(u=>u.role==="employee"&&(isAdmin||u.dept===myDept));
+  const isAdmin=isAdminProp||myUser?.role==="admin";
+  // Use visibleUserIds — access controlled, not dept-based
+  const visibleSet=isAdmin?new Set(co.users.map(u=>u.id)):(visIds||new Set([myUserId]));
+  const emps=co.users.filter(u=>u.role==="employee"&&(isAdmin||visibleSet.has(u.id)));
   const deptClaims=co.claims.filter(c=>{
     if(isAdmin)return true;
-    const emp=getUser(c.empId);
-    return emp?.dept===myDept;
+    return visibleSet.has(c.empId)||c.empId===myUserId;
   });
   const total=deptClaims.filter(c=>c.status!=="Rejected").reduce((s,c)=>s+c.amount,0);
   const pending=deptClaims.filter(c=>c.status==="Pending").length;
   const anomalies=deptClaims.filter(c=>c.anomaly&&c.status==="Pending").length;
   const activeTrips=co.trips.filter(t=>{
     if(isAdmin)return t.status==="active";
-    return t.status==="active"&&(t.assignedTo||[]).some(id=>getUser(id)?.dept===myDept||id===myUserId);
+    return t.status==="active"&&(t.assignedTo||[]).some(id=>visibleSet.has(id)||id===myUserId);
   });
   const activeTrip=activeTrips[0];
   return(
