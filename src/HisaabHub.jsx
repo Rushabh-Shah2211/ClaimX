@@ -1,6 +1,7 @@
 import React,{ useState, useRef, useEffect, useCallback, useMemo, Component, createContext, useContext } from "react";
 import { jsPDF } from "jspdf";
 import { createClient } from "@supabase/supabase-js";
+import { getCityRates, buildCityTiersForPolicy, TIER_DEFAULTS, getAllCities } from "./cityRates.js";
 import "./security.js"; // Security hardening — devtools blocking, session protection
 
 // ─── SUPABASE CLIENT ──────────────────────────────────────────────────────────
@@ -257,7 +258,7 @@ const mapPolicy=r=>r?({autoApproveLimit:parseFloat(r.auto_approve_limit)||5000,r
   teamBudgets:r.team_budgets||{},                   // {groupId:{monthly:N,yearly:N}}
   autoApproveMins:parseInt(r.auto_approve_mins)||10,
   conveyanceRatePerKm:parseFloat(r.conveyance_rate_per_km)||4,
-  gradeTransportModes:r.grade_transport_modes||{},
+  gradeTransportModes:r.grade_transport_modes||(()=>{try{const x=localStorage.getItem(`xpensr_policy_ext_${r.company_id}`);return x?JSON.parse(x).gradeTransportModes||{}:{};}catch{return{};}})()||{},
 }):null;
 const mapNotif=r=>r?({id:r.id,userId:r.user_id,text:r.text,type:r.type,read:r.read,time:new Date(r.created_at).toLocaleString()}):null;
 const mapAudit=r=>r?({id:r.id,action:r.action,claimId:r.claim_id,by:r.by_user_id,byName:r.by_name,at:new Date(r.created_at).toLocaleString(),remarks:r.remarks}):null;
@@ -3442,10 +3443,15 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         auto_approved:auto,remarks:"",flagged:catEx,
         anomaly:isAnomaly,anomaly_reasons:reasons,weekend_flag:weekend,notes:form.notes||"",
         leg_id:form.legId||null,city:form.city||"",city_tier:form.cityTier||"D",
-        manager_remarks:routingRemark||null,
-        entitlement_cap:entitlementCap||null,
       });
       if(claimErr){toast(claimErr.message,"error");return;}
+      // Patch optional columns separately — if they don't exist in schema yet, submission still goes through
+      if(SB_ENABLED&&(entitlementCap||routingRemark)){
+        supabase.from("claims").update({
+          ...(entitlementCap?{entitlement_cap:entitlementCap}:{}),
+          ...(routingRemark?{manager_remarks:routingRemark}:{}),
+        }).eq("id",claimId).then(()=>{}).catch(()=>{}); // silent — column may not exist yet
+      }
 
       // Auto-create top-up request if trip budget exceeded
       if(tripBudgetExceeded&&selectedTrip){
@@ -3864,29 +3870,23 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
       let{error}=await supabase.from("policy").upsert(fullRow);
 
-      // If a column doesn't exist yet (migration not run), fall back to base columns only
+      // If a column doesn't exist yet (migration not run), strip new columns and retry
       if(error&&(error.message?.includes("column")||error.message?.includes("schema cache"))){
-        log.warn("Policy full upsert failed, trying base columns only:",error.message);
-        const baseRow={
-          company_id:cid,
-          auto_approve_limit:newPolicy.autoApproveLimit,
-          reimbursement_mode:newPolicy.reimbursementMode,
-          receipt_mandatory_above:newPolicy.receiptMandatoryAbove,
-          weekend_requires_approval:newPolicy.weekendRequiresApproval,
-          multi_level_approval:newPolicy.multiLevelApproval,
-          approval_levels:newPolicy.approvalLevels,
-          vendor_whitelist:newPolicy.vendorWhitelist,
-          vendor_blacklist:newPolicy.vendorBlacklist,
-          department_budgets:newPolicy.departmentBudgets,
-          category_pct:newPolicy.categoryPct,
-          scheduled_reports:newPolicy.scheduledReports,
-          dual_approve_above:newPolicy.dualApproveAbove||0,
-          categories:newPolicy.categories,
-          departments:newPolicy.departments,
-        };
-        const{error:e2}=await supabase.from("policy").upsert(baseRow);
-        if(e2)throw new Error("Policy save failed: "+e2.message+"\n\n⚠ Contact your administrator to update settings.");
-        toast("⚠ Some settings require a system update. Contact support.","warn");
+        log.warn("Policy full upsert failed, stripping new columns:",error.message);
+        // Try without the newest columns (grade_transport_modes, conveyance_rate_per_km)
+        const{grade_transport_modes,conveyance_rate_per_km,...row2}=fullRow;
+        const{error:e2}=await supabase.from("policy").upsert(row2);
+        if(e2){
+          // Final fallback — only guaranteed base columns
+          const{grade_based,city_classification,escalation_hrs,approval_hierarchy,
+                grade_entitlements,city_tiers,trip_purposes,notice_period_domestic,
+                notice_period_overseas,monthly_dept_budgets,team_budgets,auto_approve_mins,...baseRow}=row2;
+          const{error:e3}=await supabase.from("policy").upsert(baseRow);
+          if(e3)throw new Error("Policy save failed: "+e3.message);
+        }
+        // Save new-column data to localStorage as fallback until migration runs
+        try{localStorage.setItem(`xpensr_policy_ext_${cid}`,JSON.stringify({gradeTransportModes:newPolicy.gradeTransportModes}));}catch{}
+        toast("⚠ Transport mode settings saved locally — run fix_policy_columns.sql in Supabase to persist permanently","warn");
       } else if(error){
         throw new Error("Policy save failed: "+error.message);
       }
@@ -4333,6 +4333,22 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
                       {icon:"📒",label:"Tally XML",fn:exportTally},
                       {icon:"📘",label:"GSTR-2A",fn:exportGSTR},
                       {icon:"🔵",label:"Zoho Books",fn:exportZoho},
+                      {icon:"🔷",label:"SAP IDoc",fn:async()=>{
+                        const appClaims=co.claims.filter(c=>c.status==="Approved"||c.status==="Auto-Approved");
+                        if(!appClaims.length){toast("No approved claims to export","error");return;}
+                        try{
+                          const r=await fetch("/api/sap?action=export",{
+                            method:"POST",
+                            headers:{"Content-Type":"application/json","x-company-id":cid},
+                            body:JSON.stringify({claims:appClaims,employees:co.users,trips:co.trips,exportFormat:"idoc"}),
+                          });
+                          if(!r.ok){const e=await r.json();toast("SAP export failed: "+e.error,"error");return;}
+                          const blob=await r.blob();
+                          const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+                          a.download=`XPENSR_SAP_${today()}.IDoc`;a.click();
+                          toast(`✓ SAP IDoc exported — ${appClaims.length} claims`);
+                        }catch(e){toast("SAP export failed: "+e.message,"error");}
+                      }},
                     ].map(({icon,label,fn})=>(
                       <button key={label} onClick={()=>{fn();setShowExportMenu(false);}} style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"10px 14px",background:"none",border:"none",borderBottom:`1px solid ${BDR}`,cursor:"pointer",fontFamily:FB,fontSize:12,color:INK,textAlign:"left",transition:"background .1s"}}
                         onMouseEnter={e=>e.currentTarget.style.background="var(--hover-bg,#f0fde9)"}
@@ -4929,7 +4945,26 @@ function TripLegsModal({trip,policy,onClose,onSave}){
   const getCityTierLocal=(city)=>{
     if(!city) return "D";
     const found=cityTiers.find(ct=>ct.city.toLowerCase()===city.toLowerCase());
-    return found?.tier||"D";
+    if(found) return found.tier;
+    // Fall back to built-in city rates
+    const rates=getCityRates(city);
+    return rates.tier||"D";
+  };
+
+  // Auto-populate hotel/diem from city rates when city is selected
+  const getEntitlementsForCity=(city,empGrade)=>{
+    // First check policy city tiers
+    const policyCity=cityTiers.find(ct=>ct.city.toLowerCase()===(city||"").toLowerCase());
+    const tier=policyCity?.tier||getCityRates(city).tier||"D";
+    // Get entitlement from grade hierarchy
+    if(policy?.gradeBased&&policy?.gradeEntitlements?.length){
+      const ent=policy.gradeEntitlements.find(e=>e.grade===empGrade&&e.tier===tier)||
+                policy.gradeEntitlements.find(e=>e.grade===empGrade);
+      if(ent) return{hotelLimit:ent.hotelLimit||0,diemRate:ent.diemRate||0,tier};
+    }
+    // Fall back to built-in rates
+    const builtIn=getCityRates(city);
+    return{hotelLimit:builtIn.hotel||TIER_DEFAULTS[tier]?.hotel||0,diemRate:builtIn.diem||TIER_DEFAULTS[tier]?.diem||0,tier};
   };
 
   const updateLeg=(idx,patch)=>{
@@ -4939,6 +4974,17 @@ function TripLegsModal({trip,policy,onClose,onSave}){
       if(leg.departAt&&leg.arriveAt){
         const diff=Math.ceil((new Date(leg.arriveAt)-new Date(leg.departAt))/(1000*60*60*24));
         leg.days=Math.max(1,diff||1);
+      }
+      // Auto-fill city tier and entitlements when toCity is set
+      if(patch.toCity!==undefined||patch._toCityOther!==undefined){
+        const city=leg.toCity||leg._toCityOther||"";
+        if(city){
+          leg.cityTier=getCityTierLocal(city);
+          // Only fill if not already customised
+          const ent=getEntitlementsForCity(city,policy?.userGrade||1);
+          if(!leg.hotelLimit)leg.hotelLimit=ent.hotelLimit;
+          if(!leg.diemRate)leg.diemRate=ent.diemRate;
+        }
       }
       if(patch.toCity!==undefined) leg.cityTier=getCityTierLocal(leg.toCity);
       updated[idx]=leg;
@@ -5386,54 +5432,46 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
 
   // doOCR — receives an explicit `snapshot` of forms so it never closes over stale state
   const doOCR=useCallback(async(i,b64,mime,snapshot)=>{
-    if(!AI_ENABLED){
-      upd(i,{ocrState:"disabled",scanning:false});
-      return; // AI disabled — fill form manually
-    }
     upd(i,{ocrState:"scanning",scanning:true,ocrData:null});
     try{
-      const isImg=mime.startsWith("image/");
-      const res=await fetch("/api/anthropic/v1/messages",{
+      // Get BYOK key if set
+      let byokKey="";
+      try{
+        const kResp=await fetch("/api/aikey",{headers:{"x-company-id":cid||""}});
+        if(kResp.ok){const kd=await kResp.json();if(kd.keySet)byokKey="__byok__";}
+      }catch{}
+
+      const res=await fetch("/api/ocr",{
         method:"POST",
-        headers:{"Content-Type":"application/json","anthropic-version":"2023-06-01","x-company-id":cid||""},
-        body:JSON.stringify({
-          model:"claude-haiku-4-5-20251001",
-          max_tokens:900,
-          _feature:"ocr",
-          system:`You are an invoice OCR assistant for an Indian business expense app. Analyse the receipt/invoice — including handwritten ones. Return ONLY a single valid JSON object, no markdown, no extra text. Keys: vendor(string), date(YYYY-MM-DD or ""), amount(number in detected currency), currency(ISO code), origAmount(number), description(5-8 words), category(one of: Travel|Meals|Accommodation|Office Supplies|Client Entertainment|Software|Training|Miscellaneous), invoice_number(string or ""), gst_number(string or ""), line_items(string[]), confidence("high"|"medium"|"low")`,
-          messages:[{role:"user",content:isImg
-            ?[{type:"image",source:{type:"base64",media_type:mime,data:b64}},{type:"text",text:"Extract expense data. ONLY JSON."}]
-            :[{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},{type:"text",text:"Extract expense data. ONLY JSON."}]
-          }]
-        })
+        headers:{"Content-Type":"application/json","x-company-id":cid||""},
+        body:JSON.stringify({dataBase64:b64,mimeType:mime,byokKey:byokKey||undefined}),
       });
+
       if(!res.ok){
-        let errMsg=`HTTP ${res.status}`;
-        try{
-          const errData=await res.json();
-          // Handle token-specific errors with friendly message
-          if(errData?.error?.code==="TOKENS_EXHAUSTED"||errData?.error?.code==="NO_AI_SUBSCRIPTION"){
-            upd(i,{ocrState:"no_tokens",scanning:false});
-            toast(errData.error.message||"AI tokens exhausted. Please purchase more.","warn");
-            return;
-          }
-          errMsg=errData?.error?.message||errMsg;
-        }catch{}
-        throw new Error(errMsg);
+        const errData=await res.json().catch(()=>({error:"HTTP "+res.status}));
+        if(errData?.error?.includes("No OCR service")||errData?.error?.includes("No AI key")){
+          upd(i,{ocrState:"no_tokens",scanning:false});
+          toast("OCR not configured — fill fields manually or add an AI key in Policy","warn");
+          return;
+        }
+        throw new Error(errData.error||"OCR failed: "+res.status);
       }
-      const data=await res.json();
-      // Update token balance in real-time if server returns it
-      if(data?._tokenBalance!=null) setAiTokenBalance(data._tokenBalance);
-      if(data.error)throw new Error(data.error.message||"API error");
-      const raw=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
-      if(!raw)throw new Error("Empty response");
-      const clean=raw.replace(/^```(?:json)?\s*/m,"").replace(/\s*```$/m,"").trim();
-      const s=clean.indexOf("{"), e=clean.lastIndexOf("}");
-      if(s<0||e<0)throw new Error("No JSON in response");
-      const p=JSON.parse(clean.slice(s,e+1));
-      const rate=FX[p.currency]||1;
+
+      const{data:p}=await res.json();
+      const FX_RATES=FX||{};
+      const rate=FX_RATES[p.currency]||1;
       const inr=p.currency&&p.currency!=="INR"?Math.round((p.origAmount||p.amount||0)*rate):(p.amount||0);
       const cur=snapshot?snapshot[i]:null;
+
+      // Build notes from rich OCR fields
+      const notesParts=[
+        p.invoice_number?"Invoice #"+p.invoice_number:"",
+        p.gst_number?"GSTIN: "+p.gst_number:"",
+        p.hsn_code?"HSN: "+p.hsn_code:"",
+        p.place_of_supply?"Supply: "+p.place_of_supply:"",
+        p.line_items?.length?"Items: "+p.line_items.slice(0,4).join(" | "):"",
+      ].filter(Boolean).join(" · ");
+
       upd(i,{
         ocrState:"done",scanning:false,ocrData:p,
         date:       p.date||(cur?.date||today()),
@@ -5443,13 +5481,24 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
         desc:       [p.vendor,p.description].filter(Boolean).join(" — ")||(cur?.desc||""),
         vendor:     p.vendor||(cur?.vendor||""),
         category:   cats.includes(p.category)?p.category:(cur?.category||""),
-        notes:      [p.invoice_number?"Invoice: "+p.invoice_number:"",p.gst_number?"GSTIN: "+p.gst_number:"",p.line_items?.length?"Items: "+p.line_items.slice(0,3).join(", "):""].filter(Boolean).join(" | ")||(cur?.notes||""),
+        gstAmount:  p.gst_amount?String(p.gst_amount):(cur?.gstAmount||""),
+        notes:      notesParts||(cur?.notes||""),
+        _ocrPipeline:p._pipeline||"unknown",
+        _ocrConfidence:p.confidence||"medium",
       });
+
+      // Show confidence indicator
+      const conf=p.confidence||"medium";
+      if(conf==="high") toast(`✓ Invoice scanned (${p._pipeline==="vision+claude"?"Vision+AI":"AI"} · high confidence)`);
+      else if(conf==="medium") toast(`⚠ Scanned with medium confidence — please verify fields`,"warn");
+      else toast(`⚠ Low confidence OCR — please check all fields carefully`,"warn");
+
     }catch(err){
       log.error("OCR:",err.message);
       upd(i,{ocrState:"error",scanning:false});
+      toast("OCR failed: "+err.message,"error");
     }
-  },[upd]);
+  },[upd,cid]);
 
   // ── useEffect calls — safe because upd/doOCR are defined above ────────────
 
@@ -5552,7 +5601,11 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
           {fm.ocrState==="disabled"&&<span style={{background:"#f3f4f6",color:MUTED,padding:"2px 8px",borderRadius:8,fontSize:10,fontWeight:600}}>AI scanning off</span>}
           {fm.ocrState==="no_tokens"&&<span style={{background:"#fef3c7",color:"#92400e",padding:"2px 8px",borderRadius:8,fontSize:10,fontWeight:600}}>⛔ No tokens</span>}
           {AI_ENABLED&&aiTokenBalance!=null&&aiTokenBalance>0&&fm.ocrState!=="done"&&<span style={{background:aiTokenBalance<5000?"#fef3c7":"#f0fde9",color:aiTokenBalance<5000?"#92400e":"#16a34a",padding:"2px 8px",borderRadius:8,fontSize:10,fontWeight:600}}>⚡ {(aiTokenBalance/1000).toFixed(0)}K tokens</span>}
-          {fm.ocrState==="done"&&fm.ocrData&&<span style={{background:CONF[fm.ocrData.confidence]+"20",color:CONF[fm.ocrData.confidence],padding:"2px 8px",borderRadius:8,fontSize:10,fontWeight:700}}>{fm.ocrData.confidence==="high"?"✓ High":"~ Med"}</span>}
+          {fm.ocrState==="done"&&fm.ocrData&&<span style={{background:CONF[fm.ocrData.confidence]+"20",color:CONF[fm.ocrData.confidence],padding:"2px 8px",borderRadius:8,fontSize:10,fontWeight:700}}>
+            {fm.ocrData.confidence==="high"?"✓ High confidence":fm.ocrData.confidence==="medium"?"~ Medium — verify":"⚠ Low — check carefully"}
+            {fm._ocrPipeline==="vision+claude"&&<span style={{marginLeft:5,background:"#eff6ff",color:"#2563eb",padding:"1px 5px",borderRadius:4,fontSize:9}}>Vision+AI</span>}
+            {fm._ocrPipeline==="claude_direct"&&<span style={{marginLeft:5,background:"#f3f4f6",color:MUTED,padding:"1px 5px",borderRadius:4,fontSize:9}}>AI only</span>}
+          </span>}
           {fm.ocrState==="error"&&<span style={{background:"#fee2e2",color:"#dc2626",padding:"2px 8px",borderRadius:8,fontSize:10,fontWeight:700}}>⚠ Failed — fill manually</span>}
           {fm.ocrState==="scanning"&&<span style={{color:GD,fontSize:11,display:"flex",alignItems:"center",gap:5}}><span style={{width:12,height:12,border:`2px solid ${GM}`,borderTopColor:G,borderRadius:"50%",animation:"spin .7s linear infinite",display:"inline-block"}}/> Scanning…</span>}
         </div>
@@ -5591,8 +5644,8 @@ function SubmitTab({user,co,submitClaim,camFile,clearCamFile,onCam,companyCatego
           <div style={{marginTop:9,background:GL,borderRadius:8,padding:"10px 12px"}}>
             <div style={{fontSize:9,fontWeight:700,color:GD,marginBottom:6,textTransform:"uppercase",letterSpacing:.5}}>✓ Extracted — fields auto-filled below</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4}}>
-              {[["Vendor",fm.ocrData.vendor],["Amount",fm.ocrData.amount?fmt(fm.ocrData.amount):"—"],["Date",fm.ocrData.date||"—"],["Category",fm.ocrData.category||"—"],["Invoice #",fm.ocrData.invoice_number||"—"],["GSTIN",fm.ocrData.gst_number||"—"],[fm.ocrData.currency&&fm.ocrData.currency!=="INR"?"FX Rate":null,fm.ocrData.currency&&fm.ocrData.currency!=="INR"?`1 ${fm.ocrData.currency} = ₹${FX[fm.ocrData.currency]||"?"}`:null]].filter(x=>x&&x[0]).map(([k,v])=>(
-                <div key={k} style={{display:"flex",gap:3,fontSize:10}}><span style={{color:MUTED,minWidth:55}}>{k}:</span><span style={{fontWeight:600,color:INK}}>{v}</span></div>
+              {[["Vendor",fm.ocrData.vendor],["Amount",fm.ocrData.amount?fmt(fm.ocrData.amount):"—"],["Date",fm.ocrData.date||"—"],["Category",fm.ocrData.category||"—"],["Invoice #",fm.ocrData.invoice_number||"—"],["GSTIN",fm.ocrData.gst_number||"—"],["HSN/SAC",fm.ocrData.hsn_code||"—"],["GST Amount",fm.ocrData.gst_amount>0?fmt(fm.ocrData.gst_amount):"—"],["Place of Supply",fm.ocrData.place_of_supply||"—"],[fm.ocrData.currency&&fm.ocrData.currency!=="INR"?"FX Rate":null,fm.ocrData.currency&&fm.ocrData.currency!=="INR"?`1 ${fm.ocrData.currency} = ₹${FX[fm.ocrData.currency]||"?"}`:null]].filter(x=>x&&x[0]&&x[1]&&x[1]!=="—").map(([k,v])=>(
+                <div key={k} style={{display:"flex",gap:3,fontSize:10}}><span style={{color:MUTED,minWidth:65}}>{k}:</span><span style={{fontWeight:600,color:INK}}>{v}</span></div>
               ))}
             </div>
           </div>
@@ -7258,6 +7311,71 @@ function Employees({companyMeta,users,setUsers,claims,policy,toast,addUserToSB,u
   );
 }
 // ─── R2 STORAGE STATUS WIDGET ────────────────────────────────────────────────
+// ─── SAP CONFIG WIDGET ────────────────────────────────────────────────────────
+function SAPConfigWidget({cid}){
+  const[status,setStatus]=useState(null);
+  const[loading,setLoading]=useState(true);
+  const[testing,setTesting]=useState(false);
+
+  useEffect(()=>{
+    fetch("/api/sap?action=config",{headers:{"x-company-id":cid}})
+      .then(r=>r.json())
+      .then(d=>{setStatus(d);setLoading(false);})
+      .catch(()=>{setStatus({configured:false});setLoading(false);});
+  },[cid]);
+
+  const testConnection=async()=>{
+    setTesting(true);
+    try{
+      const r=await fetch("/api/sap?action=test",{method:"POST",headers:{"Content-Type":"application/json","x-company-id":cid},body:"{}"});
+      const d=await r.json();
+      if(d.success) alert("✓ SAP connection successful!");
+      else alert("✗ Connection failed: "+d.error);
+    }catch(e){alert("✗ "+e.message);}
+    setTesting(false);
+  };
+
+  if(loading)return<div style={{fontSize:12,color:MUTED}}>Checking SAP config…</div>;
+
+  return(
+    <div>
+      {status?.configured
+        ?<>
+          <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"#f0fde9",border:"1px solid #86efac",borderRadius:9,marginBottom:10}}>
+            <span style={{fontSize:18}}>🔷</span>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:700,fontSize:12,color:"#16a34a"}}>✓ SAP credentials configured</div>
+              <div style={{fontSize:10,color:MUTED}}>Host: {status.baseUrl} · Company Code: {status.companyCode} · User: {status.username}</div>
+            </div>
+            <button onClick={testConnection} disabled={testing} style={{padding:"5px 11px",borderRadius:7,border:"1px solid #86efac",background:"#fff",cursor:"pointer",fontSize:11,fontWeight:600,color:"#16a34a"}}>
+              {testing?"Testing…":"Test Connection"}
+            </button>
+          </div>
+          <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"10px 12px",fontSize:11,color:"#1d4ed8"}}>
+            <b>How to export to SAP:</b>
+            <ol style={{marginLeft:16,marginTop:4,lineHeight:1.8}}>
+              <li>Go to <b>Finance tab → Export → SAP IDoc</b></li>
+              <li>Download the IDoc file (<code>.IDoc</code>)</li>
+              <li>In SAP: use <b>WE19</b> (IDoc test tool) or <b>SM58</b> to import</li>
+              <li>Or configure <b>Direct API posting</b> via the export button</li>
+            </ol>
+          </div>
+        </>
+        :<div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:9,padding:"12px 14px"}}>
+          <div style={{fontWeight:700,fontSize:12,color:"#92400e",marginBottom:8}}>SAP not configured — add these to Vercel Environment Variables:</div>
+          {[["SAP_BASE_URL","Your SAP S/4HANA URL e.g. https://myXXXXXX.s4hana.ondemand.com"],["SAP_USERNAME","SAP service user login"],["SAP_PASSWORD","SAP service user password"],["SAP_CLIENT","SAP client number (default: 100)"],["SAP_COMPANY_CODE","Company code e.g. 1000"],["SAP_DEFAULT_COST_CENTER","Default cost center (optional)"],["SAP_EMPLOYEE_EXPENSE_GL","GL account for employee payables (optional)"]].map(([k,hint])=>(
+            <div key={k} style={{marginBottom:5}}>
+              <code style={{fontFamily:"monospace",fontSize:11,color:"#dc2626",fontWeight:700}}>{k}</code>
+              <span style={{fontSize:10,color:MUTED,marginLeft:6}}>{hint}</span>
+            </div>
+          ))}
+          <div style={{marginTop:8,fontSize:11,color:"#92400e"}}>After adding variables, redeploy Vercel and use <b>Finance → Export → SAP IDoc</b> (works without SAP credentials as well — upload the file manually in SAP).</div>
+        </div>
+      }
+    </div>
+  );
+}
+
 function R2StatusWidget(){
   const[status,setStatus]=useState(null);
   const[loading,setLoading]=useState(true);
@@ -7644,6 +7762,13 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
         </Card>
 
         {/* ── Storage Status ── */}
+        {/* ── SAP Integration ── */}
+        <Card style={{padding:18}}>
+          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>🔷 SAP S/4HANA Integration</div>
+          <div style={{fontSize:11,color:MUTED,marginBottom:12}}>Export approved claims as SAP IDoc or post directly to SAP FI. Credentials set in Vercel environment variables.</div>
+          <SAPConfigWidget cid={cid}/>
+        </Card>
+
         {/* ── AI Configuration (BYOK) ── */}
         <Card style={{padding:18}}>
           <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:4}}>🤖 AI — Bring Your Own API Key</div>
@@ -7720,10 +7845,25 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
         </Card>
         {/* ── PHASE 1: City Classification Toggle ── */}
         <Card style={{padding:18}}>
-          <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK,marginBottom:8}}>City Classification</div>
-          <Toggle on={policy.cityClassification} onClick={()=>setPolicy({...policy,cityClassification:!policy.cityClassification})} label="Enable Tier A/B/C/D Cities" sub="Hotel limits and diem vary by city tier"/>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <div style={{fontFamily:FB,fontSize:13,fontWeight:700,color:INK}}>City Classification</div>
+            {policy.cityClassification&&<button onClick={()=>{
+              const standardTiers=buildCityTiersForPolicy();
+              const existing=policy.cityTiers||[];
+              const existingCities=new Set(existing.map(c=>c.city.toLowerCase()));
+              const toAdd=standardTiers.filter(c=>!existingCities.has(c.city.toLowerCase()));
+              setPolicy({...policy,cityTiers:[...existing,...toAdd]});
+              alert(`✓ Added ${toAdd.length} standard Indian cities (${standardTiers.length} total). Cities already in your list were not duplicated.`);
+            }} style={{padding:"5px 12px",background:"#eff6ff",color:"#2563eb",border:"1px solid #bfdbfe",borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+              🇮🇳 Load Standard Indian Rates ({getAllCities().length} cities)
+            </button>}
+          </div>
+          <Toggle on={policy.cityClassification} onClick={()=>setPolicy({...policy,cityClassification:!policy.cityClassification})} label="Enable Tier A/B/C/D Cities" sub="Hotel limits and diem vary by city tier — click 'Load Standard Indian Rates' to auto-populate 90+ cities"/>
           {policy.cityClassification&&<>
-            <div style={{fontSize:10,color:MUTED,margin:"8px 0"}}>Cities not listed in A/B/C automatically become Tier D (residual). Press Enter or click + to add.</div>
+            <div style={{background:"#f0fde9",border:`1px solid ${GM}`,borderRadius:7,padding:"7px 11px",marginTop:8,marginBottom:10,fontSize:10,color:GD}}>
+              💡 Standard GoI/DOPT rates are pre-loaded for 90+ Indian cities. Click <b>Load Standard Indian Rates</b> to auto-populate, then customise as needed.
+            </div>
+            <div style={{fontSize:10,color:MUTED,marginBottom:8}}>Cities not listed automatically become Tier D (residual). Press Enter or click + to add.</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
               {[["A","Metro","#fee2e2","#991b1b"],["B","Major","#fef3c7","#92400e"],["C","Tier-2","#dbeafe","#1e40af"]].map(([tier,name,bg,fg])=>{
                 const tierCities=(policy.cityTiers||[]).filter(ct=>ct.tier===tier).map(ct=>ct.city);
@@ -7838,10 +7978,12 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
                         <td key={`h${tier}`} style={{padding:"3px 4px"}}><input type="number" value={e.hotelLimit||""} onChange={ev=>setE(tier,"hotelLimit",parseFloat(ev.target.value)||0)} placeholder="—" style={{width:68,padding:"3px 5px",border:`1px solid ${BDR}`,borderRadius:5,fontSize:10,textAlign:"right"}}/></td>
                         <td key={`d${tier}`} style={{padding:"3px 4px"}}><input type="number" value={e.diemRate||""} onChange={ev=>setE(tier,"diemRate",parseFloat(ev.target.value)||0)} placeholder="—" style={{width:68,padding:"3px 5px",border:`1px solid ${BDR}`,borderRadius:5,fontSize:10,textAlign:"right"}}/></td>
                       </>);})}
-                      <td style={{padding:"3px 6px"}}><select value={getE("D").transportClass||""} onChange={e=>setE("D","transportClass",e.target.value)} style={{padding:"3px 6px",border:`1px solid ${BDR}`,borderRadius:5,fontSize:10}}>
-                        <option value="">Any</option>
-                        {["Economy Air","Business Air","2AC Train","3AC Train","Sleeper","Volvo Bus","Non-AC Bus","Own Vehicle"].map(m=><option key={m}>{m}</option>)}
-                      </select></td>
+                      <td style={{padding:"3px 8px",fontSize:10,color:MUTED}}>
+                        {((policy.gradeTransportModes||{})[`grade_${h.level}`]||[]).length>0
+                          ?<span style={{color:GD,fontWeight:600}}>✓ {((policy.gradeTransportModes||{})[`grade_${h.level}`]||[]).length} modes set</span>
+                          :<span style={{color:"#f59e0b"}}>Set below ↓</span>
+                        }
+                      </td>
                     </tr>
                   );
                 })}
@@ -7890,11 +8032,8 @@ function Policy({policy:initPol,setPolicy:setParentPol,savePolicy,toast,users,sb
                 <span style={{fontSize:12,color:INK}}>{l}</span>
               </label>
             ))}
-            <div style={{fontSize:10,color:MUTED,marginTop:4}}>Requires INTERAKT_API_KEY in Vercel env vars + approved message templates</div>
+            <div style={{fontSize:10,color:MUTED,marginTop:4}}>Requires INTERAKT_API_KEY in Vercel env vars</div>
           </div>
-        </div>
-        <div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:7,padding:"8px 12px",fontSize:11,color:"#92400e"}}>
-          💡 Required WhatsApp templates: <strong>xpensr_claim_approved</strong>, <strong>xpensr_claim_rejected</strong>, <strong>xpensr_trip_summary</strong> — submit these to Interakt for approval before enabling.
         </div>
       </Card>
 
