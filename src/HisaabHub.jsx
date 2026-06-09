@@ -4531,7 +4531,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         {tab==="my_history"&&!isManager&&!isAdmin&&<MyHistoryTab user={user} trips={co.trips} claims={co.claims} getUser={getUser} exportClaimsPDF={exportClaimsPDF}/>}
         {tab==="wallet"&&!isManager&&!isAdmin&&<WalletLedgerTab user={user} myUser={myUser} trips={co.trips} claims={co.claims} topups={co.topups} fmt={fmt} setTab={setTab}/>}
         {tab==="ledger"&&canApprove&&<TripLedgerTab trips={isAdmin?co.trips:visibleTrips} claims={isAdmin?co.claims:visibleClaims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))} getUser={getUser} isAdmin={isAdmin} myDept={myUser?.dept} companyName={activeMeta?.name||""}/>}
-        {tab==="balances"&&canApprove&&<BalancesTab trips={isAdmin?co.trips:visibleTrips} claims={isAdmin?co.claims:visibleClaims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))} getUser={getUser} isAdmin={isAdmin} fmt={fmt} cid={cid} sbEnabled={SB_ENABLED} onReload={loadFromSB}/>}
+        {tab==="balances"&&canApprove&&<BalancesTab trips={isAdmin?co.trips:visibleTrips} claims={isAdmin?co.claims:visibleClaims} topups={co.topups} users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))} getUser={getUser} isAdmin={isAdmin} fmt={fmt} cid={cid} sbEnabled={SB_ENABLED} onReload={loadFromSB} policy={co.policy}/>}
         {/* ── HR Role View ── */}
         {tab==="hr_view"&&(isHR||isAdmin)&&<HROversightTab claims={co.claims} trips={co.trips} users={co.users} getUser={getUser} policy={co.policy} aretRequests={[]} fmt={fmt}/>}
         {/* ── CFO/CEO Executive View ── */}
@@ -8762,14 +8762,16 @@ function TripLedgerTab({trips,claims,topups,users,getUser,isAdmin,myDept,company
 }
 
 
-function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn,cid,sbEnabled,onReload}){
+function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn,cid,sbEnabled,onReload,policy}){
   const f=fmtFn||fmt;
+  const co={policy}; // for reimbursementMode check in empData
   const[expandedEmp,setExpandedEmp]=useState(null);
   const[expandedTrip,setExpandedTrip]=useState(null);
   const[settling,setSettling]=useState(null);
 
-  const markSettled=async(trip,empId)=>{
-    if(!window.confirm(`Mark trip "${trip.name}" as settled?\nBalance of ${f(Math.abs(0))} will be recorded as settled.`))return;
+  const markSettled=async(trip,empId,empBalance)=>{
+    const balanceText=empBalance>0?`Recover ₹${empBalance.toLocaleString("en-IN")} from employee`:empBalance<0?`Pay ₹${Math.abs(empBalance).toLocaleString("en-IN")} to employee`:"No balance to settle";
+    if(!window.confirm(`Mark trip "${trip.name}" as settled?\n${balanceText}\n\nThis records the settlement. Make sure the actual payment/recovery has been done.`))return;
     setSettling(trip.id+empId);
     try{
       if(sbEnabled&&supabase){
@@ -8787,25 +8789,28 @@ function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn,cid,sb
     const empTrips=allTrips.filter(t=>(t.assignedTo||[]).includes(u.id)||t.createdBy===u.id);
     const tripBreakdown=empTrips.map(t=>{
       const tc=claims.filter(c=>c.empId===u.id&&c.tripId===t.id);
-      const approved=tc.filter(c=>c.status==="Approved");
+      const approved=tc.filter(c=>c.status==="Approved"||c.status==="Auto-Approved");
       const rejected=tc.filter(c=>c.status==="Rejected");
       const pending=tc.filter(c=>c.status==="Pending");
       const spent=approved.reduce((s,c)=>s+c.amount,0);
-      // Approved topup requests for this employee on this trip
       const approvedTopups=(topups||[]).filter(tp=>tp.empId===u.id&&tp.tripId===t.id&&tp.status==="Approved").reduce((s,tp)=>s+tp.amount,0);
       const empAllocated=(t.employeeBudgets?.[u.id]?.allocated||0)+(t.employeeBudgets?.[u.id]?.topups||0)||0;
       const tripBudgetShare=t.budget>0&&(t.assignedTo||[]).length>0?t.budget/(t.assignedTo||[1]).length:0;
-      // Total available = allocated budget + approved topup requests
       const totalAvailable=(empAllocated||tripBudgetShare)+approvedTopups;
-      // Net balance: what's left after spending (negative = company owes employee, positive = employee owes company)
-      const balance=t.tripMode!=="reimbursement"?(totalAvailable-spent):-spent;
-      return{trip:t,approved,rejected,pending,spent,budget:totalAvailable,approvedTopups,balance,tc};
+      // balance here = trip-level: for display in breakdown only, NOT used for net balance
+      const tripBalance=t.tripMode!=="reimbursement"?(totalAvailable-spent):-spent;
+      return{trip:t,approved,rejected,pending,spent,budget:totalAvailable,approvedTopups,balance:tripBalance,tc};
     }).filter(td=>td.tc.length>0||td.budget>0);
 
-    const netBalance=tripBreakdown.reduce((s,td)=>s+td.balance,0);
     const totalSpent=tripBreakdown.reduce((s,td)=>s+td.spent,0);
-    return{user:u,trips:tripBreakdown,netBalance,totalSpent};
-  }).filter(e=>e.trips.length>0);
+    // NET BALANCE = DB users.balance — the single source of truth
+    // Positive balance = employee holds company money (company recovers)
+    // Negative balance = employee spent more than given (company pays)
+    const dbBalance=u.balance||0;
+    // In reimbursement mode, company owes employee = negative (to pay)
+    const netBalance=co?.policy?.reimbursementMode?-(u.reimbursable||0):dbBalance;
+    return{user:u,trips:tripBreakdown,netBalance,totalSpent,dbBalance};
+  }).filter(e=>e.trips.length>0||e.dbBalance!==0);
 
   const totalRecoverable=empData.filter(e=>e.netBalance>0).reduce((s,e)=>s+e.netBalance,0);
   const totalPayable=empData.filter(e=>e.netBalance<0).reduce((s,e)=>s+Math.abs(e.netBalance),0);
@@ -8839,7 +8844,7 @@ function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn,cid,sb
         <div style={{color:MUTED}}>No balance data yet. Employees need trips and approved claims.</div>
       </Card>}
 
-      {empData.map(({user:u,trips:tripData,netBalance,totalSpent})=>(
+      {empData.map(({user:u,trips:tripData,netBalance,totalSpent,dbBalance})=>(
         <Card key={u.id} style={{marginBottom:10,padding:0,overflow:"hidden",
           borderLeft:netBalance>0?"4px solid #dc2626":netBalance<0?"4px solid #16a34a":"4px solid #e5e7eb"}}>
           {/* Employee header */}
@@ -8852,10 +8857,11 @@ function BalancesTab({trips,claims,topups,users,getUser,isAdmin,fmt:fmtFn,cid,sb
             <div style={{flex:1}}>
               <div style={{fontWeight:700,fontSize:13,color:INK}}>{u.name}</div>
               <div style={{fontSize:10,color:MUTED}}>{u.dept||"—"} · {tripData.length} trip{tripData.length!==1?"s":""} · {f(totalSpent)} total spent</div>
+              <div style={{fontSize:9,color:MUTED,marginTop:1}}>Wallet balance: {f(dbBalance)} · Same as employee's wallet view</div>
             </div>
             <div style={{textAlign:"right",flexShrink:0}}>
-              {netBalance>0&&<div style={{fontWeight:800,fontSize:15,color:"#dc2626"}}>↩ {f(netBalance)}<div style={{fontSize:9,fontWeight:400}}>to recover</div></div>}
-              {netBalance<0&&<div style={{fontWeight:800,fontSize:15,color:"#16a34a"}}>↪ {f(-netBalance)}<div style={{fontSize:9,fontWeight:400}}>to pay</div></div>}
+              {netBalance>0&&<div style={{fontWeight:800,fontSize:15,color:"#dc2626"}}>↩ {f(netBalance)}<div style={{fontSize:9,fontWeight:400}}>to recover from employee</div></div>}
+              {netBalance<0&&<div style={{fontWeight:800,fontSize:15,color:"#16a34a"}}>↪ {f(-netBalance)}<div style={{fontSize:9,fontWeight:400}}>to pay to employee</div></div>}
               {netBalance===0&&<div style={{fontSize:11,color:MUTED,fontStyle:"italic"}}>Settled</div>}
             </div>
             <span style={{color:MUTED,fontSize:11,marginLeft:4}}>{expandedEmp===u.id?"▲":"▼"}</span>
