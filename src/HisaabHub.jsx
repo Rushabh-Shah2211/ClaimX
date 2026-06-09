@@ -355,8 +355,9 @@ function getVisibleUserIds(viewerId, allUsers, policy, allGroups){
   const viewer=allUsers.find(u=>u.id===viewerId);
   if(!viewer) return new Set([viewerId]);
 
-  // Admin always sees all
-  if(viewer.role==="admin") return new Set(allUsers.filter(u=>!u.isSuspended).map(u=>u.id));
+  // Admin / CFO / HR / Finance see everyone
+  if(["admin","cfo","hr","finance"].includes(viewer.role))
+    return new Set(allUsers.filter(u=>!u.isSuspended).map(u=>u.id));
 
   // Always see yourself
   const result=new Set([viewerId]);
@@ -364,34 +365,37 @@ function getVisibleUserIds(viewerId, allUsers, policy, allGroups){
   const viewerGrade=viewer.grade||0;
   const groups=allGroups||[];
 
-  if(viewerGrade===0&&viewer.role!=="manager"){
-    // No grade, no manager role — see only yourself (L1 equivalent)
-    return result;
-  }
+  // No grade, no manager role — see only yourself
+  if(viewerGrade===0&&viewer.role!=="manager") return result;
 
-  // Collect groups this viewer manages (directly)
+  // Groups this viewer DIRECTLY manages
   const myManagedGroups=groups.filter(g=>g.managerId===viewerId);
 
-  // Add all members of groups I directly manage
-  // Using groupIds (multi-group array) OR legacy groupId field
+  // Add members of groups I directly manage (only strictly lower grade)
   for(const g of myManagedGroups){
-    allUsers.filter(u=>(u.groupIds||[]).includes(g.id)||(u.groupId===g.id)).filter(u=>!u.isSuspended).forEach(u=>result.add(u.id));
+    allUsers
+      .filter(u=>((u.groupIds||[]).includes(g.id)||(u.groupId===g.id))&&!u.isSuspended)
+      .filter(u=>(u.grade||0)<viewerGrade) // strictly lower grade only
+      .forEach(u=>result.add(u.id));
   }
 
-  // For higher grades: also see groups managed by people in my visible set
-  // (transitive — I can see what my subordinate managers can see)
-  if(viewerGrade>=3||viewer.role==="manager"){
-    // BFS: find sub-managers within my visible set and add their groups too
-    let wave=[...result];
+  // Transitive: also see groups managed by my subordinates
+  if(viewerGrade>=2||viewer.role==="manager"){
+    let wave=[...result].filter(id=>id!==viewerId);
     let iterations=0;
     while(iterations<10){
       const newlyAdded=[];
       for(const uid of wave){
-        const subManagedGroups=groups.filter(g=>g.managerId===uid&&uid!==viewerId);
+        const subUser=allUsers.find(u=>u.id===uid);
+        if(!subUser||(subUser.grade||0)>=viewerGrade) continue; // only process subordinates
+        const subManagedGroups=groups.filter(g=>g.managerId===uid);
         for(const g of subManagedGroups){
-          allUsers.filter(u=>((u.groupIds||[]).includes(g.id)||(u.groupId===g.id))&&!u.isSuspended).forEach(u=>{
-            if(!result.has(u.id)){result.add(u.id);newlyAdded.push(u.id);}
-          });
+          allUsers
+            .filter(u=>((u.groupIds||[]).includes(g.id)||(u.groupId===g.id))&&!u.isSuspended)
+            .filter(u=>(u.grade||0)<viewerGrade)
+            .forEach(u=>{
+              if(!result.has(u.id)){result.add(u.id);newlyAdded.push(u.id);}
+            });
         }
       }
       if(newlyAdded.length===0) break;
@@ -400,23 +404,26 @@ function getVisibleUserIds(viewerId, allUsers, policy, allGroups){
     }
   }
 
-  // If grade system off — fall back to department
-  // Item 3: Also check same-grade users — can NOT see same-level peers
-  // Only see users strictly below your grade (own data always visible)
-  if(viewerGrade>0){
-    // Remove any same-grade non-subordinates that may have been added
-    for(const uid of [...result]){
-      if(uid===viewerId) continue;
-      const u=allUsers.find(x=>x.id===uid);
-      if(u&&(u.grade||0)>=viewerGrade&&u.id!==viewerId){
-        // Same grade or higher — only keep if admin
-        if(viewer.role!=="admin") result.delete(uid);
-      }
-    }
+  // Fix Issue 2: NEVER include same-grade or higher-grade users regardless of how they got in
+  for(const uid of [...result]){
+    if(uid===viewerId) continue;
+    const u=allUsers.find(x=>x.id===uid);
+    if(u&&(u.grade||0)>=viewerGrade) result.delete(uid);
   }
 
+  // Grade-0 manager fallback: department visibility
   if(viewerGrade===0&&viewer.role==="manager"){
-    allUsers.filter(u=>u.dept===viewer.dept&&!u.isSuspended).forEach(u=>result.add(u.id));
+    allUsers
+      .filter(u=>u.dept===viewer.dept&&!u.isSuspended&&u.role==="employee")
+      .forEach(u=>result.add(u.id));
+  }
+
+  // Fix Issue 3: If manager has no managed groups, they see nobody except themselves
+  // (unless they have direct reportees via reportingTo)
+  if(result.size===1&&viewerGrade>0&&viewer.role==="manager"&&myManagedGroups.length===0){
+    // Check if anyone reports to them directly
+    const directReportees=allUsers.filter(u=>u.reportingTo===viewerId&&!u.isSuspended&&(u.grade||0)<viewerGrade);
+    directReportees.forEach(u=>result.add(u.id));
   }
 
   return result;
@@ -2825,6 +2832,8 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   })();
 
   // Claims to show in ApprovalsTab — from reporting chain + grade engine
+  // VISIBILITY: all managers above submitter's grade see the claim
+  // APPROVAL BUTTONS: only enabled for managers whose ceiling covers the amount
   const approvableClaimsForMe=(()=>{
     if(!canApprove&&!isCFO&&!isHR) return [];
 
@@ -2838,21 +2847,29 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     if(!canApprove) return escalationClaims;
 
     const myGrade=myUser?.grade||0;
-    const myApproveLimit=myUser?.approveLimit||co.policy?.autoApproveLimit||999999999;
+    // ceiling = the approval limit for this manager's grade level
+    const myHierEntry=(co.policy?.approvalHierarchy||[]).find(h=>h.level===myGrade);
+    const myCeiling=myHierEntry?.ceiling||myUser?.approveLimit||0; // 0 = unlimited
 
     const regularClaims=co.claims.filter(c=>{
       if(c.status!=="Pending"&&c.status!=="Budget-Escalation Approved") return false;
-      if(c.empId===user.id) return false; // can't approve own claims
+      if(c.empId===user.id) return false;
 
       const emp=getUser(c.empId);
       if(!emp) return false;
+      if(isAdmin) return true;
 
-      if(isAdmin) return true; // admin sees all
-
-      // Manager sees claims from users with lower grade in their visibility scope
       const empGrade=emp.grade||0;
-      if(myGrade===0) return emp.dept===myUser?.dept; // grade 0 manager sees own dept
-      return empGrade<myGrade&&visibleUserIds.has(c.empId);
+      // Must be strictly above employee grade
+      if(myGrade===0) return emp.dept===myUser?.dept;
+      if(myGrade<=empGrade) return false;
+      // Must be in visibility scope (same group chain)
+      if(!visibleUserIds.has(c.empId)) return false;
+
+      // VISIBILITY: show if any grade between empGrade+1 and myGrade could approve
+      // i.e. show to ALL managers in the chain, not just the exact approver grade
+      // This ensures L5 sees what L3 was supposed to approve but can't due to limit
+      return true;
     });
 
     // Deduplicate
@@ -3371,28 +3388,56 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
     const budgetBreachReason=monthlyDeptBreached?`Monthly dept budget (₹${monthlyDeptBudget.toLocaleString("en-IN")}) exceeded`:
                              yearlyDeptBreached?`Annual dept budget (₹${yearlyDeptBudget.toLocaleString("en-IN")}) exceeded`:"";
 
-    // Check if accommodation/hotel exceeds grade entitlement
+    // Check if accommodation/hotel exceeds grade entitlement — PER DAY running total
     const isAccommodation=["Accommodation","Hotel","Lodging"].some(k=>form.category?.toLowerCase().includes(k.toLowerCase()));
     const isMeal=["Meals","Meal","Food","Diem","Per Diem"].some(k=>form.category?.toLowerCase().includes(k.toLowerCase()));
     const empGrade=co.users.find(u=>u.id===user.id)?.grade||0;
-    // Get entitlement for the trip city tier
     const tripCity=form.city||"";
     const cityTier=form.cityTier||"D";
     const gradeEntitlement=policy.gradeEntitlements?.find(e=>e.grade===empGrade&&(e.tier===cityTier||!e.tier))||
                            policy.gradeEntitlements?.find(e=>e.grade===empGrade);
     const hotelEntitlement=gradeEntitlement?.hotelLimit||0;
     const diemEntitlement=gradeEntitlement?.diemRate||0;
-    const exceedsHotelEntitlement=isAccommodation&&hotelEntitlement>0&&amount>hotelEntitlement;
-    const exceedsDiemEntitlement=isMeal&&diemEntitlement>0&&amount>diemEntitlement;
+
+    // Sum existing approved/pending claims for same category on same date
+    // This gives the running total for the day — cap is on daily total, not per-invoice
+    const entitlementCheckDate=form.date||today();
+    const todayHotelSpent=(isAccommodation&&hotelEntitlement>0)
+      ?(co.claims||[]).filter(c=>
+          c.empId===user.id&&
+          c.date===entitlementCheckDate&&
+          c.status!=="Rejected"&&
+          ["Accommodation","Hotel","Lodging"].some(k=>c.category?.toLowerCase().includes(k.toLowerCase()))
+        ).reduce((s,c)=>s+c.amount,0)
+      :0;
+    const todayMealSpent=(isMeal&&diemEntitlement>0)
+      ?(co.claims||[]).filter(c=>
+          c.empId===user.id&&
+          c.date===entitlementCheckDate&&
+          c.status!=="Rejected"&&
+          ["Meals","Meal","Food","Diem","Per Diem"].some(k=>c.category?.toLowerCase().includes(k.toLowerCase()))
+        ).reduce((s,c)=>s+c.amount,0)
+      :0;
+
+    // Remaining daily entitlement after already-approved claims for the day
+    const hotelDailyRemaining=Math.max(0,hotelEntitlement-todayHotelSpent);
+    const diemDailyRemaining=Math.max(0,diemEntitlement-todayMealSpent);
+
+    // Does THIS claim (added to today's total) exceed the daily limit?
+    const exceedsHotelEntitlement=isAccommodation&&hotelEntitlement>0&&(todayHotelSpent+amount)>hotelEntitlement;
+    const exceedsDiemEntitlement=isMeal&&diemEntitlement>0&&(todayMealSpent+amount)>diemEntitlement;
     const exceedsEntitlement=exceedsHotelEntitlement||exceedsDiemEntitlement;
+
+    // Cap = remaining balance for the day (not the full entitlement)
+    // e.g. limit=5000, already claimed=2500, this claim=3500 → cap=2500 (remainder), not 5000
+    const entitlementCap=exceedsHotelEntitlement?hotelDailyRemaining:exceedsDiemEntitlement?diemDailyRemaining:0;
 
     // Build entitlement remarks for manager visibility
     const entitlementRemark=exceedsHotelEntitlement
-      ?`⚠ Exceeds hotel entitlement: Grade ${empGrade} limit ₹${hotelEntitlement.toLocaleString("en-IN")} (Tier ${cityTier}), claimed ₹${amount.toLocaleString("en-IN")} — excess ₹${(amount-hotelEntitlement).toLocaleString("en-IN")}`
+      ?`⚠ Hotel daily limit exceeded: Grade ${empGrade} limit ₹${hotelEntitlement.toLocaleString("en-IN")}/day (Tier ${cityTier}). Already claimed ₹${todayHotelSpent.toLocaleString("en-IN")} today + this claim ₹${amount.toLocaleString("en-IN")} = ₹${(todayHotelSpent+amount).toLocaleString("en-IN")} — daily balance remaining: ₹${hotelDailyRemaining.toLocaleString("en-IN")}`
       :exceedsDiemEntitlement
-      ?`⚠ Exceeds meal/diem entitlement: Grade ${empGrade} limit ₹${diemEntitlement.toLocaleString("en-IN")}/day, claimed ₹${amount.toLocaleString("en-IN")} — excess ₹${(amount-diemEntitlement).toLocaleString("en-IN")}`
+      ?`⚠ Meal/diem daily limit exceeded: Grade ${empGrade} limit ₹${diemEntitlement.toLocaleString("en-IN")}/day. Already claimed ₹${todayMealSpent.toLocaleString("en-IN")} today + this claim ₹${amount.toLocaleString("en-IN")} = ₹${(todayMealSpent+amount).toLocaleString("en-IN")} — daily balance remaining: ₹${diemDailyRemaining.toLocaleString("en-IN")}`
       :"";
-    const entitlementCap=exceedsHotelEntitlement?hotelEntitlement:exceedsDiemEntitlement?diemEntitlement:0;
 
     // Core routing decision
     // 1. Within auto-approve limit AND no flags AND within entitlements → schedule auto-approve
@@ -4474,12 +4519,12 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             }
           }}
         />}
-        {tab==="approvals"&&canApprove&&<ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} onReload={loadFromSB} onReloadEditRequests={loadEditRequests} approveLimit={myUser?.approveLimit||co.policy?.autoApproveLimit||999999999} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}}/>}
+        {tab==="approvals"&&canApprove&&<ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} onReload={loadFromSB} onReloadEditRequests={loadEditRequests} approveLimit={(co.policy?.approvalHierarchy||[]).find(h=>h.level===(myUser?.grade||0))?.ceiling||0} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}}/>}
         {tab==="topup"&&<TopupTab user={user} topups={canApprove?co.topups.filter(t=>t.status==="Pending"||t.empId===user.id):co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} trips={co.trips} isManager={isManager||isAdmin} managerUsers={isManager||isAdmin?co.users.filter(u=>visibleUserIds.has(u.id)&&u.id!==user.id):[]} sbCreateTopup={async(req)=>{if(SB_ENABLED){const{error:te}=await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:req.status||"Pending",trip_id:req.tripId});if(te){toast("Top-up request failed: "+te.message,"error");return;}if(req.status==="Approved"){await handleTopup({...req,id:req.id},false);}await loadFromSB();}else{setTopups(p=>[...p,req]);}}}/>}
         {tab==="analytics"&&<Analytics
           claims={isAdmin?co.claims:visibleClaims.filter(c=>isManager||c.empId===user.id)}
           trips={isAdmin?co.trips:visibleTrips}
-          users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id))}
+          users={isAdmin?co.users:co.users.filter(u=>visibleUserIds.has(u.id)||(u.id===user.id))}
           isManager={isManager} isAdmin={isAdmin} getUser={getUser} policy={co.policy} printSummary={printSummary} user={user}/>}
         {tab==="inbox"&&<Inbox notifications={(co.notifications||[]).filter(n=>n.userId===user.id)} setNotifs={fn=>{if(!SB_ENABLED)setNotifs(fn);}} userId={user.id}/>}
         {tab==="audit"&&(isAdmin||user?.role==="cfo")&&<Audit auditLog={isAdmin?(co.auditLog||[]):(co.auditLog||[])} claims={co.claims} getUser={getUser} users={co.users} trips={co.trips} policy={co.policy}/>}
@@ -4652,33 +4697,57 @@ function WalletLedgerTab({user,myUser,trips,claims,topups,fmt,setTab}){
   const[filterTrip,setFilterTrip]=useState("all");
   const myTrips=(trips||[]).filter(t=>(t.assignedTo||[]).includes(user.id));
 
-  // Build ledger entries
+  // Build ledger purely from transactions — do NOT use myUser.balance as an entry
+  // because that is already the NET balance after all transactions
+  // Instead, reconstruct: initial balance → trip budgets → topups → claim deductions
   const entries=[];
-  // Opening balance
-  if((myUser?.balance||0)>0){
-    entries.push({date:myTrips[0]?.startDate||"2024-01-01",label:"Opening Wallet Balance",type:"credit",amount:myUser.balance,tripId:null,tripName:"—"});
-  }
-  // Trip advances (budget allocated to this user per trip)
+
+  // Trip advances (budget credited when trip is assigned/approved)
   myTrips.forEach(t=>{
     if((t.budget||0)>0){
-      entries.push({date:t.startDate||"",label:`Trip Advance: ${t.name}`,type:"credit",amount:t.budget,tripId:t.id,tripName:t.name});
+      entries.push({
+        date:t.startDate||t.createdAt||"",
+        label:`Trip Advance: ${t.name}`,
+        type:"credit",amount:t.budget,tripId:t.id,tripName:t.name,
+      });
     }
   });
+
   // Top-ups approved
   (topups||[]).filter(tp=>tp.empId===user.id&&tp.status==="Approved").forEach(tp=>{
     const trip=trips.find(t=>t.id===tp.tripId);
-    entries.push({date:tp.date||"",label:`Top-up: ${tp.reason?.replace("[ARET] ","")?.slice(0,40)||"Top-up approved"}`,type:"credit",amount:tp.amount,tripId:tp.tripId,tripName:trip?.name||"—"});
+    entries.push({
+      date:tp.date||"",
+      label:`Top-up: ${tp.reason?.replace("[ARET] ","")?.slice(0,40)||"Top-up approved"}`,
+      type:"credit",amount:tp.amount,tripId:tp.tripId,tripName:trip?.name||"—",
+    });
   });
+
   // Approved claims (deductions)
   (claims||[]).filter(c=>c.empId===user.id&&(c.status==="Approved"||c.status==="Auto-Approved")).forEach(c=>{
     const trip=trips.find(t=>t.id===c.tripId);
-    entries.push({date:c.date||"",label:`${c.category}: ${c.desc?.slice(0,35)||""}`,type:"debit",amount:c.amount,tripId:c.tripId,tripName:trip?.name||"—"});
+    entries.push({
+      date:c.date||"",
+      label:`${c.category}: ${c.desc?.slice(0,35)||""}`,
+      type:"debit",amount:c.amount,tripId:c.tripId,tripName:trip?.name||"—",
+    });
   });
 
-  // Sort by date
+  // Sort by date ascending
   entries.sort((a,b)=>a.date.localeCompare(b.date));
 
-  const filtered=filterTrip==="all"?entries:entries.filter(e=>e.tripId===filterTrip||(!e.tripId&&filterTrip==="general"));
+  // The difference between our reconstructed total and DB balance is the
+  // "initial/setup balance" — show it as a first entry if non-zero
+  const reconstructedNet=entries.reduce((s,e)=>s+(e.type==="credit"?e.amount:-e.amount),0);
+  const dbBalance=myUser?.balance||0;
+  const initialBalance=dbBalance-reconstructedNet;
+
+  // Prepend initial balance entry if it exists
+  const allEntries=initialBalance!==0
+    ?[{date:"",label:"Initial Wallet Balance",type:initialBalance>0?"credit":"debit",amount:Math.abs(initialBalance),tripId:null,tripName:"—"},...entries]
+    :entries;
+
+  const filtered=filterTrip==="all"?allEntries:allEntries.filter(e=>e.tripId===filterTrip||(!e.tripId&&filterTrip==="general"));
 
   // Running balance
   let running=0;
@@ -4689,7 +4758,8 @@ function WalletLedgerTab({user,myUser,trips,claims,topups,fmt,setTab}){
 
   const totalCredits=filtered.filter(e=>e.type==="credit").reduce((s,e)=>s+e.amount,0);
   const totalDebits=filtered.filter(e=>e.type==="debit").reduce((s,e)=>s+e.amount,0);
-  const netBalance=totalCredits-totalDebits;
+  // Net balance = DB balance (source of truth) — not the reconstructed sum
+  const netBalance=dbBalance;
 
   return(
     <div style={{maxWidth:720}}>
@@ -6321,11 +6391,12 @@ function TripsTab({trips,setTrips,claims,isManager,isAdmin,getUser,users,closeTr
 }
 
 // ─── APPROVALS TAB ────────────────────────────────────────────────────────────
-function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip,users,user,editRequests,approveEditRequest,rejectEditRequest,onReload,onReloadEditRequests,setClaims,approveLimit=999999999}){
-  // canAct: manager can approve/reject only if claim amount is within their approval limit
+function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,handleTopup,setMdl,isAdmin,needsDualApproval,approveTrip,rejectTrip,users,user,editRequests,approveEditRequest,rejectEditRequest,onReload,onReloadEditRequests,setClaims,approveLimit=0}){
+  // approveLimit=0 means unlimited (admin or no ceiling set)
+  // canActOn: manager can approve/reject only if claim is within their grade ceiling
   const canActOn=(claim)=>{
     if(isAdmin) return true;
-    if(!approveLimit||approveLimit<=0) return true;
+    if(!approveLimit||approveLimit<=0) return true; // 0 = unlimited
     return claim.amount<=approveLimit;
   };
   const [filter,setFilter]=useState("All");
@@ -6472,7 +6543,10 @@ function ApprovalsTab({pendingClaims,pendingTopups,getUser,trips,handleDecision,
                   <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
                     {canActOn(c)
                       ?<Btn onClick={()=>setMdl({type:"decision",data:c})} style={{padding:"6px 11px",fontSize:11}}>Review →</Btn>
-                      :<div style={{padding:"4px 9px",borderRadius:6,background:"#fef3c7",border:"1px solid #fcd34d",fontSize:10,color:"#92400e",fontWeight:600}} title={`Amount ₹${c.amount.toLocaleString("en-IN")} exceeds your approval limit of ₹${approveLimit.toLocaleString("en-IN")}`}>⚠ Above your limit</div>
+                      :<div style={{padding:"4px 9px",borderRadius:6,background:"#fef3c7",border:"1px solid #fcd34d",fontSize:10,color:"#92400e",fontWeight:600,maxWidth:180}}
+                         title={`₹${c.amount.toLocaleString("en-IN")} exceeds your approval ceiling of ₹${approveLimit.toLocaleString("en-IN")}. A higher-grade manager must approve.`}>
+                         ⚠ Above your limit — visible to higher managers
+                      </div>
                     }
                     {isAdmin&&c.status==="Manager Approved"&&(
                       <Btn onClick={()=>handleDecision(c.id,"Approved","Admin final approval")} style={{padding:"6px 9px",fontSize:10,background:"#7c3aed",color:"#fff"}}>⚡ Final</Btn>
@@ -10611,11 +10685,11 @@ function ClaimModal({modal,setMdl,handleDecision,getUser,trips,claims,setClaims,
               const capRemark=`Approved up to grade entitlement ₹${c.entitlementCap.toLocaleString("en-IN")}. Claim reduced from ₹${c.amount.toLocaleString("en-IN")}.${remarks?" "+remarks:""}`;
               if(SB_ENABLED){await supabase.from("claims").update({amount:c.entitlementCap,status:"Approved",remarks:capRemark}).eq("id",c.id);if(onReload)await onReload();}
               setMdl(null);
-            }} style={{flex:1,background:"#f59e0b",color:"#fff",minWidth:100}}>⚡ Cap at {fmt(c.entitlementCap)}</Btn>}
+            }} style={{flex:1,background:"#f59e0b",color:"#fff",minWidth:100}}>{c.entitlementCap>0?"⚡ Approve remaining "+fmt(c.entitlementCap):"⚡ Cap"}</Btn>}
             <Btn v="danger" onClick={async()=>{await handleDecision(c.id,"Rejected",remarks);}} style={{flex:1,minWidth:80}}>✗ Reject</Btn>
             <Btn v="outline" onClick={()=>setMdl(null)}>Cancel</Btn>
           </div>
-          {c.entitlementCap>0&&c.amount>c.entitlementCap&&<div style={{fontSize:10,color:MUTED,marginTop:5}}>⚡ "Cap" approves at grade limit ₹{c.entitlementCap.toLocaleString("en-IN")} instead of claimed ₹{c.amount.toLocaleString("en-IN")}</div>}
+          {c.entitlementCap>0&&c.amount>c.entitlementCap&&<div style={{fontSize:10,color:MUTED,marginTop:5}}>⚡ "Approve remaining" approves the daily balance ₹{c.entitlementCap.toLocaleString("en-IN")} instead of claimed ₹{c.amount.toLocaleString("en-IN")}</div>}
         </div>}
         {type==="detail"&&<div style={{marginTop:11}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
