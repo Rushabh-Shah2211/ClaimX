@@ -593,7 +593,7 @@ async function sbLoadCompany(cid){
   }));
 
   return{
-    meta:meta?{id:meta.id,name:meta.name,industry:meta.industry,plan:meta.plan,maxUsers:meta.max_users,status:meta.status,createdOn:meta.created_on}:null,
+    meta:meta?{id:meta.id,name:meta.name,industry:meta.industry,plan:meta.plan,maxUsers:meta.max_users,status:meta.status,createdOn:meta.created_on,isPaid:meta.is_paid===true,trialEndsAt:meta.trial_ends_at,signupSource:meta.signup_source}:null,
     users:usersWithGroups.map(mapUser),
     trips:tripsWithLegs.map(mapTrip),
     claims:mappedClaims,
@@ -1359,7 +1359,53 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
     }catch(e){setErr(e.message);setGB(false);}
   };
 
-  // ── Reset password (Supabase Auth users only) ─────────────────────────────
+  // ── Self-serve signup ──────────────────────────────────────────────────────
+  const signUp=async()=>{
+    setSuErr("");
+    const f=suForm;
+    if(!f.companyName.trim()){setSuErr("Please enter your company name.");return;}
+    if(!f.adminName.trim()){setSuErr("Please enter your name.");return;}
+    if(!f.adminEmail.trim()||!f.adminEmail.includes("@")){setSuErr("Please enter a valid email address.");return;}
+    if(f.adminPassword.length<6){setSuErr("Password must be at least 6 characters.");return;}
+    if(f.adminPassword!==f.confirmPassword){setSuErr("Passwords do not match.");return;}
+
+    setSuBusy(true);
+    try{
+      if(!SB_ENABLED){
+        setSuErr("Self-serve signup requires a live connection. Please try again shortly, or contact us directly.");
+        setSuBusy(false);return;
+      }
+      const{data,error}=await supabase.rpc("signup_company",{
+        p_company_name:f.companyName.trim(),
+        p_admin_name:f.adminName.trim(),
+        p_admin_email:f.adminEmail.trim().toLowerCase(),
+        p_admin_password:f.adminPassword,
+        p_industry:f.industry||"General",
+      });
+      if(error)throw new Error(error.message);
+      if(data?.error)throw new Error(data.error);
+
+      setSuSuccess({
+        username:data.username,
+        companyName:data.company_name,
+        trialEndsAt:data.trial_ends_at,
+      });
+    }catch(e){
+      setSuErr(e.message||"Sign up failed. Please try again.");
+    }finally{
+      setSuBusy(false);
+    }
+  };
+
+  const proceedToLoginAfterSignup=()=>{
+    setLogin(suForm.adminEmail);
+    setPass("");
+    setSuSuccess(null);
+    setAuthMode("login");
+    setSuForm({companyName:"",adminName:"",adminEmail:"",adminPassword:"",confirmPassword:"",industry:""});
+  };
+
+
   const sendReset=async()=>{
     if(!login.trim()||!login.includes("@")){setErr("Enter your email address to reset password.");return;}
     setErr("");setBusy(true);
@@ -1389,6 +1435,11 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
   const inp={width:"100%",padding:"12px 14px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.25)",background:"rgba(255,255,255,0.08)",color:"#ffffff",fontFamily:FB,fontSize:14,outline:"none",boxSizing:"border-box",WebkitTextFillColor:"#ffffff"};
 
   const[showLogin,setShowLogin]=useState(isPasswordRecovery||false);
+  const[authMode,setAuthMode]=useState("login"); // "login" | "signup"
+  const[suForm,setSuForm]=useState({companyName:"",adminName:"",adminEmail:"",adminPassword:"",confirmPassword:"",industry:""});
+  const[suBusy,setSuBusy]=useState(false);
+  const[suErr,setSuErr]=useState("");
+  const[suSuccess,setSuSuccess]=useState(null); // {username, companyName, trialEndsAt}
   const[showTiers,setShowTiers]=useState(false);
   const[reqForm,setReqForm]=useState({name:"",company:"",email:"",phone:"",message:""});
   const[reqSent,setReqSent]=useState(false);
@@ -1466,7 +1517,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
           <div style={{display:"flex",alignItems:"center",gap:16}}>
             <button onClick={()=>setShowTiers(p=>!p)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#5CB83A",fontFamily:FB,fontWeight:600,padding:"6px 12px"}}>Pricing</button>
             <a href="#contact" style={{fontSize:13,color:"#374151",textDecoration:"none",fontFamily:FB,padding:"6px 12px"}}>Contact</a>
-            <button onClick={()=>setShowLogin(true)} className="xr-btn" style={{background:"linear-gradient(135deg,#2563eb,#1d4ed8)",color:"#fff",border:"none",borderRadius:10,padding:"9px 22px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:FB,letterSpacing:.3}}>
+            <button onClick={()=>{setAuthMode("login");setShowLogin(true);}} className="xr-btn" style={{background:"linear-gradient(135deg,#2563eb,#1d4ed8)",color:"#fff",border:"none",borderRadius:10,padding:"9px 22px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:FB,letterSpacing:.3}}>
               Sign In →
             </button>
           </div>
@@ -1497,7 +1548,7 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
           AI-powered claim submission, smart approval workflows, real-time balances and settlement tracking — all in one beautifully simple app.
         </p>
         <div style={{display:"flex",gap:14,justifyContent:"center",flexWrap:"wrap"}}>
-          <button onClick={()=>setShowLogin(true)} className="xr-btn" style={{background:"#5CB83A",color:"#fff",border:"none",borderRadius:12,padding:"14px 32px",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:FB}}>
+          <button onClick={()=>{setAuthMode("signup");setShowLogin(true);}} className="xr-btn" style={{background:"#5CB83A",color:"#fff",border:"none",borderRadius:12,padding:"14px 32px",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:FB}}>
             Get Started Free →
           </button>
           <button onClick={()=>document.getElementById("request").scrollIntoView({behavior:"smooth"})} className="xr-btn" style={{background:"#fff",color:"#5CB83A",border:"2px solid #5CB83A",borderRadius:12,padding:"14px 28px",fontSize:15,fontWeight:600,cursor:"pointer",fontFamily:FB}}>
@@ -1643,51 +1694,115 @@ function Login({onLogin,DB,isPasswordRecovery=false}){
         <div style={{fontSize:10,color:"rgba(255,255,255,.3)",letterSpacing:2,textTransform:"uppercase",marginBottom:16}}>by RB</div>
         <p style={{color:"rgba(255,255,255,.3)",fontSize:12,marginBottom:4}}>© 2026 R B Shah & Associates. Built with ♥ in Rajkot.</p>
         <p style={{color:"rgba(255,255,255,.2)",fontSize:11}}>XpensR is a product of RB Finsol. All rights reserved.</p>
+        <p style={{color:"rgba(255,255,255,.15)",fontSize:10,marginTop:10,letterSpacing:.5}}>Last updated: 20 Jun 2026, 13:45 IST</p>
       </footer>
 
       {showLogin&&(
         <div data-modal="true" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(6px)"}} onClick={e=>{if(e.target===e.currentTarget)setShowLogin(false);}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:`linear-gradient(145deg,${DARK} 0%,#0a1f06 100%)`,borderRadius:20,padding:"32px 32px 28px",width:"min(440px,96vw)",boxShadow:"0 32px 80px rgba(0,0,0,.5)",border:"1px solid rgba(255,255,255,.08)",position:"relative"}}>
-            <button onClick={()=>setShowLogin(false)} style={{position:"absolute",top:14,right:16,background:"none",border:"none",color:"rgba(255,255,255,.7)",fontSize:20,cursor:"pointer",lineHeight:1}}>✕</button>
+          <div onClick={e=>e.stopPropagation()} style={{background:`linear-gradient(145deg,${DARK} 0%,#0a1f06 100%)`,borderRadius:20,padding:"32px 32px 28px",width:"min(440px,96vw)",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 32px 80px rgba(0,0,0,.5)",border:"1px solid rgba(255,255,255,.08)",position:"relative"}}>
+            <button onClick={()=>{setShowLogin(false);setSuSuccess(null);setSuErr("");setErr("");}} style={{position:"absolute",top:14,right:16,background:"none",border:"none",color:"rgba(255,255,255,.7)",fontSize:20,cursor:"pointer",lineHeight:1}}>✕</button>
             {/* Logo */}
-            <div style={{textAlign:"center",marginBottom:24}}>
+            <div style={{textAlign:"center",marginBottom:suSuccess?20:18}}>
               <Logo width={160} dark/>
-              <div style={{fontSize:10,color:"rgba(255,255,255,.3)",letterSpacing:2,textTransform:"uppercase",marginTop:6}}>Sign in to your workspace</div>
+              {!suSuccess&&<div style={{fontSize:10,color:"rgba(255,255,255,.3)",letterSpacing:2,textTransform:"uppercase",marginTop:6}}>{authMode==="signup"?"Start your free trial":"Sign in to your workspace"}</div>}
             </div>
-            <div style={{display:"flex",flexDirection:"column",gap:14}}>
-              <input type="text" value={login} onChange={e=>{setLogin(e.target.value);setErr("");}}
-                onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)}
-                placeholder="username  ·  email  ·  mobile"
-                className="login-inp"
-                style={{width:"100%",padding:"13px 16px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}
-                autoComplete="username"/>
-              <div style={{position:"relative"}}>
-                <input type={showPw?"text":"password"} value={pass} onChange={e=>{setPass(e.target.value);setErr("");}}
-                  onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)}
-                  placeholder="password"
-                  className="login-inp"
-                  style={{width:"100%",padding:"13px 40px 13px 16px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}
-                  autoComplete="current-password"/>
-                <button onClick={()=>setSP(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"rgba(255,255,255,.7)",cursor:"pointer",fontSize:16,padding:0,lineHeight:1}}>{showPw?"🙈":"👁"}</button>
-              </div>
-              {err&&<div style={{color:"#f87171",fontSize:12,textAlign:"center",padding:"7px 12px",background:"rgba(239,68,68,.1)",borderRadius:8}}>{err}</div>}
-              <button onClick={()=>attempt(login,pass)} disabled={busy}
-                style={{background:"#7ED957",color:"#0f1c09",border:"none",borderRadius:10,padding:"14px",fontSize:14,fontWeight:700,cursor:busy?"not-allowed":"pointer",fontFamily:FB,marginTop:2,opacity:busy?.7:1}}>
-                {busy?"Signing in…":"Sign In →"}
+
+            {/* ── Tab switcher (login / signup) ── */}
+            {!suSuccess&&<div style={{display:"flex",background:"rgba(255,255,255,.06)",borderRadius:10,padding:3,marginBottom:18}}>
+              <button onClick={()=>{setAuthMode("login");setErr("");setSuErr("");}}
+                style={{flex:1,padding:"8px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:FB,fontSize:12,fontWeight:700,
+                  background:authMode==="login"?"#7ED957":"transparent",color:authMode==="login"?"#0f1c09":"rgba(255,255,255,.6)"}}>
+                Sign In
               </button>
-              {SB_ENABLED&&<>
-                <div style={{display:"flex",alignItems:"center",gap:10,margin:"2px 0"}}>
-                  <div style={{flex:1,height:1,background:"rgba(255,255,255,.1)"}}/>
-                  <span style={{fontSize:11,color:"rgba(255,255,255,.3)"}}>or</span>
-                  <div style={{flex:1,height:1,background:"rgba(255,255,255,.1)"}}/>
+              <button onClick={()=>{setAuthMode("signup");setErr("");setSuErr("");}}
+                style={{flex:1,padding:"8px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:FB,fontSize:12,fontWeight:700,
+                  background:authMode==="signup"?"#7ED957":"transparent",color:authMode==="signup"?"#0f1c09":"rgba(255,255,255,.6)"}}>
+                Start Free Trial
+              </button>
+            </div>}
+
+            {/* ── SIGNUP SUCCESS SCREEN ── */}
+            {suSuccess?(
+              <div style={{textAlign:"center"}}>
+                <div style={{fontSize:40,marginBottom:10}}>🎉</div>
+                <div style={{fontFamily:FD,fontSize:18,fontWeight:700,color:"#fff",marginBottom:8}}>Welcome to XpensR, {suSuccess.companyName}!</div>
+                <div style={{fontSize:13,color:"rgba(255,255,255,.65)",lineHeight:1.6,marginBottom:16}}>
+                  Your 7-day free trial has started. Your login username is <b style={{color:"#7ED957"}}>{suSuccess.username}</b> — use the email and password you just set to sign in.
                 </div>
-                <button onClick={googleLogin} disabled={busy}
-                  style={{background:"rgba(255,255,255,.06)",color:"rgba(255,255,255,.75)",border:"1px solid rgba(255,255,255,.14)",borderRadius:10,padding:"13px",fontSize:13,cursor:"pointer",fontFamily:FB,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
-                  <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-                  Sign in with Google
+                <div style={{background:"rgba(126,217,87,.1)",border:"1px solid rgba(126,217,87,.3)",borderRadius:10,padding:"10px 14px",fontSize:12,color:"#7ED957",marginBottom:18}}>
+                  Trial ends {new Date(suSuccess.trialEndsAt).toLocaleDateString("en-IN",{day:"numeric",month:"long",year:"numeric"})}. Add your team and explore — no card required.
+                </div>
+                <button onClick={proceedToLoginAfterSignup}
+                  style={{width:"100%",background:"#7ED957",color:"#0f1c09",border:"none",borderRadius:10,padding:"14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:FB}}>
+                  Continue to Sign In →
                 </button>
-              </>}
-            </div>
+              </div>
+            ):authMode==="signup"?(
+              /* ── SIGN UP FORM ── */
+              <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                <input type="text" value={suForm.companyName} onChange={e=>{setSuForm({...suForm,companyName:e.target.value});setSuErr("");}}
+                  placeholder="Company name" className="login-inp"
+                  style={{width:"100%",padding:"13px 16px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+                <input type="text" value={suForm.adminName} onChange={e=>{setSuForm({...suForm,adminName:e.target.value});setSuErr("");}}
+                  placeholder="Your name" className="login-inp"
+                  style={{width:"100%",padding:"13px 16px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+                <input type="email" value={suForm.adminEmail} onChange={e=>{setSuForm({...suForm,adminEmail:e.target.value});setSuErr("");}}
+                  onKeyDown={e=>e.key==="Enter"&&signUp()}
+                  placeholder="Work email" className="login-inp" autoComplete="email"
+                  style={{width:"100%",padding:"13px 16px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+                <input type="password" value={suForm.adminPassword} onChange={e=>{setSuForm({...suForm,adminPassword:e.target.value});setSuErr("");}}
+                  placeholder="Password (min. 6 characters)" className="login-inp" autoComplete="new-password"
+                  style={{width:"100%",padding:"13px 16px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+                <input type="password" value={suForm.confirmPassword} onChange={e=>{setSuForm({...suForm,confirmPassword:e.target.value});setSuErr("");}}
+                  onKeyDown={e=>e.key==="Enter"&&signUp()}
+                  placeholder="Confirm password" className="login-inp" autoComplete="new-password"
+                  style={{width:"100%",padding:"13px 16px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+                {suErr&&<div style={{color:"#f87171",fontSize:12,textAlign:"center",padding:"7px 12px",background:"rgba(239,68,68,.1)",borderRadius:8}}>{suErr}</div>}
+                <button onClick={signUp} disabled={suBusy}
+                  style={{background:"#7ED957",color:"#0f1c09",border:"none",borderRadius:10,padding:"14px",fontSize:14,fontWeight:700,cursor:suBusy?"not-allowed":"pointer",fontFamily:FB,marginTop:2,opacity:suBusy?.7:1}}>
+                  {suBusy?"Creating your workspace…":"Start 7-Day Free Trial →"}
+                </button>
+                <div style={{fontSize:10,color:"rgba(255,255,255,.35)",textAlign:"center",lineHeight:1.5}}>
+                  No credit card required. Full access for 7 days. You'll be the company admin and can add your team afterward.
+                </div>
+              </div>
+            ):(
+              /* ── LOGIN FORM ── */
+              <div style={{display:"flex",flexDirection:"column",gap:14}}>
+                <input type="text" value={login} onChange={e=>{setLogin(e.target.value);setErr("");}}
+                  onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)}
+                  placeholder="username  ·  email  ·  mobile"
+                  className="login-inp"
+                  style={{width:"100%",padding:"13px 16px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}
+                  autoComplete="username"/>
+                <div style={{position:"relative"}}>
+                  <input type={showPw?"text":"password"} value={pass} onChange={e=>{setPass(e.target.value);setErr("");}}
+                    onKeyDown={e=>e.key==="Enter"&&attempt(login,pass)}
+                    placeholder="password"
+                    className="login-inp"
+                    style={{width:"100%",padding:"13px 40px 13px 16px",borderRadius:10,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.07)",color:"#fff",fontFamily:FB,fontSize:13,outline:"none",boxSizing:"border-box"}}
+                    autoComplete="current-password"/>
+                  <button onClick={()=>setSP(p=>!p)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"rgba(255,255,255,.7)",cursor:"pointer",fontSize:16,padding:0,lineHeight:1}}>{showPw?"🙈":"👁"}</button>
+                </div>
+                {err&&<div style={{color:"#f87171",fontSize:12,textAlign:"center",padding:"7px 12px",background:"rgba(239,68,68,.1)",borderRadius:8}}>{err}</div>}
+                <button onClick={()=>attempt(login,pass)} disabled={busy}
+                  style={{background:"#7ED957",color:"#0f1c09",border:"none",borderRadius:10,padding:"14px",fontSize:14,fontWeight:700,cursor:busy?"not-allowed":"pointer",fontFamily:FB,marginTop:2,opacity:busy?.7:1}}>
+                  {busy?"Signing in…":"Sign In →"}
+                </button>
+                {SB_ENABLED&&<>
+                  <div style={{display:"flex",alignItems:"center",gap:10,margin:"2px 0"}}>
+                    <div style={{flex:1,height:1,background:"rgba(255,255,255,.1)"}}/>
+                    <span style={{fontSize:11,color:"rgba(255,255,255,.3)"}}>or</span>
+                    <div style={{flex:1,height:1,background:"rgba(255,255,255,.1)"}}/>
+                  </div>
+                  <button onClick={googleLogin} disabled={busy}
+                    style={{background:"rgba(255,255,255,.06)",color:"rgba(255,255,255,.75)",border:"1px solid rgba(255,255,255,.14)",borderRadius:10,padding:"13px",fontSize:13,cursor:"pointer",fontFamily:FB,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+                    <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+                    Sign in with Google
+                  </button>
+                </>}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1738,7 +1853,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
     if(!SB_ENABLED)return;
     setLoading(true);
     supabase.from("companies").select("*").then(({data})=>{
-      if(data)setSbCoList(data.map(c=>({meta:{id:c.id,name:c.name,industry:c.industry,plan:c.plan,maxUsers:c.max_users,status:c.status,createdOn:c.created_on},users:[]})));
+      if(data)setSbCoList(data.map(c=>({meta:{id:c.id,name:c.name,industry:c.industry,plan:c.plan,maxUsers:c.max_users,status:c.status,createdOn:c.created_on,isPaid:c.is_paid===true,trialEndsAt:c.trial_ends_at,signupSource:c.signup_source},users:[]})));
       setLoading(false);
     });
   },[]);
@@ -1749,7 +1864,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
     try{
       if(SB_ENABLED){
         // 1. Create company row
-        const{error:coErr}=await supabase.from("companies").insert({id,name:form.name,industry:form.industry||"General",plan:form.plan,max_users:parseInt(form.maxUsers)||5,status:"Active"});
+        const{error:coErr}=await supabase.from("companies").insert({id,name:form.name,industry:form.industry||"General",plan:form.plan,max_users:parseInt(form.maxUsers)||5,status:"Active",is_paid:true,signup_source:"manual"});
         if(coErr)throw new Error(coErr.message);
         // 2. Insert default policy
         await supabase.from("policy").insert({company_id:id});
@@ -1769,7 +1884,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
         toast(`✓ ${form.name} created! Manager login: username="${username}", password as set`);
         // Refresh list
         const{data}=await supabase.from("companies").select("*");
-        if(data)setSbCoList(data.map(c=>({meta:{id:c.id,name:c.name,industry:c.industry,plan:c.plan,maxUsers:c.max_users,status:c.status,createdOn:c.created_on},users:[]})));
+        if(data)setSbCoList(data.map(c=>({meta:{id:c.id,name:c.name,industry:c.industry,plan:c.plan,maxUsers:c.max_users,status:c.status,createdOn:c.created_on,isPaid:c.is_paid===true,trialEndsAt:c.trial_ends_at,signupSource:c.signup_source},users:[]})));
       } else {
         // localStorage demo mode
         const mgr={id:"adm_"+uid(),cid:id,name:form.adminName||form.adminEmail.split("@")[0],email:form.adminEmail,username:(form.adminName||form.adminEmail.split("@")[0]).toLowerCase().replace(/\s+/g,"."),password:form.adminPw,role:"admin",avatar:inits(form.adminName||form.adminEmail),dept:"Management",balance:0,reimbursable:0,delegateTo:null,isSuspended:false,authType:"custom"};
@@ -1785,14 +1900,14 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
     const newStatus=co.meta.status==="Active"?"Suspended":"Active";
     if(SB_ENABLED){await supabase.from("companies").update({status:newStatus}).eq("id",co.meta.id);}
     else{setDB(p=>({...p,[co.meta.id]:{...p[co.meta.id],meta:{...p[co.meta.id].meta,status:newStatus}}}));}
-    if(SB_ENABLED){const{data}=await supabase.from("companies").select("*");if(data)setSbCoList(data.map(c=>({meta:{id:c.id,name:c.name,industry:c.industry,plan:c.plan,maxUsers:c.max_users,status:c.status,createdOn:c.created_on},users:[]})));}
+    if(SB_ENABLED){const{data}=await supabase.from("companies").select("*");if(data)setSbCoList(data.map(c=>({meta:{id:c.id,name:c.name,industry:c.industry,plan:c.plan,maxUsers:c.max_users,status:c.status,createdOn:c.created_on,isPaid:c.is_paid===true,trialEndsAt:c.trial_ends_at,signupSource:c.signup_source},users:[]})));}
     toast("Status updated");
   };
 
   const deleteCo=async(cid)=>{
     if(SB_ENABLED){await supabase.from("companies").delete().eq("id",cid);}
     else{setDB(p=>{const n={...p};delete n[cid];return n;});}
-    if(SB_ENABLED){const{data}=await supabase.from("companies").select("*");if(data)setSbCoList(data.map(c=>({meta:{id:c.id,name:c.name,industry:c.industry,plan:c.plan,maxUsers:c.max_users,status:c.status,createdOn:c.created_on},users:[]})));}
+    if(SB_ENABLED){const{data}=await supabase.from("companies").select("*");if(data)setSbCoList(data.map(c=>({meta:{id:c.id,name:c.name,industry:c.industry,plan:c.plan,maxUsers:c.max_users,status:c.status,createdOn:c.created_on,isPaid:c.is_paid===true,trialEndsAt:c.trial_ends_at,signupSource:c.signup_source},users:[]})));}
     setMdl(null);toast("Deleted","warn");
   };
 
@@ -1841,8 +1956,12 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
         </div>
         {loading&&<div style={{textAlign:"center",padding:40,color:MUTED}}>Loading…</div>}
         {tab==="companies"&&!loading&&<Card><table style={{width:"100%"}}>
-          <thead><tr><th>Company</th><th>Industry</th><th>Plan</th><th>Max Users</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
-          <tbody>{allCo.map(co=>(
+          <thead><tr><th>Company</th><th>Industry</th><th>Plan</th><th>Max Users</th><th>Status</th><th>Trial / Paid</th><th>Created</th><th>Actions</th></tr></thead>
+          <tbody>{allCo.map(co=>{
+            const trialEnds=co.meta.trialEndsAt?new Date(co.meta.trialEndsAt):null;
+            const daysLeft=trialEnds?Math.ceil((trialEnds-new Date())/86400000):null;
+            const isExpired=!co.meta.isPaid&&trialEnds&&daysLeft<=0;
+            return(
             <tr key={co.meta.id} className="rh">
               <td><div style={{fontWeight:700,color:INK}}>{co.meta.name}</div><div style={{fontSize:10,color:MUTED,fontFamily:"monospace"}}>{co.meta.id}</div></td>
               <td style={{color:MUTED}}>{co.meta.industry}</td>
@@ -1859,6 +1978,24 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
                 />
               </td>
               <td><Badge s={co.meta.status}/></td>
+              <td>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <button onClick={async()=>{
+                    const newPaid=!co.meta.isPaid;
+                    if(SB_ENABLED){await supabase.from("companies").update({is_paid:newPaid}).eq("id",co.meta.id);}
+                    else{setDB(p=>({...p,[co.meta.id]:{...p[co.meta.id],meta:{...p[co.meta.id].meta,isPaid:newPaid}}}));}
+                    if(SB_ENABLED){const{data}=await supabase.from("companies").select("*");if(data)setSbCoList(data.map(c=>({meta:{id:c.id,name:c.name,industry:c.industry,plan:c.plan,maxUsers:c.max_users,status:c.status,createdOn:c.created_on,isPaid:c.is_paid===true,trialEndsAt:c.trial_ends_at,signupSource:c.signup_source},users:[]})));}
+                    toast(newPaid?`✓ ${co.meta.name} marked as Paid`:`${co.meta.name} reverted to Trial`);
+                  }} style={{padding:"3px 11px",borderRadius:14,border:"none",cursor:"pointer",fontSize:10,fontWeight:700,
+                    background:co.meta.isPaid?"#dcfce7":isExpired?"#fee2e2":"#eff6ff",
+                    color:co.meta.isPaid?"#16a34a":isExpired?"#dc2626":"#2563eb"}}>
+                    {co.meta.isPaid?"✓ PAID":isExpired?"✗ EXPIRED":"TRIAL"}
+                  </button>
+                  {!co.meta.isPaid&&trialEnds&&<span style={{fontSize:10,color:isExpired?"#dc2626":MUTED}}>
+                    {isExpired?`expired ${Math.abs(daysLeft)}d ago`:`${daysLeft}d left`}
+                  </span>}
+                </div>
+              </td>
               <td style={{color:MUTED,fontSize:11}}>{co.meta.createdOn}</td>
               <td><div style={{display:"flex",gap:6}}>
                 <Btn v="outline" onClick={()=>setMdl({type:"editCo",data:co.meta})} style={{padding:"4px 9px",fontSize:11}}>✏ Edit</Btn>
@@ -1866,7 +2003,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
                 <Btn v="danger" onClick={()=>setMdl({type:"delCo",data:co.meta})} style={{padding:"4px 9px",fontSize:11}}>✕</Btn>
               </div></td>
             </tr>
-          ))}</tbody>
+          );})}</tbody>
         </table></Card>}
         {tab==="users"&&<SaUsers DB={DB} userCounts={userCounts}/>}
         {tab==="help"&&<HelpManual userRole="superadmin" onClose={()=>setTab("companies")} inline={true}/>}
@@ -1896,7 +2033,7 @@ function SuperAdmin({DB,setDB,onLogout,sbRefresh}){
           </div>
         </div>
       )}
-      {modal?.type==="editCo"&&<EditCoModal data={modal.data} onClose={()=>setMdl(null)} onSave={async(updates)=>{if(SB_ENABLED){await supabase.from("companies").update({name:updates.name,industry:updates.industry,plan:updates.plan,max_users:updates.maxUsers}).eq("id",updates.id);const{data}=await supabase.from("companies").select("*");if(data)setSbCoList(data.map(c=>({meta:{id:c.id,name:c.name,industry:c.industry,plan:c.plan,maxUsers:c.max_users,status:c.status,createdOn:c.created_on},users:[]})));}else{setDB(p=>({...p,[updates.id]:{...p[updates.id],meta:{...p[updates.id].meta,...updates}}}));}setMdl(null);toast("✓ Company updated");}}/>}
+      {modal?.type==="editCo"&&<EditCoModal data={modal.data} onClose={()=>setMdl(null)} onSave={async(updates)=>{if(SB_ENABLED){await supabase.from("companies").update({name:updates.name,industry:updates.industry,plan:updates.plan,max_users:updates.maxUsers}).eq("id",updates.id);const{data}=await supabase.from("companies").select("*");if(data)setSbCoList(data.map(c=>({meta:{id:c.id,name:c.name,industry:c.industry,plan:c.plan,maxUsers:c.max_users,status:c.status,createdOn:c.created_on,isPaid:c.is_paid===true,trialEndsAt:c.trial_ends_at,signupSource:c.signup_source},users:[]})));}else{setDB(p=>({...p,[updates.id]:{...p[updates.id],meta:{...p[updates.id].meta,...updates}}}));}setMdl(null);toast("✓ Company updated");}}/>}
       {modal?.type==="delCo"&&(
         <div style={{position:"fixed",inset:0,background:"#00000060",display:"flex",alignItems:"center",justifyContent:"center",zIndex:500}} onClick={()=>setMdl(null)}>
           <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:28,width:"min(360px,96vw)",textAlign:"center"}}>
@@ -2729,6 +2866,30 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   // ── ALL hooks above this line — early return is safe below ───────────────
   const co=coData;
 
+  // ── Trial / paid status ───────────────────────────────────────────────────
+  // isPaid comes from co.meta (set by Super Admin or via signup_company default).
+  // If unpaid and trial_ends_at has passed, the company drops into read-only mode:
+  // viewing data still works everywhere, but write actions are blocked at the
+  // point of action (submit/approve/save) rather than hiding entire screens —
+  // this keeps the demo/eval experience intact while preventing further changes.
+  const trialMeta=co?.meta||meta||{};
+  const isPaidCompany=trialMeta.isPaid===true;
+  const trialEndsAt=trialMeta.trialEndsAt?new Date(trialMeta.trialEndsAt):null;
+  const trialExpired=!isPaidCompany&&trialEndsAt&&new Date()>trialEndsAt;
+  const trialDaysLeft=trialEndsAt?Math.max(0,Math.ceil((trialEndsAt-new Date())/86400000)):null;
+  const readOnlyMode=trialExpired; // single flag consumed by write-gated actions below
+
+  // Centralized write guard — call at the top of every state-mutating action.
+  // Throws (and toasts) instead of silently no-op-ing, so callers that await
+  // these functions correctly stop instead of proceeding with a half-done flow.
+  const guardWrite=(actionLabel="do this")=>{
+    if(readOnlyMode){
+      const msg=`Your free trial has ended. Upgrade your account to ${actionLabel}.`;
+      toast(msg,"error");
+      throw new Error(msg);
+    }
+  };
+
   // Dynamic policy-driven values
   const primaryColor=co?.policy?.primaryColor||G;
   const companyDepts=co?.policy?.departments||DEFAULT_DEPTS;
@@ -2883,6 +3044,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
 
   // ── sbCreateTrip — defined once, used by both TripsTab and SubmitTab ─────────
   const sbCreateTrip=async(trip,assigned,legs=[])=>{
+    guardWrite("create a new trip");
     if(SB_ENABLED){
       try{
         // All trips go pending_approval except admin-created
@@ -2946,6 +3108,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   };
 
   const approveTrip=async(trip)=>{
+    guardWrite("approve this trip");
     if(SB_ENABLED){await supabase.from("trips").update({status:"active"}).eq("id",trip.id);await loadFromSB();}
     else setTrips(p=>p.map(t=>t.id===trip.id?{...t,status:"active"}:t));
     await sbAddAudit("Trip Approved","",`"${trip.name}" activated`,trip.id);
@@ -3268,6 +3431,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   };
 
   const submitClaim=async(form)=>{
+    guardWrite("submit an expense");
     const amount=parseFloat(form.amount);
     const tripId=form.tripId||co.trips.find(t=>t.status==="active"&&(!t.assignedTo||t.assignedTo.includes(user.id)))?.id;
     if(!tripId){const msg="No active trip assigned to you. Please create or join a trip first.";toast(msg,"error");throw new Error(msg);}
@@ -3591,6 +3755,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   };
 
   const handleDecision=async(claimId,decision,remarks="")=>{
+    guardWrite(decision==="Approved"?"approve this claim":"reject this claim");
     const claim=co.claims.find(c=>c.id===claimId);
     if(!claim)return;
 
@@ -3744,6 +3909,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   // (expense splitting handled in handleSubmit)
 
   const handleTopup=async(req,decision)=>{
+    guardWrite(decision==="Approved"?"approve this top-up":"reject this top-up");
     const emp=co.users.find(u=>u.id===req.empId);
     if(SB_ENABLED){
       const{error:_te}=await supabase.from("topups").update({status:decision}).eq("id",req.id);
@@ -3873,6 +4039,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   };
 
   const savePolicyToSB=async(newPolicy)=>{
+    guardWrite("save policy changes");
     if(SB_ENABLED){
       // Full upsert including all Phase 1 columns
       const fullRow={
@@ -3950,6 +4117,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
   };
 
   const addUserToSB=async(userData,password)=>{
+    guardWrite("add a new employee");
     if(!SB_ENABLED)return;
 
     const withTimeout=(promise,ms)=>Promise.race([
@@ -4363,7 +4531,18 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,paddingBottom:10,borderBottom:`1px solid ${BDR}`,flexWrap:"wrap",gap:8}}>
           <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0,flex:1}}>
             <div style={{width:30,height:30,borderRadius:8,background:GL,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,color:GD,fontSize:11,flexShrink:0}}>{inits(activeMeta.name)}</div>
-            <div style={{minWidth:0}}><div style={{fontWeight:700,color:INK,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{activeMeta.name}</div><div style={{fontSize:10,color:MUTED}}>{activeMeta.plan}{user.delegateTo?` · →${getUser(user.delegateTo)?.name?.split(" ")[0]}`:""}</div></div>
+            <div style={{minWidth:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:7}}>
+                <div style={{fontWeight:700,color:INK,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{activeMeta.name}</div>
+                {!isPaidCompany&&trialDaysLeft!==null&&!trialExpired&&<span style={{flexShrink:0,padding:"1px 8px",borderRadius:9,fontSize:9,fontWeight:700,background:trialDaysLeft<=2?"#fef3c7":"#eff6ff",color:trialDaysLeft<=2?"#92400e":"#2563eb",border:`1px solid ${trialDaysLeft<=2?"#fcd34d":"#bfdbfe"}`}}>
+                  TRIAL · {trialDaysLeft} day{trialDaysLeft!==1?"s":""} left
+                </span>}
+                {!isPaidCompany&&trialExpired&&<span style={{flexShrink:0,padding:"1px 8px",borderRadius:9,fontSize:9,fontWeight:700,background:"#fee2e2",color:"#dc2626",border:"1px solid #fca5a5"}}>
+                  TRIAL EXPIRED · READ-ONLY
+                </span>}
+              </div>
+              <div style={{fontSize:10,color:MUTED}}>{activeMeta.plan}{user.delegateTo?` · →${getUser(user.delegateTo)?.name?.split(" ")[0]}`:""}</div>
+            </div>
           </div>
           <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
             {hasPerm("export")&&(
@@ -4436,6 +4615,20 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
             {SB_ENABLED&&<button onClick={loadFromSB} style={{background:"var(--hover-bg,#f0fde9)",border:`1.5px solid ${BDR}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontSize:17,lineHeight:1,transition:"all .15s"}}>🔄</button>}
           </div>
         </div>
+
+        {/* Trial expired — read-only banner */}
+        {readOnlyMode&&(
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",background:"#fee2e2",border:"1px solid #fca5a5",borderRadius:10,padding:"10px 16px",marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:9}}>
+              <span style={{fontSize:18}}>🔒</span>
+              <div>
+                <div style={{fontWeight:700,fontSize:12,color:"#991b1b"}}>Your 7-day free trial has ended</div>
+                <div style={{fontSize:11,color:"#b91c1c"}}>You can still view all your data, but creating or editing anything is paused until your account is upgraded.</div>
+              </div>
+            </div>
+            {isAdmin&&<a href="mailto:hello@xpensr.in?subject=Upgrade my XpensR account" style={{flexShrink:0,padding:"7px 16px",background:"#dc2626",color:"#fff",borderRadius:8,fontSize:12,fontWeight:700,textDecoration:"none"}}>Contact us to upgrade →</a>}
+          </div>
+        )}
 
         {/* TABS */}
         {tab==="dashboard"&&isManager&&<>
@@ -4520,7 +4713,7 @@ function CompanyApp({user,meta,DB,setDB,onLogout,sbReload}){
           }}
         />}
         {tab==="approvals"&&canApprove&&<ApprovalsTab pendingClaims={approvableClaimsForMe} pendingTopups={pendingTopups} getUser={getUser} trips={co.trips} handleDecision={handleDecision} handleTopup={handleTopup} setMdl={setMdl} isAdmin={isAdmin} needsDualApproval={needsDualApproval} approveTrip={approveTrip} rejectTrip={rejectTrip} user={user} users={co.users} editRequests={editRequests} approveEditRequest={approveEditRequest} rejectEditRequest={rejectEditRequest} onReload={loadFromSB} onReloadEditRequests={loadEditRequests} approveLimit={(co.policy?.approvalHierarchy||[]).find(h=>h.level===(myUser?.grade||0))?.ceiling||0} setClaims={fn=>{if(!SB_ENABLED)setClaims(fn);}}/>}
-        {tab==="topup"&&<TopupTab user={user} topups={canApprove?co.topups.filter(t=>t.status==="Pending"||t.empId===user.id):co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} trips={co.trips} isManager={isManager||isAdmin} managerUsers={isManager||isAdmin?co.users.filter(u=>visibleUserIds.has(u.id)&&u.id!==user.id):[]} sbCreateTopup={async(req)=>{if(SB_ENABLED){const{error:te}=await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:req.status||"Pending",trip_id:req.tripId});if(te){toast("Top-up request failed: "+te.message,"error");return;}if(req.status==="Approved"){await handleTopup({...req,id:req.id},false);}await loadFromSB();}else{setTopups(p=>[...p,req]);}}}/>}
+        {tab==="topup"&&<TopupTab user={user} topups={canApprove?co.topups.filter(t=>t.status==="Pending"||t.empId===user.id):co.topups.filter(t=>t.empId===user.id)} setTopups={fn=>{if(!SB_ENABLED)setTopups(fn);}} toast={toast} trips={co.trips} isManager={isManager||isAdmin} managerUsers={isManager||isAdmin?co.users.filter(u=>visibleUserIds.has(u.id)&&u.id!==user.id):[]} sbCreateTopup={async(req)=>{guardWrite("request a top-up");if(SB_ENABLED){const{error:te}=await supabase.from("topups").insert({id:req.id,company_id:cid,emp_id:req.empId,amount:req.amount,reason:req.reason,date:req.date,status:req.status||"Pending",trip_id:req.tripId});if(te){toast("Top-up request failed: "+te.message,"error");return;}if(req.status==="Approved"){await handleTopup({...req,id:req.id},false);}await loadFromSB();}else{setTopups(p=>[...p,req]);}}}/>}
         {tab==="analytics"&&<Analytics
           claims={isAdmin?co.claims:visibleClaims.filter(c=>isManager||c.empId===user.id)}
           trips={isAdmin?co.trips:visibleTrips}
